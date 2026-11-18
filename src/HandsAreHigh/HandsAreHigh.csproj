@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net472 because that is what the game's mono runtime loads. -->
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>HandsAreHigh</RootNamespace>
+    <AssemblyName>HandsAreHigh</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+
+    <!-- Must match HandsAreHighPlugin.PluginVersion. -->
+    <Version>0.0.2</Version>
+
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <SPTPath Condition="'$(SPTPath)' == ''">C:\HUH</SPTPath>
+    <GameManaged>$(SPTPath)\EscapeFromTarkov_Data\Managed</GameManaged>
+    <BepInExCore>$(SPTPath)\BepInEx\core</BepInExCore>
+    <PluginDeployDir>$(SPTPath)\BepInEx\plugins</PluginDeployDir>
+    <!-- BigBrain is a runtime dependency; point at another copy with -p:BigBrainDll=... -->
+    <BigBrainDll Condition="'$(BigBrainDll)' == ''">$(PluginDeployDir)\DrakiaXYZ-BigBrain.dll</BigBrainDll>
+  </PropertyGroup>
+
+  <Target Name="ValidatePaths" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(BepInExCore)\BepInEx.dll')"
+           Text="SPTPath ('$(SPTPath)') is not an SPT install root: no BepInEx\core\BepInEx.dll." />
+    <Error Condition="!Exists('$(BigBrainDll)')"
+           Text="BigBrain not found at '$(BigBrainDll)'. Install BigBrain 1.5.0+ or pass -p:BigBrainDll=path\to\DrakiaXYZ-BigBrain.dll." />
+    <Error Condition="!Exists('$(GameManaged)\Assembly-CSharp.dll.spt-bak')"
+           Text="$(GameManaged)\Assembly-CSharp.dll has not been patched by SPT yet. Start the game through the SPT Launcher once, then build." />
+  </Target>
+
+  <ItemGroup>
+    <Reference Include="BepInEx"><HintPath>$(BepInExCore)\BepInEx.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(BepInExCore)\0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="DrakiaXYZ-BigBrain"><HintPath>$(BigBrainDll)</HintPath><Private>false</Private></Reference>
+    <Reference Include="Assembly-CSharp"><HintPath>$(GameManaged)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Comfort"><HintPath>$(GameManaged)\Comfort.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Comfort.Unity"><HintPath>$(GameManaged)\Comfort.Unity.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="CommonExtensions"><HintPath>$(GameManaged)\CommonExtensions.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ItemComponent.Types"><HintPath>$(GameManaged)\ItemComponent.Types.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(GameManaged)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(GameManaged)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(GameManaged)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.AIModule"><HintPath>$(GameManaged)\UnityEngine.AIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(GameManaged)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+  <!-- Opt-in: dotnet build -c Release -p:DeployToSPT=true -->
+  <Target Name="DeployToSPT" AfterTargets="Build" Condition="'$(DeployToSPT)' == 'true'">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" />
+    <Message Importance="high" Text="Deployed $(TargetFileName) to $(PluginDeployDir)" />
+  </Target>
+
+</Project>
