@@ -6,8 +6,8 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
-**0.1.0, built and installed in `H:\SPT4.1.X` 2026-11-18; uncommitted; never run in game;
-no GitHub release.** 0.1.0 implements the full spec Joel wrote with ChatGPT (bots surrender
+**0.1.0, built and installed in `H:\SPT4.1.X` 2026-11-18; pushed to `main` (f875264); never
+run in game; no GitHub release.** 0.1.0 implements the full spec Joel wrote with ChatGPT (bots surrender
 on their own, orders menu, reactions, voice, SAIN personality, sleep handling, numbered
 config) on top of the 0.0.2 prototype, which was never run either. Nothing below is
 confirmed in game.
