@@ -7,8 +7,8 @@ using UnityEngine;
 
 namespace HandsAreHigh
 {
-    // While a bot is in the registry this layer outranks SAIN's and the vanilla ones,
-    // so nothing else moves, aims or shoots with it until it hands him back.
+    // While a bot is in the registry this layer outranks SAIN's, ORBIT's and the vanilla
+    // ones, so nothing else moves, aims or shoots with him until it hands him back.
     internal sealed class SurrenderLayer : CustomLayer
     {
         public SurrenderLayer(BotOwner botOwner, int priority) : base(botOwner, priority) { }
@@ -25,7 +25,8 @@ namespace HandsAreHigh
     internal sealed class SurrenderLogic : CustomLogic
     {
         private const float CheckInterval = 0.25f;
-        private const float MoveOrderInterval = 2f;
+        private const float MoveOrderInterval = 1f;
+        private const int MaxDropAttempts = 3;
 
         public SurrenderLogic(BotOwner botOwner) : base(botOwner) { }
 
@@ -39,7 +40,7 @@ namespace HandsAreHigh
 
         public override void Update(CustomLayer.ActionData data)
         {
-            if (!SurrenderRegistry.TryGet(Me, out SurrenderState s)) return;
+            if (!SurrenderRegistry.TryGet(Me, out SurrenderState s) || s.Suspended) return;
             HandsAreHighPlugin.Try($"phase {s.Phase}", () => Run(s));
         }
 
@@ -54,7 +55,7 @@ namespace HandsAreHigh
                 case Phase.Retreating: Retreating(s, check); break;
                 case Phase.Regrouping: Regrouping(s, check); break;
                 case Phase.Recovering: Recovering(s, check); break;
-                case Phase.PickingUp: Hold(Settings.Stance.Value); break;
+                case Phase.PickingUp: PickingUp(s); break;
                 case Phase.Hiding: Hiding(s, check); break;
                 case Phase.Rearmed: Hold(1f); break;
             }
@@ -64,123 +65,259 @@ namespace HandsAreHigh
 
         private void HandsUp(SurrenderState s, bool check)
         {
-            Hold(Settings.Stance.Value);
-            if (Settings.FaceCaptor.Value && s.Captor != null)
-                BotOwner.Steering.LookToPoint(Perception.Eye(s.Captor));
+            Player captor = s.Captor;
+            bool captorAlive = Perception.Alive(captor);
+
+            switch (s.Order)
+            {
+                case Order.Kneel: Hold(0f); break;   // no kneel animation exists: lowest crouch, hands up
+                case Order.Follow when captorAlive: Follow(s, captor); break;
+                default: Hold(Settings.Stance.Value); break;
+            }
+            if (Settings.FaceCaptor.Value && captorAlive)
+                BotOwner.Steering.LookToPoint(Perception.Eye(captor));
+
+            ProcessDropQueue(s);
             if (!check) return;
 
-            // Shot while his hands are up: he runs.
-            float health = Arsenal.Health(Me);
-            bool hurt = health < s.LastHealth - 1f;
-            s.LastHealth = health;
-            if (hurt && Settings.BoltWhenShot.Value)
+            if (s.DropPending && !CheckDrop(s)) return;
+
+            // Shot while his hands are up, by anyone: he runs. (A hit, not health: a bleeding
+            // man loses health every second without anyone firing.)
+            bool hit = s.WasHit;
+            s.WasHit = false;
+            if (hit && Settings.BoltWhenShot.Value)
             {
-                s.CaptorLastSeen = s.Captor != null ? s.Captor.Position : Me.Position - Me.Transform.forward * 10f;
-                s.LowerArms(0.15f);
-                s.SetPhase(Phase.Retreating);
+                Voice.Say(s, EPhraseTrigger.OnBeingHurt);
+                SurrenderRegistry.Witness(Me.Position, Me, "a surrendered man shot");
+                s.BeginRetreat("shot with his hands up", emergency: true);
                 return;
             }
 
-            Player captor = s.Captor;
-            bool captorAlive = captor != null && captor.HealthController != null && captor.HealthController.IsAlive;
-            float dist = captorAlive ? Vector3.Distance(captor.Position, Me.Position) : float.MaxValue;
-            bool seen = captorAlive && Perception.LineClear(Perception.Eye(Me), Perception.Eye(captor));
+            if (!captorAlive)
+            {
+                s.BeginRetreat("captor is dead", emergency: false);
+                return;
+            }
+
+            float dist = Vector3.Distance(captor.Position, Me.Position);
 
             if (s.ForcedLeave)
             {
                 s.ForcedLeave = false;
-                s.CaptorLastSeen = captorAlive ? captor.Position : Me.Position;
-                s.LowerArms(Settings.LowerSeconds.Value);
-                s.SetPhase(Phase.Retreating);
+                s.BeginRetreat("debug: captor left", emergency: false);
                 return;
             }
             if (s.ForcedOpening)
             {
                 s.ForcedOpening = false;
-                if (!TryBreak(s, dist))
-                    HandsAreHighPlugin.Log.LogInfo($"{Me.Profile?.Nickname}: nothing he can use at {dist:0.0} m, keeps his hands up");
+                if (!TryBreak(s, dist, "debug opening"))
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: nothing he can use at {dist:0.0} m, keeps his hands up");
                 return;
             }
 
-            // Captor gone: walked off, out of sight, or dead.
-            if (!captorAlive || dist > Settings.LeaveDistance.Value || !seen)
+            // What he can see of the captor. Out of sight, he only knows where he last saw him.
+            bool seen = Perception.LineClear(Perception.Eye(Me), Perception.Eye(captor));
+            if (seen)
             {
-                if (s.CaptorGoneSince < 0f) s.CaptorGoneSince = Time.time;
-                if (Time.time - s.CaptorGoneSince > Settings.LeaveSeconds.Value)
+                s.CaptorLastSeen = captor.Position;
+                s.CaptorHiddenSince = -1f;
+                if (dist > Settings.LeaveDistance.Value)
                 {
-                    s.LowerArms(Settings.LowerSeconds.Value);
-                    s.SetPhase(Phase.Retreating);
+                    s.BeginRetreat($"captor {dist:0} m away", emergency: false);
+                    return;
                 }
-                return;
             }
-            s.CaptorGoneSince = -1f;
-            s.CaptorLastSeen = captor.Position;
+            else
+            {
+                if (s.CaptorHiddenSince < 0f) s.CaptorHiddenSince = Time.time;
+                if (Time.time - s.CaptorHiddenSince > Settings.LeaveSeconds.Value)
+                {
+                    s.BeginRetreat($"captor out of sight {Settings.LeaveSeconds.Value:0} s", emergency: false);
+                    return;
+                }
+            }
 
-            // Captor not covering him: an opening.
-            if (Perception.Covering(captor, Me))
+            // Captor not covering him (no line of sight counts too): an opening.
+            if (seen && Perception.Covering(captor, Me, Settings.WatchAngle.Value))
             {
                 s.UnwatchedSince = -1f;
                 return;
             }
             if (s.UnwatchedSince < 0f) s.UnwatchedSince = Time.time;
             if (Time.time - s.UnwatchedSince < Settings.OpeningDelay.Value) return;
+            if (Time.time < s.NextBreakRoll) return;
+            s.NextBreakRoll = Time.time + Settings.BreakInterval.Value;
 
-            // Chance per second, scaled by this bot's nerve.
-            float perSecond = Mathf.Clamp01(Settings.BreakChance.Value * s.Nerve);
-            float perCheck = 1f - Mathf.Pow(1f - perSecond, CheckInterval);
-            if (Random.value >= perCheck) return;
+            float chance = Mathf.Clamp01(Settings.BreakChance.Value * s.Nerve);
+            float roll = Random.value;
+            if (Settings.VerboseLogs.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening, chance {chance:0.00}, roll {roll:0.00}");
+            if (roll >= chance) return;
 
-            TryBreak(s, dist);
+            TryBreak(s, dist, $"opening (chance {chance:0.00}, roll {roll:0.00})");
+        }
+
+        // The weapon in his hands should be gone by now. If it isn't, try again, and after
+        // a few tries give up surrendering rather than pose holding a gun.
+        private bool CheckDrop(SurrenderState s)
+        {
+            if (Arsenal.HandsFree(Me))
+            {
+                s.DropPending = false;
+                return true;
+            }
+            if (Time.time - s.DropSince < Settings.DropRetrySeconds.Value) return false;
+
+            if (s.DropAttempts >= MaxDropAttempts)
+            {
+                HandsAreHighPlugin.Log.LogWarning($"{s.Name}: couldn't empty his hands after {s.DropAttempts} tries, fights instead");
+                s.DropPending = false;
+                s.LowerArms(Settings.EmergencyLowerSeconds.Value);
+                s.SetPhase(Phase.Rearmed, "drop failed");
+                return false;
+            }
+            s.DropAttempts++;
+            s.DropSince = Time.time;
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: weapon still in hands, drop try {s.DropAttempts}");
+            HandsAreHighPlugin.Try("drop weapon in hands", () =>
+            {
+                Item dropped = Arsenal.EmptyHands(Me);
+                if (dropped != null) { s.DroppedWeapon = dropped; s.DropPosition = Me.Position; }
+            });
+            return false;
         }
 
         // Go for whatever he still has, picked by range.
-        private bool TryBreak(SurrenderState s, float dist)
+        private bool TryBreak(SurrenderState s, float dist, string why)
         {
-            if (dist <= Settings.KnifeRange.Value && Arsenal.HasMelee(Me))
+            if (dist <= Settings.KnifeRange.Value && Arsenal.HasMelee(Me) && Arsenal.DrawMelee(BotOwner))
             {
-                s.LowerArms(0.12f);
-                Arsenal.DrawMelee(BotOwner);
-                HandsAreHighPlugin.Log.LogInfo($"{Me.Profile?.Nickname}: goes for his knife at {dist:0.0} m");
-                s.SetPhase(Phase.Rearmed);
+                Rearm(s, $"goes for his knife at {dist:0.0} m, {why}");
                 return true;
             }
             if (dist <= Settings.SidearmRange.Value && Arsenal.GunOnBody(Me) != null)
             {
-                s.LowerArms(0.18f);
-                Arsenal.DrawGun(BotOwner);
-                HandsAreHighPlugin.Log.LogInfo($"{Me.Profile?.Nickname}: draws at {dist:0.0} m");
-                s.SetPhase(Phase.Rearmed);
-                return true;
+                if (Arsenal.DrawGun(BotOwner))
+                {
+                    Rearm(s, $"draws at {dist:0.0} m, {why}");
+                    return true;
+                }
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: tried to draw, the game refused the weapon change");
             }
             // Nothing that suits the range: he keeps his hands up and waits.
             return false;
+        }
+
+        private void Rearm(SurrenderState s, string reason)
+        {
+            s.LowerArms(Settings.EmergencyLowerSeconds.Value);
+            s.Order = Order.None;
+            s.DropQueue.Clear();
+            s.TargetWeapon = null;
+            Voice.Say(s, EPhraseTrigger.OnFight);
+            s.SetPhase(Phase.Rearmed, reason);
+        }
+
+        private void Follow(SurrenderState s, Player captor)
+        {
+            Vector3 to = captor.Position - Me.Position;
+            to.y = 0f;
+            float d = to.magnitude;
+            float want = Settings.FollowDistance.Value;
+            if (d <= want + Settings.FollowTolerance.Value)
+            {
+                Hold(Settings.Stance.Value);
+                return;
+            }
+            Vector3 point = captor.Position - to.normalized * want;
+            MoveTo(s, point, sprint: false);
+        }
+
+        // One item at a time, in order; a report once the last one should have landed.
+        private void ProcessDropQueue(SurrenderState s)
+        {
+            if (s.DropQueue.Count > 0 && Time.time >= s.NextDropAt)
+            {
+                var next = s.DropQueue.Dequeue();
+                s.NextDropAt = Time.time + Settings.DropItemDelay.Value;
+                if (Arsenal.StillWorn(Me, next.Key, next.Value))
+                    HandsAreHighPlugin.Try($"drop {next.Key}", () => Arsenal.Drop(Me, next.Value));
+                if (s.DropQueue.Count == 0) s.ReportAt = Time.time + Settings.DropItemDelay.Value + 0.5f;
+            }
+
+            if (s.ReportAt > 0f && Time.time >= s.ReportAt)
+            {
+                s.ReportAt = -1f;
+                int kept = 0;
+                foreach (var kv in s.Ordered)
+                    if (Arsenal.StillWorn(Me, kv.Key, kv.Value)) kept++;
+                int done = s.Ordered.Count - kept;
+                string msg = kept == 0
+                    ? $"{s.Name} did it: {done} item(s) dropped"
+                    : $"{s.Name} dropped {done} of {s.Ordered.Count}; {kept} wouldn't come off";
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: order '{s.OrderName}': {msg}");
+                OrderMenu.Notify(msg);
+                if (kept > 0) Voice.Say(s, EPhraseTrigger.Negative);
+            }
         }
 
         // ---- after the captor leaves ---------------------------------------------------
 
         private void Retreating(SurrenderState s, bool check)
         {
-            if (s.NextMoveOrder == 0f &&
-                !Perception.RetreatPoint(Me, s.CaptorLastSeen, Settings.RetreatDistance.Value, out s.TargetPoint))
-            {
-                s.SetPhase(Phase.Hiding);
-                return;
-            }
+            if (s.NextMoveOrder == 0f && !PickRetreat(s)) return;
 
             if (!MoveTo(s, s.TargetPoint, sprint: true))
             {
-                s.SetPhase(Phase.Hiding);
+                Retry(s, "no path");
                 return;
             }
+            if (!check) return;
+            if (SpottedAgain(s)) return;
 
-            // He commits to the run for a few seconds before he can be caught again.
-            if (check && Time.time - s.PhaseSince > 4f && SpottedAgain(s)) return;
-
-            if (Arrived(s.TargetPoint, 2f) || Time.time - s.PhaseSince > 25f)
+            if (Stalled(s))
             {
-                s.RegroupUntil = Time.time + Random.Range(Settings.RegroupMin.Value, Settings.RegroupMax.Value);
-                s.SetPhase(Phase.Regrouping);
+                Retry(s, "stuck");
+                return;
             }
+            if (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value))
+            {
+                Regroup(s, "got away");
+                return;
+            }
+            if (Time.time - s.PhaseSince > Settings.RetreatTimeout.Value)
+                Regroup(s, "ran out of time running");
+        }
+
+        private bool PickRetreat(SurrenderState s)
+        {
+            if (Perception.RetreatPoint(Me, s.CaptorLastSeen, Settings.RetreatDistance.Value, false, out s.TargetPoint))
+                return true;
+            GoHide(s, "no way out");
+            return false;
+        }
+
+        // Stuck or blocked: a few fresh routes, then hide where he is.
+        private void Retry(SurrenderState s, string why)
+        {
+            s.Retries++;
+            if (s.Retries > Settings.PathRetries.Value)
+            {
+                GoHide(s, $"{why}, giving up running");
+                return;
+            }
+            if (Settings.VerboseLogs.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {why}, new route ({s.Retries})");
+            s.NextMoveOrder = 0f;   // Retreating picks a fresh route next frame
+            ResetProgress(s);
+        }
+
+        private void Regroup(SurrenderState s, string why)
+        {
+            BotOwner.StopMove();
+            s.RegroupUntil = Time.time + Settings.RegroupSeconds();
+            s.SetPhase(Phase.Regrouping, why);
         }
 
         private void Regrouping(SurrenderState s, bool check)
@@ -197,53 +334,55 @@ namespace HandsAreHigh
         // How to get back in the fight, best option first.
         private void Decide(SurrenderState s)
         {
-            if (Arsenal.GunOnBody(Me) != null)
+            if (Arsenal.GunOnBody(Me) != null && Arsenal.DrawGun(BotOwner))
             {
-                Arsenal.DrawGun(BotOwner);
-                s.SetPhase(Phase.Rearmed);
+                Rearm(s, "draws the gun he kept");
                 return;
             }
 
-            float avoid = Settings.AvoidRadius.Value;
             if (Settings.RecoverOwnWeapon.Value && s.DroppedWeapon != null && !s.Skip.Contains(s.DroppedWeapon) &&
-                Vector3.Distance(s.DropPosition, s.CaptorLastSeen) > avoid &&
-                Arsenal.StillThere(s.DroppedWeapon, s.DropPosition))
+                Vector3.Distance(s.DropPosition, s.CaptorLastSeen) > Settings.AvoidRadius.Value &&
+                Arsenal.StillThere(s.DroppedWeapon, s.DropPosition) &&
+                Perception.Reachable(Me.Position, s.DropPosition))
             {
                 s.TargetWeapon = s.DroppedWeapon;
                 s.TargetPoint = s.DropPosition;
-                HandsAreHighPlugin.Log.LogInfo($"{Me.Profile?.Nickname}: going back for his own gun");
-                s.SetPhase(Phase.Recovering);
+                s.SetPhase(Phase.Recovering, "going back for his own gun");
                 return;
             }
 
             if (Settings.ScavengeWeapons.Value)
             {
-                Item found = Arsenal.FindWeapon(Me, s.CaptorLastSeen, avoid, Settings.ScavengeRadius.Value, s.Skip, out Vector3 at);
+                Item found = Arsenal.FindWeapon(Me, s.CaptorLastSeen, Settings.ScavengeAvoid.Value,
+                    Settings.ScavengeRadius.Value, s.Skip, out Vector3 at);
                 if (found != null)
                 {
-                    s.TargetWeapon = found;
-                    s.TargetPoint = at;
-                    HandsAreHighPlugin.Log.LogInfo($"{Me.Profile?.Nickname}: going for {found.ShortName} {Vector3.Distance(at, Me.Position):0} m away");
-                    s.SetPhase(Phase.Recovering);
-                    return;
+                    if (Perception.Reachable(Me.Position, at))
+                    {
+                        s.TargetWeapon = found;
+                        s.TargetPoint = at;
+                        s.SetPhase(Phase.Recovering, $"going for {found.ShortName.Localized()} {Vector3.Distance(at, Me.Position):0} m away");
+                        return;
+                    }
+                    s.Skip.Add(found);
                 }
             }
 
-            if (Arsenal.HasMelee(Me) && s.Nerve > 0.75f)
+            if (Settings.HighNerveKnife.Value && s.Nerve >= Settings.HighNerve.Value && Arsenal.HasMelee(Me) && Arsenal.DrawMelee(BotOwner))
             {
-                Arsenal.DrawMelee(BotOwner);
-                s.SetPhase(Phase.Rearmed);
+                Rearm(s, $"no gun to find, comes back with his knife (nerve {s.Nerve:0.00})");
                 return;
             }
 
-            s.SetPhase(Phase.Hiding);
+            s.TargetWeapon = null;
+            GoHide(s, "nothing to fight with");
         }
 
         private void Recovering(SurrenderState s, bool check)
         {
             if (!MoveTo(s, s.TargetPoint, sprint: false))
             {
-                GiveUpOn(s);
+                GiveUpOn(s, "no path to it");
                 return;
             }
             if (!check) return;
@@ -252,82 +391,138 @@ namespace HandsAreHigh
             // Someone else got there first.
             if (Time.time - s.PhaseSince > 1f && !Arsenal.StillThere(s.TargetWeapon, s.TargetPoint))
             {
-                GiveUpOn(s);
+                GiveUpOn(s, "it's gone");
                 return;
             }
 
-            if (Arrived(s.TargetPoint, 1.6f))
+            if (Arrived(s.TargetPoint, Settings.PickupRange.Value))
             {
                 BotOwner.StopMove();
-                s.SetPhase(Phase.PickingUp);
+                s.SetPhase(Phase.PickingUp, $"picking up {s.TargetWeapon.ShortName.Localized()}");
                 Item weapon = s.TargetWeapon;
-                Arsenal.PickUp(Me, weapon, ok => HandsAreHighPlugin.Try("after pick-up", () =>
-                {
-                    if (!SurrenderRegistry.TryGet(Me, out SurrenderState now) || now.Phase != Phase.PickingUp) return;
-                    if (ok && Arsenal.DrawGun(BotOwner))
-                    {
-                        HandsAreHighPlugin.Log.LogInfo($"{Me.Profile?.Nickname}: rearmed with {weapon.ShortName}");
-                        now.SetPhase(Phase.Rearmed);
-                    }
-                    else
-                    {
-                        GiveUpOn(now);
-                    }
-                }));
+                Arsenal.PickUp(Me, weapon, ok => HandsAreHighPlugin.Try("after pick-up", () => AfterPickUp(weapon, ok)));
+                return;
             }
-            else if (Time.time - s.PhaseSince > 40f)
+            if (Stalled(s))
             {
-                GiveUpOn(s);
+                GiveUpOn(s, "stuck on the way");
+                return;
             }
+            if (Time.time - s.PhaseSince > Settings.RecoveryTimeout.Value)
+                GiveUpOn(s, "took too long");
         }
 
-        private void GiveUpOn(SurrenderState s)
+        private void AfterPickUp(Item weapon, bool ok)
+        {
+            if (!SurrenderRegistry.TryGet(Me, out SurrenderState s) || s.Phase != Phase.PickingUp || s.TargetWeapon != weapon) return;
+            if (!ok)
+            {
+                GiveUpOn(s, "pick-up failed (no room, or taken)");
+                return;
+            }
+            if (!Arsenal.Carries(Me, weapon))
+            {
+                GiveUpOn(s, "pick-up reported success but the gun isn't on him");
+                return;
+            }
+            if (Arsenal.DrawGun(BotOwner))
+                Rearm(s, $"rearmed with {weapon.ShortName.Localized()}");
+            else
+                GiveUpOn(s, "has the gun but couldn't draw it");
+        }
+
+        private void PickingUp(SurrenderState s)
+        {
+            Hold(Settings.Stance.Value);
+            if (Time.time - s.PhaseSince > Settings.PickupTimeout.Value)
+                GiveUpOn(s, "pick-up never finished");
+        }
+
+        private void GiveUpOn(SurrenderState s, string why)
         {
             if (s.TargetWeapon != null) s.Skip.Add(s.TargetWeapon);
             s.TargetWeapon = null;
+            BotOwner.StopMove();
             s.RegroupUntil = Time.time + 1f;
-            s.SetPhase(Phase.Regrouping);
+            s.SetPhase(Phase.Regrouping, $"gave up on the gun: {why}");
         }
 
-        // Nothing to fight with: stays low in cover. Keeps an eye out for a gun.
-        private void Hiding(SurrenderState s, bool check)
+        // Nothing to fight with: gets out of sight of where he last saw you, stays low,
+        // and looks again every few seconds.
+        private void GoHide(SurrenderState s, string why)
         {
-            Hold(0f);
-            BotOwner.Steering.LookToPoint(s.CaptorLastSeen + Vector3.up * 1.5f);
-            if (!check) return;
-            if (SpottedAgain(s)) return;
-            if (Time.time - s.PhaseSince > 8f)
+            BotOwner.StopMove();
+            s.SetPhase(Phase.Hiding, why);
+            if (Perception.CanSee(Me, s.CaptorLastSeen) &&
+                Perception.RetreatPoint(Me, s.CaptorLastSeen, Settings.CoverRadius.Value, true, out s.TargetPoint))
             {
-                s.RegroupUntil = Time.time;
-                s.SetPhase(Phase.Regrouping);   // look again; Decide comes back here if there's still nothing
+                s.HideMoving = true;
             }
         }
 
-        // A human player closes in and covers him while he's unarmed: hands go up again.
-        // With a gun still on him, a bold bot draws instead.
+        private void Hiding(SurrenderState s, bool check)
+        {
+            if (s.HideMoving)
+            {
+                if (!MoveTo(s, s.TargetPoint, sprint: false)) s.HideMoving = false;
+            }
+            else
+            {
+                Hold(0f);
+                BotOwner.Steering.LookToPoint(s.CaptorLastSeen + Vector3.up * 1.5f);
+            }
+            if (!check) return;
+            if (SpottedAgain(s)) return;
+
+            if (s.HideMoving && (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value) || Stalled(s)))
+            {
+                s.HideMoving = false;
+                BotOwner.StopMove();
+            }
+            if (Time.time - s.PhaseSince > Settings.HideRecheck.Value)
+            {
+                s.RegroupUntil = Time.time;
+                s.SetPhase(Phase.Regrouping, "looks again");   // Decide comes back here if there's still nothing
+            }
+        }
+
+        // A human player close by aims straight at him for a moment: hands go up again.
+        // With a gun still on him, a bold bot may draw instead.
         private bool SpottedAgain(SurrenderState s)
         {
+            if (Time.time < s.GraceUntil) return false;
             GameWorld world = Singleton<GameWorld>.Instance;
             if (world == null) return false;
+
+            float range = Settings.ResurrenderDistance.Value;
+            Player aiming = null;
             foreach (Player p in world.AllAlivePlayersList)
             {
                 if (p == null || p.IsAI) continue;
-                if (Vector3.Distance(p.Position, Me.Position) > Settings.ResurrenderDistance.Value) continue;
-                if (!Perception.Covering(p, Me)) continue;
-
-                if (Arsenal.GunOnBody(Me) != null && Random.value < s.Nerve)
-                {
-                    Arsenal.DrawGun(BotOwner);
-                    s.SetPhase(Phase.Rearmed);
-                }
-                else
-                {
-                    BotOwner.StopMove();
-                    SurrenderRegistry.Surrender(Me, p);
-                }
-                return true;
+                if ((p.Position - Me.Position).sqrMagnitude > range * range) continue;
+                if (!Perception.Covering(p, Me, Settings.AimTolerance.Value)) continue;
+                aiming = p;
+                break;
             }
-            return false;
+
+            if (aiming == null) { s.AimedBy = null; return false; }
+            if (s.AimedBy != aiming) { s.AimedBy = aiming; s.AimedSince = Time.time; }
+            if (Time.time - s.AimedSince < Settings.AimConfirm.Value) return false;
+
+            s.AimedBy = null;
+            if (Arsenal.GunOnBody(Me) != null)
+            {
+                float chance = Mathf.Clamp01(Settings.RecaptureResistance.Value * s.Nerve);
+                float roll = Random.value;
+                if (roll < chance && Arsenal.DrawGun(BotOwner))
+                {
+                    Rearm(s, $"caught again but draws (chance {chance:0.00}, roll {roll:0.00})");
+                    return true;
+                }
+            }
+            BotOwner.StopMove();
+            SurrenderRegistry.Surrender(Me, aiming, "caught again");
+            return true;
         }
 
         // ---- movement ------------------------------------------------------------------
@@ -339,17 +534,37 @@ namespace HandsAreHigh
             BotOwner.SetPose(pose);
         }
 
-        // Re-issues the path every couple of seconds; false if there's no way there.
+        // Re-issues the path every second; false if there's no complete way there.
         private bool MoveTo(SurrenderState s, Vector3 point, bool sprint)
         {
             BotOwner.SetPose(1f);
             BotOwner.SetTargetMoveSpeed(1f);
             if (Time.time < s.NextMoveOrder) return true;
+            bool first = s.NextMoveOrder == 0f;
             s.NextMoveOrder = Time.time + MoveOrderInterval;
+            if (first) ResetProgress(s);
 
             var status = BotOwner.GoToPoint(point, false, 1f);
             BotOwner.Sprint(sprint);
             return status != UnityEngine.AI.NavMeshPathStatus.PathInvalid;
+        }
+
+        private void ResetProgress(SurrenderState s)
+        {
+            s.ProgressFrom = Me.Position;
+            s.ProgressSince = Time.time;
+        }
+
+        // No real progress for a while: blocked by a door, a wall or another body.
+        private bool Stalled(SurrenderState s)
+        {
+            float moved = (Me.Position - s.ProgressFrom).magnitude;
+            if (moved >= Settings.ProgressMeters.Value)
+            {
+                ResetProgress(s);
+                return false;
+            }
+            return Time.time - s.ProgressSince > Settings.StallSeconds.Value;
         }
 
         private bool Arrived(Vector3 point, float within)
@@ -362,7 +577,7 @@ namespace HandsAreHigh
         public override void BuildDebugText(StringBuilder sb)
         {
             if (SurrenderRegistry.TryGet(Me, out SurrenderState s))
-                sb.AppendLine($"HandsAreHigh: {s.Phase}, arms {s.Weight:0.00}, nerve {s.Nerve:0.00}");
+                sb.AppendLine($"HandsAreHigh: {s.Phase}, order {s.Order}, arms {s.Weight:0.00}, nerve {s.Nerve:0.00}");
         }
     }
 }

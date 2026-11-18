@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using EFT;
 using EFT.Interactive;
 using EFT.InventoryLogic;
@@ -7,38 +8,72 @@ using UnityEngine;
 
 namespace HandsAreHigh
 {
-    // Everything to do with the bot's weapons: dropping the one in his hands, drawing
-    // what he still carries, and finding and picking up a gun in the world.
+    // Everything to do with the bot's weapons and kit: emptying his hands, drawing what he
+    // still carries, finding and picking up a gun in the world, and dropping items on order.
     internal static class Arsenal
     {
         // Same layers Looting Bots scans for loose items and bodies.
         private static readonly int LootMask = LayerMask.GetMask("Interactive", "Loot", "Deadbody");
-        private static readonly Collider[] Hits = new Collider[512];
+        private static readonly Collider[] Hits = new Collider[256];
 
-        private static readonly EquipmentSlot[] GunSlots =
+        internal static readonly EquipmentSlot[] GunSlots =
         {
             // Sidearm first: it's the fast draw.
             EquipmentSlot.Holster, EquipmentSlot.FirstPrimaryWeapon, EquipmentSlot.SecondPrimaryWeapon
         };
 
+        internal static readonly EquipmentSlot[] WeaponSlots =
+        {
+            EquipmentSlot.FirstPrimaryWeapon, EquipmentSlot.SecondPrimaryWeapon, EquipmentSlot.Holster, EquipmentSlot.Scabbard
+        };
+
+        // Everything a man can take off and hand over. Pockets, secure container, dogtag and
+        // armband can't be removed, so they're never asked for.
+        internal static readonly EquipmentSlot[] KitSlots =
+        {
+            EquipmentSlot.FirstPrimaryWeapon, EquipmentSlot.SecondPrimaryWeapon, EquipmentSlot.Holster, EquipmentSlot.Scabbard,
+            EquipmentSlot.Backpack, EquipmentSlot.TacticalVest, EquipmentSlot.ArmorVest,
+            EquipmentSlot.Headwear, EquipmentSlot.Earpiece, EquipmentSlot.FaceCover, EquipmentSlot.Eyewear
+        };
+
+        private static readonly EquipmentSlot[] ArmourSlots =
+        {
+            EquipmentSlot.ArmorVest, EquipmentSlot.TacticalVest, EquipmentSlot.Headwear
+        };
+
         internal static float Health(Player p) =>
             p?.HealthController == null ? 0f : p.HealthController.GetBodyPartHealth(EBodyPart.Common).Current;
 
-        internal static bool HandsEmpty(Player p) => p.HandsController is Player.EmptyHandsController;
-
-        // Only what's in his hands goes on the ground; anything holstered or slung stays
-        // on him, which is what makes a later draw possible.
-        internal static Item DropWeaponInHands(Player bot)
+        internal static float HealthFraction(Player p)
         {
-            Item inHands = bot.HandsController?.Item;
-            if (inHands == null || !(inHands is Weapon || IsMelee(inHands))) return null;
-
-            bot.SetEmptyHands(_ => HandsAreHighPlugin.Try("throw weapon",
-                () => bot.InventoryController.ThrowItem(inHands, false, null)));
-            return inHands;
+            if (p?.HealthController == null) return 1f;
+            var h = p.HealthController.GetBodyPartHealth(EBodyPart.Common);
+            return h.Maximum > 0f ? h.Current / h.Maximum : 1f;
         }
 
-        private static bool IsMelee(Item item) => item?.GetItemComponent<KnifeComponent>() != null;
+        // Nothing he could fight with is in his hands.
+        internal static bool HandsFree(Player p)
+        {
+            Item inHands = p?.HandsController?.Item;
+            return inHands == null || !(inHands is Weapon || IsMelee(inHands));
+        }
+
+        // A gun in his hands goes on the ground (and is returned); a knife goes back in its
+        // sheath. Holstered and slung guns stay on him, which is what makes a later draw possible.
+        internal static Item EmptyHands(Player bot)
+        {
+            Item inHands = bot.HandsController?.Item;
+            if (inHands is Weapon)
+            {
+                bot.SetEmptyHands(_ => HandsAreHighPlugin.Try("throw weapon",
+                    () => bot.InventoryController.ThrowItem(inHands, false, null)));
+                return inHands;
+            }
+            if (IsMelee(inHands)) bot.SetEmptyHands(_ => { });
+            return null;
+        }
+
+        internal static bool IsMelee(Item item) => item?.GetItemComponent<KnifeComponent>() != null;
 
         internal static EquipmentSlot? GunOnBody(Player bot)
         {
@@ -65,9 +100,61 @@ namespace HandsAreHigh
             return true;
         }
 
+        // No rounds in the gun and nothing to reload it with, or no gun at all.
+        internal static bool OutOfAmmo(BotOwner owner)
+        {
+            BotWeaponManager wm = owner.WeaponManager;
+            if (wm == null) return false;
+            if (wm.CurrentWeapon == null) return GunOnBody(owner.GetPlayer) == null;
+            try
+            {
+                // HaveBullets/Reload read the current weapon info, which can be missing
+                // mid weapon change; then he's not counted as out of ammo.
+                return !wm.HaveBullets && !wm.Reload.CanReload(false);
+            }
+            catch (NullReferenceException)
+            {
+                return false;
+            }
+        }
+
+        // ---- orders --------------------------------------------------------------------
+
+        internal static bool HasArmour(Item item)
+        {
+            if (item == null) return false;
+            if (item.GetItemComponent<ArmorComponent>() != null) return true;
+            return item.GetItemComponentsInChildren<ArmorComponent>().Any();
+        }
+
+        // What an order asks for, slot by slot. A container goes with everything in it,
+        // so nothing inside is ever listed (or dropped) twice.
+        internal static List<KeyValuePair<EquipmentSlot, Item>> ItemsFor(Player bot, EquipmentSlot[] slots, bool armourOnly)
+        {
+            var list = new List<KeyValuePair<EquipmentSlot, Item>>();
+            foreach (EquipmentSlot slot in slots)
+            {
+                Item item = bot.Equipment?.GetSlot(slot)?.ContainedItem;
+                if (item == null) continue;
+                if (armourOnly && slot != EquipmentSlot.ArmorVest && !HasArmour(item)) continue;
+                list.Add(new KeyValuePair<EquipmentSlot, Item>(slot, item));
+            }
+            return list;
+        }
+
+        internal static EquipmentSlot[] ArmourOrderSlots => ArmourSlots;
+
+        internal static bool StillWorn(Player bot, EquipmentSlot slot, Item item) =>
+            bot.Equipment?.GetSlot(slot)?.ContainedItem == item;
+
+        internal static void Drop(Player bot, Item item) =>
+            bot.InventoryController.ThrowItem(item, false, null);
+
+        // ---- guns in the world ----------------------------------------------------------
+
         // Is this gun still lying loose (or on a body) near where we expect it?
         internal static bool StillThere(Item weapon, Vector3 near, float radius = 3f) =>
-            FindLying(near, radius, item => item == weapon, null, out _) != null;
+            weapon != null && FindLying(near, radius, item => item == weapon, null, out _) != null;
 
         // Nearest gun on the ground or on a body, not too close to the threat and not
         // already claimed by another surrendered bot or in the skip list.
@@ -127,7 +214,7 @@ namespace HandsAreHigh
         // Equip a gun from the ground or a body into an empty weapon slot, the way
         // Looting Bots does: FindSlotToPickUp, Move, then a network transaction.
         // (Looting Bots calls the mover InteractionsHandlerClass; in this 4.1 build it is
-        // EFT.InventoryLogic.ItemManipulator.)
+        // EFT.InventoryLogic.ItemManipulator.) done(true) only once the transaction succeeded.
         internal static void PickUp(Player bot, Item weapon, Action<bool> done)
         {
             InventoryController ic = bot.InventoryController;
@@ -138,6 +225,14 @@ namespace HandsAreHigh
             if (move.Failed) { done(false); return; }
 
             ic.TryRunNetworkTransaction(move, result => done(result.Succeed));
+        }
+
+        // After a pick-up: is the gun really in one of his weapon slots now?
+        internal static bool Carries(Player bot, Item weapon)
+        {
+            foreach (EquipmentSlot slot in GunSlots)
+                if (bot.Equipment?.GetSlot(slot)?.ContainedItem == weapon) return true;
+            return false;
         }
     }
 }
