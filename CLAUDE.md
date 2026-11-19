@@ -16,6 +16,31 @@ except: every roll goes through `Dice` (UnityEngine.Random unless a scenario see
 scenario participants carry `Nickname#S1-Tag` in all log lines, and the restraint patches /
 threat loops also consult `ScenarioShield` (one bool when idle).
 
+### Notes after 0.10.0 (2026-11-19, nothing built)
+
+- **Raids with bots off**: `BotsController.Init` builds `_botSpawner` unconditionally; bots off
+  only clears `_canSpawn`, which gates the controller's own spawn calls (and its OnKill /
+  OnBeingHit / grenade event hooks, so some vanilla group reactions are missing). The scenario
+  spawner calls BotSpawner / IBotCreator directly and skips MaxBots, so it should work there;
+  unverified whether SPT's server returns profiles in such a raid (log: `spawn failed: the
+  server returned no ... profile`).
+- **Hot reload**: Joel declined (2026-11-19). Teardown supports it, but BigBrain layers attach at
+  brain activation and can't be removed: bots spawned before a reload keep the old (inert)
+  layers. No ScriptEngine on C:\HUH.
+- **Kneel + hands behind head (open idea, Joel asked; not built)**: no clip exists. Searched
+  player_anim_controller.bundle (UnityPy, clips matching kneel/knee/sit/squat/surrender/hands up/
+  behind/head/getup/stand up): only prone/aim/idle clips; civilian_anim_controller has no bundle;
+  kaban only idle_Offset_DownUnder. So it would be procedural like ArmPose (VisualPass postfix).
+  PlayerBones has Pelvis, LeftThigh1/RightThigh1 (thigh), LeftThigh2/RightThigh2 (calf; foot is
+  its child), Spine1/Spine3, Neck, Head. Plan: hands behind head = two-bone aim of each palm to
+  a point behind the skull, torso frame (easy, works standing too); kneel = start from the
+  game's crouch (today's Kneel order: SetPose(0), hands up), lower the pelvis, knees on ground
+  (raycast per knee), shins back; timed down (~1.5 s: one knee, other knee, hands to head) and
+  get-up (reverse; a quick version before breaking, which adds to his opening delay). Hitboxes
+  follow bones; the capsule stays crouch-sized. Risks: can't be judged without seeing it (config
+  angles/timings), simplified skeleton at range (fall back to crouch), foot/leg IK fighting the
+  override, slopes. Suggested order: hands behind head first, then kneel + get-up.
+
 ### 0.10.0 (debug scenario sandbox, src/HandsAreHigh/Scenarios/)
 
 F12 > 17. Debug Scenarios: "Scenario tools" (off) + "Scenario menu key" (unbound). Off = Runtime
