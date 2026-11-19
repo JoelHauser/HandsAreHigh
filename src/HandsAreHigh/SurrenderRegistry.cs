@@ -36,6 +36,11 @@ namespace HandsAreHigh
 
         internal float DefiantCooldownUntil;    // middle finger, kept across recaptures
 
+        // As an observer of other men's surrenders (Restraint.cs): his own disposition, rolled
+        // once per raid, and the men he saw go for a weapon after giving up.
+        internal float Mercy;
+        internal HashSet<string> Distrust;
+
         // Stable per raid, resolved once instead of on every check.
         internal NaturalSurrender.RoleClass Role = (NaturalSurrender.RoleClass)(-1);
         internal bool PersonalityRead;
@@ -89,6 +94,9 @@ namespace HandsAreHigh
             if (States.Count > 0 || History.Count > 0)
                 HandsAreHighPlugin.Log.LogInfo("New raid: surrender state cleared");
             _world = world;
+            Restraint.Clear();
+            Captors.Clear();
+            Runtime.Menu.Reset();   // nothing bound to the old raid's bots, no key blocked
             UnhookAll();
             States.Clear();
             Finished.Clear();
@@ -132,6 +140,7 @@ namespace HandsAreHigh
                 Forget(Gone[i]);
             }
             Gone.Clear();
+            Restraint.PruneObservers();
         }
 
         // Dead or despawned bots: their history stays (bounded per raid, a few hundred small
@@ -152,10 +161,18 @@ namespace HandsAreHigh
 
             if (States.TryGetValue(bot, out SurrenderState existing))
             {
+                // Mid-draw: a hands change on top of the pending draw is the busy-hands glitch.
+                // He's armed in a moment; the normal AI has him then.
+                if (existing.DrawPending)
+                {
+                    HandsAreHighPlugin.Log.LogInfo($"{existing.Name}: not surrendering again ({reason}): he's drawing");
+                    return;
+                }
                 // Found again while retreating or hiding: hands go back up. Stopped mid-scramble,
                 // he won't try that again straight away (no flip-flopping).
                 if (existing.Scrambling)
                     existing.ScrambleCooldownUntil = Time.time + Settings.ScrambleCooldown.Value;
+                Captors.EndCustody(existing, "caught again by someone else");
                 existing.Captor = captor;
                 existing.RaiseArms();
                 existing.Order = Order.None;
@@ -172,6 +189,7 @@ namespace HandsAreHigh
                 StartDrop(existing);
                 Voice.Say(existing, VoiceEvent.Surrender);
                 Voice.ScheduleChatter(existing);
+                if (captor.IsAI) Captors.OnSurrender(existing, captor, reason);
                 return;
             }
 
@@ -191,7 +209,11 @@ namespace HandsAreHigh
             s.Personality = PersonalityOf(bot, h);
             SainAdapter.Leanings(s.Personality, out s.Fight, out s.Flee);
             // Hits only: bleeding lowers health too, and must not count as being shot.
-            s.HitHandler = (info, part, absorbed) => s.WasHit = true;
+            s.HitHandler = (info, part, absorbed) =>
+            {
+                s.WasHit = true;
+                try { Restraint.OnPrisonerHit(s, info); } catch (System.Exception e) { HandsAreHighPlugin.Report("prisoner hit", e); }
+            };
             bot.BeingHitAction += s.HitHandler;
             // Death or despawn (Player.OnDead / unspawn raise it): everything of ours on him
             // stops that moment, before the ragdoll takes over; Tick removes the state.
@@ -209,6 +231,10 @@ namespace HandsAreHigh
             StartDrop(s);
             Voice.Say(s, VoiceEvent.Surrender);
             Voice.ScheduleChatter(s);
+            // A captor who gives up loses his own prisoner (no capture loops); then the bot he
+            // gave up to decides about him.
+            Captors.EndFor(bot, "surrendered himself");
+            if (captor.IsAI) Captors.OnSurrender(s, captor, reason);
         }
 
         // Personality never changes in a raid: one reflection call per bot, not per check.
@@ -307,6 +333,44 @@ namespace HandsAreHigh
                 }
                 CutReload(s);
             });
+        }
+
+        // The draw callback (Arsenal.Draw): the new hands controller is ready to operate. Only
+        // for the request that is still current for a bot still held.
+        internal static void OnDrawn(SurrenderState s, int token, bool ok)
+        {
+            if (s == null || s.Dead || s.Bot == null || !States.TryGetValue(s.Bot, out SurrenderState now) || now != s) return;
+            if (s.DrawToken != token || !s.DrawPending) return;
+            s.DrawPending = false;
+            s.DrawOk = ok;
+            s.TDrawReady = Time.realtimeSinceStartup;
+            if (!ok) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: the game didn't complete the draw ({Arsenal.DescribeHands(s.Bot)}); the normal AI takes it from here");
+        }
+
+        // Rearmed: handed on once his arms are down AND the weapon he went for is ready (or the
+        // game answered the draw at all). A draw that never answers is given up on after the
+        // hand-off limit; its late callback is then ignored (token).
+        private static bool DrawSettled(SurrenderState s)
+        {
+            if (!s.DrawPending) return true;
+            if (Time.time - s.DrawSince < Settings.DrawHandoffTimeout.Value) return false;
+            s.DrawPending = false;
+            s.DrawToken++;
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: no answer to the draw in {Settings.DrawHandoffTimeout.Value:0.0} s ({Arsenal.DescribeHands(s.Bot)}), handing him to the normal AI anyway");
+            return true;
+        }
+
+        private static void LogDrawTimeline(SurrenderState s)
+        {
+            if (s.TDrawAsked < 0f || s.TDecided < 0f) return;
+            float t0 = s.TDecided;
+            string Rel(float t) => t < 0f ? "n/a" : $"+{(t - t0) * 1000f:0} ms";
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: draw timeline ({Arsenal.SlotName(s.DrawSlot)}{(s.DrawSlot == EquipmentSlot.Scabbard ? " (knife)" : "")}" +
+                $"{(s.DrawQuick ? ", game quickdraw" : "")}): decided +0 ms, draw asked {Rel(s.TDrawAsked)}, " +
+                $"arms down {Rel(s.TArmsDown)} (lower {Settings.DrawLowerSeconds.Value:0.00} s, overlaps the draw), " +
+                $"weapon ready {Rel(s.TDrawReady)} (game draw animation), handed to the AI {Rel(Time.realtimeSinceStartup)}");
+            s.TDecided = -1f;
+            s.TDrawAsked = -1f;
         }
 
         internal static void CutReload(SurrenderState s)
@@ -435,7 +499,11 @@ namespace HandsAreHigh
                         $"arms up {Ms(s, Time.realtimeSinceStartup)} (raise {Settings.RaiseSeconds.Value:0.00} s), requests {s.DropAttempts}");
                 }
 
-                if (s.Phase == Phase.Rearmed && s.Progress <= 0f) Finished.Add(bot);
+                if (s.Phase == Phase.Rearmed && s.Progress <= 0f)
+                {
+                    if (s.TArmsDown < 0f && s.TDrawAsked >= 0f) s.TArmsDown = Time.realtimeSinceStartup;
+                    if (DrawSettled(s)) Finished.Add(bot);
+                }
             }
 
             foreach (Player p in Finished)
@@ -445,7 +513,10 @@ namespace HandsAreHigh
                 if (alive)
                 {
                     if (s.Phase == Phase.Rearmed)
+                    {
+                        LogDrawTimeline(s);
                         HandsAreHighPlugin.Log.LogInfo($"{s.Name}: back to normal AI");
+                    }
                     HistoryOf(p).CooldownUntil = Time.time + Settings.SurrenderCooldown.Value;
                     Release(s, "left surrender");
                 }
@@ -454,6 +525,8 @@ namespace HandsAreHigh
                     Forget(p);
                 }
                 Unhook(s);
+                Captors.EndCustody(s, alive ? "back to normal AI" : "dead");
+                Restraint.ForgetPrisoner(p);
                 States.Remove(p);
             }
         }
@@ -533,6 +606,8 @@ namespace HandsAreHigh
                 HandsAreHighPlugin.Log?.LogInfo($"Teardown: releasing {States.Count} surrendered bot(s)");
             foreach (SurrenderState s in States.Values) Release(s, "teardown");
             UnhookAll();
+            Restraint.Clear();
+            Captors.Clear();
             States.Clear();
             Finished.Clear();
             History.Clear();

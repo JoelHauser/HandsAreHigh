@@ -24,6 +24,8 @@ namespace HandsAreHigh
         private const string Pose = "12. Arm pose";
         private const string Compat = "13. Other mods";
         private const string Debug = "14. Debug";
+        private const string BotCaptor = "15. Bots taking prisoners";
+        private const string RestraintSec = "16. Sparing surrendered enemies";
 
         // 01
         internal static ConfigEntry<bool> Enabled;
@@ -163,6 +165,10 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> KitOrder;
         internal static ConfigEntry<bool> ArmourOrder;
         internal static ConfigEntry<bool> FollowOrder;
+        internal static ConfigEntry<bool> NumberKeys;
+        internal static ConfigEntry<bool> NumpadKeys;
+        internal static ConfigEntry<bool> WheelSelect;
+        internal static ConfigEntry<float> MenuScale;
         // 12
         internal static ConfigEntry<bool> LocalReactions;
         internal static ConfigEntry<float> WitnessRadius;
@@ -191,6 +197,10 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> RaiseSeconds;
         internal static ConfigEntry<float> LowerSeconds;
         internal static ConfigEntry<float> EmergencyLowerSeconds;
+        internal static ConfigEntry<float> DrawLowerSeconds;
+        internal static ConfigEntry<bool> Quickdraw;
+        internal static ConfigEntry<float> DrawHandoffTimeout;
+        internal static ConfigEntry<float> DrawRetrySeconds;
         internal static ConfigEntry<float> PoseStrength;
         internal static ConfigEntry<float> TrembleDegrees;
         internal static ConfigEntry<float> TrembleSpeed;
@@ -230,6 +240,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> DebugOpeningSeconds;
         internal static ConfigEntry<KeyboardShortcut> ForceRunKey;
         internal static ConfigEntry<KeyboardShortcut> ForceGrabKey;
+        internal static ConfigEntry<KeyboardShortcut> SurrenderToBotKey;
         internal static ConfigEntry<bool> Overlay;
         internal static ConfigEntry<bool> VerboseLogs;
         internal static ConfigEntry<bool> NerveOverride;
@@ -239,6 +250,34 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> LogGestures;
         internal static ConfigEntry<bool> LogVoice;
         internal static ConfigEntry<bool> Profile;
+        // 15 Bots taking prisoners
+        internal static ConfigEntry<bool> BotCaptors;
+        internal static ConfigEntry<int> CaptorPriority;
+        internal static ConfigEntry<int> MaxAiEncounters;
+        internal static ConfigEntry<float> BotSurrenderScale;
+        internal static ConfigEntry<float> BotSurrenderDistance;
+        internal static ConfigEntry<float> AcceptChance;
+        internal static ConfigEntry<float> SpareChance;
+        internal static ConfigEntry<float> AcceptRange;
+        internal static ConfigEntry<float> HoldMin;
+        internal static ConfigEntry<float> HoldMax;
+        internal static ConfigEntry<float> OrderGapMin;
+        internal static ConfigEntry<float> OrderGapMax;
+        internal static ConfigEntry<float> AiOrderRange;
+        internal static ConfigEntry<float> BusyRelease;
+        internal static ConfigEntry<bool> AlliedCaptors;
+        internal static ConfigEntry<bool> CaptorSpeech;
+        // 16 Sparing surrendered enemies
+        internal static ConfigEntry<bool> SquadRestraint;
+        internal static ConfigEntry<float> SquadNoticeRadius;
+        internal static ConfigEntry<float> SquadRejectChance;
+        internal static ConfigEntry<bool> ObserverRestraint;
+        internal static ConfigEntry<float> ObserverRadius;
+        internal static ConfigEntry<float> ObserverRespect;
+        internal static ConfigEntry<float> FleeingRespect;
+        internal static ConfigEntry<float> RestraintMemory;
+        internal static ConfigEntry<float> WatchSeconds;
+        internal static ConfigEntry<bool> LogRestraint;
         internal static ConfigEntry<float> ProfileSeconds;
 
         private static ConfigDescription Range(string text, float min, float max) =>
@@ -391,6 +430,12 @@ namespace HandsAreHigh
             ReactionMin = c.Bind(Opening, "Reaction time min (s)", 0.35f,
                 Range("Each bot rolls his own reaction time once per raid, between min and max. A change he can see (you reload, look away, come closer, leave) reaches his decisions only after it: quicker with high nerve, slower when hurt, varied every time.", 0.05f, 3f));
             ReactionMax = c.Bind(Opening, "Reaction time max (s)", 0.9f, Range("", 0.05f, 3f));
+            Quickdraw = c.Bind(Opening, "Quickdraw sidearm", true,
+                "A sidearm drawn when he resists uses the game's own pistol quickdraw speed (the fast weapon switch players get), instead of the slow draw from empty hands. Primaries always use their normal draw.");
+            DrawHandoffTimeout = c.Bind(Opening, "Draw hand-off limit (s)", 3f,
+                Range("While he draws, the mod keeps him (facing you, not firing) until the game reports the weapon ready, then hands him to the normal AI. This is the most it waits.", 0.5f, 10f));
+            DrawRetrySeconds = c.Bind(Opening, "Retry a refused draw for (s)", 1.5f,
+                Range("Once he has decided to draw, a draw the game refuses (hands still busy) is tried again every check for this long, without a new decision.", 0f, 5f));
             SquadBoost = c.Bind(Opening, "Squad nearby boost", 0.5f,
                 Range("Free squadmates close by (Allies within, section 04) make him up to 1 + this more likely to act on an opening.", 0f, 2f));
             HideWeight = c.Bind(Opening, "Weight: slip into cover", 0.6f,
@@ -447,6 +492,11 @@ namespace HandsAreHigh
             KitOrder = c.Bind(Interact, "Allow kit order", true, "");
             ArmourOrder = c.Bind(Interact, "Allow armour order", true, "");
             FollowOrder = c.Bind(Interact, "Allow follow order", true, "");
+            NumberKeys = c.Bind(Interact, "Number keys give orders", true,
+                "While the menu is open, 1-9 give the numbered order and 0 closes it. The game's hotbar (weapons, quick slots) ignores those keys while the menu is open, and a key used for the menu stays away from the hotbar until you release it. Your key bindings are never changed.");
+            NumpadKeys = c.Bind(Interact, "Numpad keys too", true, "Numpad 1-9 / 0 work like the top-row numbers (same hotbar protection).");
+            WheelSelect = c.Bind(Interact, "Mouse wheel selects", true, "While the menu is open the mouse wheel moves the highlight (and doesn't change your walking speed).");
+            MenuScale = c.Bind(Interact, "Menu size", 1f, Range("On top of the automatic scaling to your screen height.", 0.6f, 2f));
 
             // 12 Reactions and voice
             LocalReactions = c.Bind(Feedback, "Other held bots react", true, "A held bot who sees another one shot runs.");
@@ -484,7 +534,9 @@ namespace HandsAreHigh
                 Range("Turns the forearms about their length, to swing the palms forward.", -180f, 180f));
             RaiseSeconds = c.Bind(Pose, "Raise time (s)", 0.35f, Range("", 0f, 2f));
             LowerSeconds = c.Bind(Pose, "Lower time (s)", 0.2f, Range("", 0f, 2f));
-            EmergencyLowerSeconds = c.Bind(Pose, "Fast lower time (s)", 0.08f, Range("Shot, or going for a weapon.", 0f, 0.5f));
+            EmergencyLowerSeconds = c.Bind(Pose, "Fast lower time (s)", 0.08f, Range("Shot, bolting, or scrambling for his gun.", 0f, 0.5f));
+            DrawLowerSeconds = c.Bind(Pose, "Draw lower time (s)", 0.22f,
+                Range("When he goes for a gun or knife he kept: the arms come down this fast while the game's draw animation starts underneath (they overlap; no snap).", 0f, 1f));
             PoseStrength = c.Bind(Pose, "Pose strength", 1f, Range("Below 1 lets breathing and sway show through the arms.", 0f, 1f));
             TrembleDegrees = c.Bind(Pose, "Tremble (deg)", 0.8f, Range("0 turns it off.", 0f, 5f));
             TrembleSpeed = c.Bind(Pose, "Tremble speed", 6f, Range("", 0f, 20f));
@@ -536,6 +588,8 @@ namespace HandsAreHigh
             DebugOpeningSeconds = c.Bind(Debug, "Opening lasts (s)", 6f, Range("", 1f, 30f));
             ForceRunKey = c.Bind(Debug, "Force run", new KeyboardShortcut(KeyCode.Backspace, KeyCode.LeftControl),
                 "Deterministic test: the held bot under your crosshair runs now (no roll).");
+            SurrenderToBotKey = c.Bind(Debug, "Surrender to his enemy", new KeyboardShortcut(KeyCode.LeftBracket, KeyCode.LeftControl),
+                "Debug keys on: the bot under your crosshair gives up to the bot he is fighting (his current target), and that bot decides whether to take him.");
             ForceGrabKey = c.Bind(Debug, "Force gun grab", new KeyboardShortcut(KeyCode.RightBracket, KeyCode.LeftControl),
                 "Deterministic test: the held bot under your crosshair scrambles for his dropped gun now (no roll), if it's there and reachable.");
             Overlay = c.Bind(Debug, "Overlay", false, "Lists every held bot: phase, order, nerve, arms.");
@@ -548,6 +602,51 @@ namespace HandsAreHigh
             LogGestures = c.Bind(Debug, "Log gestures", true, "Wiggle rolls, starts, completions, skips and interruptions.");
             LogVoice = c.Bind(Debug, "Log voice", true,
                 "Every line a held bot (or you, for orders) says, and whether audio actually started (or why not: no such line in his voice, out of earshot, speaker busy).");
+            // 15 Bots taking prisoners
+            BotCaptors = c.Bind(BotCaptor, "Bots can take prisoners", true,
+                "A Scav or PMC can give up to a hostile bot, not only to you (same pressure model; his target must be a bot he sees or just saw). The bot he gives up to decides whether to take him, spare him or keep fighting.");
+            CaptorPriority = c.Bind(BotCaptor, "Captor layer priority (restart)", 70,
+                IntRange("BigBrain priority of the layer a bot uses while guarding a prisoner. Below SAIN's avoid-threat layer (80) and the surrender layer; above SAIN's combat layers (20-24).", 1, 200));
+            MaxAiEncounters = c.Bind(BotCaptor, "Bot-held prisoners at once", 4, IntRange("Across the map. Further surrenders to bots are spared or refused instead of taken.", 0, 16));
+            BotSurrenderScale = c.Bind(BotCaptor, "Surrender chance against a bot", 0.85f,
+                Range("Multiplies the chance of giving up when the threat is a bot (you: 1). Scavs still give up far more readily than PMCs (section 05).", 0f, 2f));
+            BotSurrenderDistance = c.Bind(BotCaptor, "Gives up to a bot within (m)", 25f, Range("", 5f, 60f));
+            AcceptChance = c.Bind(BotCaptor, "Takes a prisoner", 0.65f,
+                Range("When it is practical (gun with rounds, not under fire, no other threat in sight, prisoner in sight and close): the chance he takes custody, before personality and his own disposition.", 0f, 1f));
+            SpareChance = c.Bind(BotCaptor, "Spares if not taking him", 0.75f,
+                Range("Not taking custody (impractical, busy, or declined): the chance he still holds his fire at him instead of fighting on. Being unable to guard him never by itself means killing him.", 0f, 1f));
+            AcceptRange = c.Bind(BotCaptor, "Guards from up to (m)", 20f, Range("Farther than this he won't take custody.", 4f, 40f));
+            HoldMin = c.Bind(BotCaptor, "Holds a prisoner min (s)", 25f, Range("Then he lets him go (or earlier, by his plan). Never indefinite.", 5f, 300f));
+            HoldMax = c.Bind(BotCaptor, "Holds a prisoner max (s)", 70f, Range("", 5f, 600f));
+            OrderGapMin = c.Bind(BotCaptor, "Between his orders min (s)", 2.5f, Range("", 0.5f, 30f));
+            OrderGapMax = c.Bind(BotCaptor, "Between his orders max (s)", 7f, Range("", 0.5f, 60f));
+            AiOrderRange = c.Bind(BotCaptor, "Bot order range (m)", 15f, Range("A bot's order is only given within this range and in sight (the same checks as yours).", 3f, 30f));
+            BusyRelease = c.Bind(BotCaptor, "Gives up custody after busy (s)", 12f,
+                Range("Pulled into another fight (under fire, another enemy in sight) for this long, he stops guarding; the prisoner is then on his own and the restraint stays as decided.", 2f, 120f));
+            AlliedCaptors = c.Bind(BotCaptor, "Your allies can make bots surrender", true,
+                "Bots in a group allied to you (BotsGroup.IsAlly) can cause a surrender and hold fire, but never get the guarding layer: their movement stays with their own mod and your orders. You can take over their prisoner with the order menu.");
+            CaptorSpeech = c.Bind(BotCaptor, "Bots speak their orders", true, "A line from the bot's own voice with each order (feedback only: the order is applied either way).");
+
+            // 16 Sparing surrendered enemies
+            SquadRestraint = c.Bind(RestraintSec, "Captor squad holds fire", true,
+                "When a bot takes or spares a prisoner, his squadmates (same BotsGroup) within the notice radius hold their fire at that prisoner only, at once. Every other enemy is fought as normal.");
+            SquadNoticeRadius = c.Bind(RestraintSec, "Squad hears it within (m)", 80f, Range("", 5f, 300f));
+            SquadRejectChance = c.Bind(RestraintSec, "Squadmate refuses anyway", 0.02f,
+                Range("Chance a squadmate doesn't go along with his squad's decision (logged with the reason). 0 forbids it.", 0f, 1f));
+            ObserverRestraint = c.Bind(RestraintSec, "Other bots may spare him", true,
+                "Bots outside the captor's squad who see a man with his hands up decide for themselves (once, kept for a while): hold fire, ignore him for another threat, let him leave, or fight.");
+            ObserverRadius = c.Bind(RestraintSec, "Notices a surrender within (m)", 50f, Range("", 5f, 150f));
+            ObserverRespect = c.Bind(RestraintSec, "Holds fire at a compliant man", 0.8f,
+                Range("Base chance a bot holds fire at a man standing with his hands up, before personality, disposition, danger and what he has seen him do.", 0f, 1f));
+            FleeingRespect = c.Bind(RestraintSec, "Lets an unarmed man run", 0.7f,
+                Range("Base chance a bot that spared him lets him run (unarmed) instead of firing. Drawing a weapon or going for a gun is never running.", 0f, 1f));
+            RestraintMemory = c.Bind(RestraintSec, "Keeps his decision (s)", 120f,
+                Range("A decision about a surrendered man is kept this long unless something meaningful changes (he draws, hits someone, runs).", 10f, 900f));
+            WatchSeconds = c.Bind(RestraintSec, "Squadmates watch him (s)", 15f,
+                Range("Idle squadmates of the captor near the prisoner stand and watch him this long (0: never).", 0f, 120f));
+            LogRestraint = c.Bind(RestraintSec, "Log restraint decisions", true,
+                "Every decision (holds fire / ignores / lets go / refuses) with its reasons. A restrained bot that tries to shoot anyway is always logged as RESTRAINT LEAK.");
+
             Profile = c.Bind(Debug, "Profile", false,
                 "Off by default; costs nothing when off. On: logs frame times (avg, p50, p99, worst, 1% low), GC activity, our own cost per hook, tracked object counts, and any frame where our code took over 1 ms. For comparing runs with Enabled on and off.");
             ProfileSeconds = c.Bind(Debug, "Profile report every (s)", 10f, Range("", 2f, 120f));

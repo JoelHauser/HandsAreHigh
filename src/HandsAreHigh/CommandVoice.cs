@@ -45,7 +45,16 @@ namespace HandsAreHigh
 
         internal static void Speak(Player me, OrderKind order)
         {
-            if (!Settings.CommandSpeech.Value || me?.Speaker == null || !Perception.Alive(me)) return;
+            if (!Settings.CommandSpeech.Value) return;
+            Say(me, order);
+        }
+
+        // A bot captor's order, from his own voice (Speaker.Play, as for every bot line here).
+        internal static void SpeakAs(Player bot, OrderKind order) => Say(bot, order);
+
+        private static void Say(Player me, OrderKind order)
+        {
+            if (me?.Speaker == null || !Perception.Alive(me)) return;
             BaseSpeaker speaker = me.Speaker;
             string voice = speaker.PlayerVoice;
 

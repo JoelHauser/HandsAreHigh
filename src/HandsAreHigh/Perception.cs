@@ -30,7 +30,7 @@ namespace HandsAreHigh
         {
             if (!Alive(captor)) return false;
             if (!(captor.HandsController is Player.FirearmController fc)) return false;
-            if (fc.IsInReloadOperation() || captor.HandsController.IsInventoryOpen()) return false;
+            if (fc.IsInReloadOperation() || (!captor.IsAI && captor.HandsController.IsInventoryOpen())) return false;
 
             Vector3 eye = Eye(captor);
             Vector3 to = Chest(bot) - eye;

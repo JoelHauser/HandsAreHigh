@@ -9,29 +9,79 @@ namespace HandsAreHigh
     internal static class Reactions
     {
         // Is the captor covering him? If not, what kind of opening it is:
-        //   clear (gun not up, reloading, inventory open): he only needs his reaction time;
+        //   clear (gun not up, reloading, switching weapons, inventory open, busy fighting
+        //   someone else): he only needs his reaction time;
         //   gradual (looking away, something in between, out of sight): he waits OpeningDelay
         //   on top, to be sure it isn't a glance.
         // strength 0..1: how good the opening is (looking 90 deg away beats 35 deg).
-        internal static bool Covered(Player captor, Player bot, bool seen, float watchAngle,
+        // Bot captors: only what the prisoner could see of them (weapon in hands, reload or
+        // weapon change, where they look, a clear line, that they're fighting someone else);
+        // the inventory check is for players only. A captor looking away isn't an opening when
+        // a squadmate the prisoner can see is holding him at gunpoint.
+        internal static bool Covered(SurrenderState s, Player captor, Player bot, bool seen, float watchAngle,
+            out string kind, out float strength, out bool clear)
+        {
+            bool covered = CoveredBy(s, captor, bot, seen, watchAngle, out kind, out strength, out clear);
+            if (covered) return true;
+            if (SquadCovers(s, captor, bot, watchAngle, out string who))
+            {
+                kind = null; strength = 0f; clear = false;
+                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his captor isn't covering him, but {who} is");
+                return true;
+            }
+            return false;
+        }
+
+        private static bool CoveredBy(SurrenderState s, Player captor, Player bot, bool seen, float watchAngle,
             out string kind, out float strength, out bool clear)
         {
             kind = null; strength = 0f; clear = false;
-            if (!seen) { kind = "he can't see you"; strength = 0.8f; return false; }
-            if (!(captor.HandsController is Player.FirearmController fc)) { kind = "your gun isn't up"; strength = 1f; clear = true; return false; }
-            if (captor.HandsController.IsInventoryOpen()) { kind = "you're in your inventory"; strength = 1f; clear = true; return false; }
-            if (fc.IsInReloadOperation()) { kind = "you're reloading"; strength = 0.9f; clear = true; return false; }
+            bool ai = captor.IsAI;
+            if (!seen) { kind = ai ? "his captor can't see him" : "he can't see you"; strength = 0.8f; return false; }
+            if (!(captor.HandsController is Player.FirearmController fc)) { kind = ai ? "his captor's gun isn't up" : "your gun isn't up"; strength = 1f; clear = true; return false; }
+            if (!ai && captor.HandsController.IsInventoryOpen()) { kind = "you're in your inventory"; strength = 1f; clear = true; return false; }
+            if (fc.IsInReloadOperation()) { kind = ai ? "his captor reloads" : "you're reloading"; strength = 0.9f; clear = true; return false; }
+            if (ai)
+            {
+                BotOwner o = captor.AIData?.BotOwner;
+                if (o == null || o.BotState != EBotState.Active) { kind = "his captor stopped moving"; strength = 0.9f; clear = true; return false; }
+                if (o.WeaponManager?.Selector?.IsChanging == true) { kind = "his captor switches weapons"; strength = 1f; clear = true; return false; }
+                if (s.Custody != null && s.Custody.Busy) { kind = $"his captor is fighting {s.Custody.BusyWhy}"; strength = 0.9f; clear = true; return false; }
+                if (s.Custody == null) { kind = "nobody guards him"; strength = 0.85f; clear = true; return false; }
+            }
 
             Vector3 eye = Perception.Eye(captor);
             float angle = Vector3.Angle(captor.LookDirection, Perception.Chest(bot) - eye);
             if (angle > watchAngle)
             {
-                kind = $"you look {angle:0} deg away";
+                kind = ai ? $"his captor looks {angle:0} deg away" : $"you look {angle:0} deg away";
                 strength = Mathf.Lerp(0.5f, 1f, Mathf.InverseLerp(watchAngle, 90f, angle));
                 return false;
             }
-            if (!Perception.LineClear(eye, Perception.Chest(bot))) { kind = "something is between you"; strength = 0.7f; return false; }
+            if (!Perception.LineClear(eye, Perception.Chest(bot))) { kind = "something is between them"; strength = 0.7f; return false; }
             return true;
+        }
+
+        // The captor's squadmates who hold fire at him (decided with the squad), close, aiming
+        // at him with a gun, and seen by him: at most three line checks.
+        private static bool SquadCovers(SurrenderState s, Player captor, Player bot, float watchAngle, out string who)
+        {
+            who = null;
+            var map = Restraint.EntriesFor(bot);
+            if (map == null) return false;
+            Vector3 eye = Perception.Eye(bot);
+            int tries = 0;
+            foreach (RestraintEntry e in map.Values)
+            {
+                if (!e.Squad || !e.Holds || e.Observer == captor || !Perception.Alive(e.Observer)) continue;
+                if ((e.Observer.Position - bot.Position).sqrMagnitude > 25f * 25f) continue;
+                if (tries++ >= 3) break;
+                if (!Perception.Covering(e.Observer, bot, watchAngle)) continue;
+                if (!Perception.LineClear(eye, Perception.Eye(e.Observer))) continue;
+                who = Restraint.Name(e.Observer);
+                return true;
+            }
+            return false;
         }
 
         // Every second: how hurt he is (NaturalSurrender's model: the worst of health, head and

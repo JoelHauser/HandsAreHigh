@@ -157,8 +157,13 @@ namespace HandsAreHigh
                 // Verbose logs are on.
                 EnemyInfo goal = owner.Memory?.GoalEnemy;
                 if (goal == null) { if (Settings.VerboseLogs.Value) Blocked(bot, "no enemy targeted"); return; }
-                if (!(goal.Person is Player human) || human.IsAI || !Perception.Alive(human)) { if (Settings.VerboseLogs.Value) Blocked(bot, "his target isn't a human player"); return; }
-                enemy = human;
+                if (!(goal.Person is Player foe) || !Perception.Alive(foe)) { if (Settings.VerboseLogs.Value) Blocked(bot, "his target isn't a living player"); return; }
+                if (foe.IsAI)
+                {
+                    string no = BotFoeBlocked(bot, foe);
+                    if (no != null) { if (Settings.VerboseLogs.Value) Blocked(bot, no); return; }
+                }
+                enemy = foe;
                 seenNow = goal.IsVisible;
                 if (!seenNow && now - goal.PersonalLastSeenTime > Settings.SeenWithin.Value)
                 {
@@ -166,8 +171,10 @@ namespace HandsAreHigh
                     return;
                 }
             }
+            bool botFoe = enemy.IsAI;
             float dist = Vector3.Distance(enemy.Position, bot.Position);
-            float maxDist = demanded ? Mathf.Max(Settings.SurrenderDistance.Value, Settings.DemandRange.Value) : Settings.SurrenderDistance.Value;
+            float maxDist = demanded ? Mathf.Max(Settings.SurrenderDistance.Value, Settings.DemandRange.Value)
+                : botFoe ? Settings.BotSurrenderDistance.Value : Settings.SurrenderDistance.Value;
             if (dist > maxDist) { if (Settings.VerboseLogs.Value) Blocked(bot, $"you're {dist:0} m away (max {maxDist:0})"); return; }
 
             // Mid weapon change: wait for the next check. (Mid-reload is fine: the surrender
@@ -256,11 +263,22 @@ namespace HandsAreHigh
             float expMult = 1f - Settings.ExperienceComposure.Value * experience;
             float severeMult = severe ? Settings.SevereChanceBoost.Value : 1f;
             float demandMult = demanded ? Settings.DemandChanceBoost.Value : 1f;
+            // A bot threat: scaled (BotSurrenderScale), and only as credible as his hold on him:
+            // a gun in his hands with rounds in it, else far less.
+            float botMult = 1f;
+            string credible = null;
+            if (botFoe)
+            {
+                BotOwner fo = enemy.AIData?.BotOwner;
+                bool gun = enemy.HandsController is Player.FirearmController && fo != null && !Arsenal.OutOfAmmo(fo);
+                botMult = Settings.BotSurrenderScale.Value * (gun ? 1f : 0.35f);
+                credible = gun ? "armed" : "not credibly armed";
+            }
             float nerve = Settings.EffectiveNerve(h.Nerve);
             // The pressure curve: 0 at CurveStart, 1 at full pressure.
             float curve = Mathf.Clamp01((pressure - Settings.CurveStart.Value) / Mathf.Max(0.05f, 1f - Settings.CurveStart.Value));
             float chance = Mathf.Min(roleMax,
-                roleBase * curve * (1f - Settings.NerveResistance.Value * nerve) * persMult * kitMult * expMult * severeMult * demandMult);
+                roleBase * curve * (1f - Settings.NerveResistance.Value * nerve) * persMult * kitMult * expMult * severeMult * demandMult * botMult);
             chance = Mathf.Clamp01(chance);
             float roll = Random.value;
             bool gives = eligible && roll < chance;
@@ -268,7 +286,7 @@ namespace HandsAreHigh
 
             var sb = new StringBuilder();
             sb.Append($"{bot.Profile?.Nickname} ({role}, lvl {bot.Profile?.Info?.Level}{(string.IsNullOrEmpty(personality) ? "" : ", " + personality)}) ");
-            sb.Append($"vs {enemy.Profile?.Nickname} {dist:0} m{(seenNow ? "" : " (just lost sight)")}: pressure {pressure:0.00} [");
+            sb.Append($"vs {enemy.Profile?.Nickname}{(botFoe ? $" (bot {enemy.Profile?.Info?.Settings?.Role}, {credible})" : "")} {dist:0} m{(seenNow ? "" : " (just lost sight)")}: pressure {pressure:0.00} [");
             sb.Append($"hurt {injury:0.00} ({injuryWhy}), ammo {ammo:0}, ");
             sb.Append($"fire {suppression:0.00} (near misses/hits {shots:0.0} = {ownFire:0.00}, SAIN {sainFire:0.00}, armour x{armourDull:0.00}), ");
             sb.Append($"outnumbered {outnumbered:0.00} ({hostiles} vs {friends}), squad {squad:0.00} ({squadWhy})]; {gate}; ");
@@ -276,6 +294,7 @@ namespace HandsAreHigh
             sb.Append($"experience {experience:0.00} x{expMult:0.00}, personality x{persMult:0.00}, {rc} base {roleBase:0.00} x curve {curve:0.00}, nerve {nerve:0.00}");
             if (severe) sb.Append($", severe x{severeMult:0.0}");
             if (demanded) sb.Append($", demand x{demandMult:0.0}");
+            if (botFoe) sb.Append($", bot threat x{botMult:0.00}");
             sb.Append($"; chance {chance:0.000} (max {roleMax:0.00}), roll {roll:0.000}");
             sb.Append(gives ? " -> surrenders" : eligible ? " -> holds on" : " -> no roll");
             HandsAreHighPlugin.Log.LogInfo(sb.ToString());
@@ -285,6 +304,21 @@ namespace HandsAreHigh
             HandsAreHighPlugin.Log.LogInfo(SurrenderRegistry.HoldsBot(bot)
                 ? $"{bot.Profile?.Nickname}: surrender activated (layer will take him on its next brain update)"
                 : $"{bot.Profile?.Nickname}: surrender activation FAILED (mod disabled or registry refused)");
+        }
+
+        // A bot he's fighting can only be the one he gives up to if bot captors are on, that bot
+        // isn't held himself, is active, and his own group really counts him as an enemy
+        // (BotsGroup.IsEnemy: verified relationship, not faction). A player ally's bot only
+        // with "Your allies can make bots surrender".
+        private static string BotFoeBlocked(Player bot, Player foe)
+        {
+            if (!Settings.BotCaptors.Value) return "his target is a bot (bot captors off)";
+            if (SurrenderRegistry.HoldsBot(foe)) return "his target is a prisoner himself";
+            BotOwner fo = foe.AIData?.BotOwner;
+            if (fo == null || fo.IsDead || fo.BotState != EBotState.Active) return "his target isn't an active bot";
+            if (fo.BotsGroup == null || !fo.BotsGroup.IsEnemy(bot)) return "his target's group doesn't count him as an enemy";
+            if (!Settings.AlliedCaptors.Value && Captors.IsPlayerAlly(fo)) return "his target is your ally (allies can't make bots surrender)";
+            return null;
         }
 
         // Why a bot isn't even considered (Verbose logs only: in a long fight between bots

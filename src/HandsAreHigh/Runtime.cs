@@ -28,9 +28,16 @@ namespace HandsAreHigh
         private void Update()
         {
             Perf.Frame();
+            // Latches end on key release even if nothing else runs; ownership lapses by itself.
+            InputGuard.Tick();
             bool inRaid = SurrenderRegistry.InRaid;
             ToggleGui(inRaid);
-            if (!inRaid) { SurrenderRegistry.EnsureRaid(); return; }
+            if (!inRaid)
+            {
+                if (Menu.IsOpen || InputGuard.Engaged) Menu.Reset();
+                SurrenderRegistry.EnsureRaid();
+                return;
+            }
 
             float dt = Time.deltaTime;
             long t0 = Perf.Begin();
@@ -39,6 +46,9 @@ namespace HandsAreHigh
 
             t0 = Perf.Begin();
             try { NaturalSurrender.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("surrender checks", e); }
+            // Bot captors (each every 0.25 s) and one prisoner's observer scan per frame.
+            try { Captors.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("captors", e); }
+            try { Restraint.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("restraint", e); }
             Perf.End(Perf.Sec.Natural, t0);
 
             Player me = Singleton<GameWorld>.Instance.MainPlayer;
@@ -56,6 +66,7 @@ namespace HandsAreHigh
             if (Settings.LeaveKey.Value.IsDown()) DebugCommand("leave", me);
             if (Settings.ForceRunKey.Value.IsDown()) DebugCommand("force run", me);
             if (Settings.ForceGrabKey.Value.IsDown()) DebugCommand("force grab", me);
+            if (Settings.SurrenderToBotKey.Value.IsDown()) DebugCommand("surrender to his enemy", me);
         }
 
         // Every debug key acts on exactly one bot: the one under the crosshair, resolved once
@@ -86,6 +97,19 @@ namespace HandsAreHigh
                 {
                     SurrenderRegistry.Surrender(target, me, "debug key");
                     outcome = SurrenderRegistry.HoldsBot(target) ? "surrenders" : "didn't surrender (mod disabled?)";
+                }
+            }
+            else if (command == "surrender to his enemy")
+            {
+                Player foe = target.AIData?.BotOwner?.Memory?.GoalEnemy?.Person as Player;
+                if (!NaturalSurrender.Eligible(target)) outcome = "not a Scav or PMC, can't surrender";
+                else if (SurrenderRegistry.HoldsBot(target)) outcome = "already surrendered";
+                else if (foe == null || !foe.IsAI || !Perception.Alive(foe)) outcome = "isn't fighting a bot right now";
+                else if (SurrenderRegistry.HoldsBot(foe)) outcome = $"his enemy {foe.Profile?.Nickname} is a prisoner himself";
+                else
+                {
+                    SurrenderRegistry.Surrender(target, foe, "debug key: to his enemy");
+                    outcome = SurrenderRegistry.HoldsBot(target) ? $"surrenders to {foe.Profile?.Nickname} (see the log for his decision)" : "didn't surrender";
                 }
             }
             else if (!SurrenderRegistry.TryGet(target, out SurrenderState s))

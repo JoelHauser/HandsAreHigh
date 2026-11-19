@@ -24,7 +24,10 @@ namespace HandsAreHigh
     {
         internal Player Bot;
         internal string Name;
-        internal Player Captor;
+        internal Player Captor;           // whom he gave up to (you or a bot); the threat he watches
+        internal CaptorState Custody;     // a bot actively guarding him (Captors.cs), or null
+        internal bool OrderByHuman = true;  // the last order came from you (notes on screen)
+        internal float NextObserverScan;  // Restraint.Tick
         internal Phase Phase = Phase.HandsUp;
         internal float PhaseSince;
         internal Order Order;
@@ -118,6 +121,24 @@ namespace HandsAreHigh
         internal bool ForceGrab;            // debug key: deterministic scramble
         internal float NextVoice;
 
+        // Drawing a weapon he kept (Arsenal.Draw). One draw request at a time, with a token so a
+        // late callback from an abandoned one is ignored. The layer keeps him (facing you, not
+        // firing) until the game reports the weapon ready, then hands him to the normal AI.
+        internal bool DrawPending;
+        internal int DrawToken;
+        internal float DrawSince;
+        internal EquipmentSlot DrawSlot;
+        internal bool DrawQuick;
+        internal bool DrawOk;
+        internal float DrawCommitUntil;     // decided to draw but the game refused: retried until then
+        // Draw timeline (Time.realtimeSinceStartup), logged at the hand-off.
+        internal float TDecided = -1f, TDrawAsked = -1f, TArmsDown = -1f, TDrawReady = -1f;
+
+        // Off-cadence decisions: a decision or leave reaction that comes due between the
+        // 0.25 s checks runs on that frame, once (these hold the due time already run).
+        internal float RanDecideAt = -2f;
+        internal float RanLeaveAt = -2f;
+
         // Who he is (read once per surrender: SAIN personality is a reflection call).
         internal float Reaction;            // his own reaction time, s (BotHistory, rolled once per raid)
         internal string Personality;
@@ -201,6 +222,8 @@ namespace HandsAreHigh
             DefiantAt = -1f;
             DefiantSampled = false;
             DefiantPendingUntil = -1f;
+            DrawCommitUntil = 0f;
+            TDecided = -1f;
             Gestures.Cancel(this, "new surrender");
         }
 
@@ -215,9 +238,18 @@ namespace HandsAreHigh
                 Gestures.Cancel(this, $"now {p}");
                 DecideAt = -1f;
                 LeaveAt = -1f;
+                DrawCommitUntil = 0f;
             }
             PhaseSince = Time.time;
             NextMoveOrder = 0f;
+            // What the bots around him see him do: going for a weapon ends every restraint (and
+            // is remembered by whoever saw it); running or giving up again is re-decided.
+            if (old != p)
+            {
+                if ((p == Phase.Rearmed && reason != "mod disabled") || p == Phase.Recovering || p == Phase.PickingUp)
+                    Restraint.OnArmed(this, p == Phase.Rearmed ? "drew a weapon" : "went for a gun");
+                else Restraint.OnSituationChanged(this);
+            }
             Retries = 0;
             HideMoving = false;
             if (p != Phase.Recovering && p != Phase.PickingUp) Scrambling = false;

@@ -63,6 +63,23 @@ namespace HandsAreHigh
             catch { return false; }
         }
 
+        // The same for a bot we drive without holding him (a captor guarding a prisoner).
+        internal static bool ReleaseLayer(BotOwner owner, BotHistory h)
+        {
+            if (!Settings.ReleaseSainControl.Value || owner == null || h == null) return false;
+            Resolve();
+            if (_activeLayer == null || _noLayer == null) return false;
+            try
+            {
+                object component = ComponentOf(owner, h);
+                if (component == null) return false;
+                if (Equals(_activeLayer.GetValue(component, null), _noLayer)) return false;
+                _activeLayer.SetValue(component, _noLayer, null);
+                return true;
+            }
+            catch { return false; }
+        }
+
         // SAIN's BotComponent for a bot, cached in his raid history; looked up again at most
         // every 2 s while missing. One shared argument array: no allocation per call.
         private static readonly object[] Args = new object[1];

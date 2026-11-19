@@ -156,34 +156,80 @@ namespace HandsAreHigh
         // Through the bot's own selector, as a main-weapon change: TryChangeToSlot only lets
         // a non-main change through when _canChangeToSupportWeapons is set (usually off for a
         // holster), which is why pistol draws were refused. If the selector still refuses
-        // (IsWeaponReady false, change cooldown), the same Player.SetSlotItem it would call,
-        // with its OnWeaponTaken so the bot's weapon manager picks the gun up.
-        internal static bool DrawGun(BotOwner owner)
+        // (IsWeaponReady false, its CHANGE_WEAPON_PERIOD not over), the same Player.SetSlotItem
+        // it would call, with its OnWeaponTaken so the bot's weapon manager picks the gun up.
+        //
+        // One equipment operation at a time (the "busy hands" glitch is a second hands change
+        // on top of one in progress): nothing while his drop is unanswered or an earlier draw
+        // is pending, and the direct fallback only with really empty hands and an idle
+        // selector. The callback (BotWeaponSelector.OnWeaponTaken, then ours) arrives when the
+        // game's new hands controller is ready to operate (Player.Process: _onReadyToOperate
+        // from the idle-start of the draw), i.e. at the end of the draw animation: that is what
+        // marks the weapon ready (SurrenderRegistry.OnDrawn) and lets the layer hand him on.
+        //
+        // Sidearm quickdraw: the game's own pistol fast draw (FirearmController.Remove.Start ->
+        // QuickdrawWeaponFast/QuickdrawTime, read by SetAnimatorAndProceduralValues when the
+        // new controller's first operation starts: draw speed = GetWeaponDrawSpeedMultiplier,
+        // 1.5-2x by weapon skill, for that one draw only, then the flag is cleared). The game
+        // only sets it when a gun in hand is swapped for the holster; from empty hands it is
+        // set here, per player, for this one draw. Primaries have no fast draw in the game.
+        internal static bool Draw(SurrenderState s, BotOwner owner, bool melee)
         {
-            Player bot = owner.GetPlayer;
-            EquipmentSlot? slot = GunOnBody(bot);
-            if (slot == null) return false;
-            BotWeaponSelector selector = owner.WeaponManager.Selector;
-            selector.UpdateWeaponsList();
-            if (selector.TryChangeToSlot(slot.Value, true)) return true;
-
-            // Never a second hands change on top of one in progress (the "busy hands" glitch):
-            // only when the selector isn't mid-change and his hands are really empty.
-            if (selector.IsChanging || !HandsEmpty(bot))
+            Player bot = owner?.GetPlayer;
+            if (bot == null || s == null) return false;
+            if (s.DrawPending || s.HandsPending || s.DropPending)
             {
-                HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname}: can't draw yet, hands busy ({DescribeHands(bot)})");
+                if (Settings.VerboseLogs.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: draw not asked: {(s.DrawPending ? "an earlier draw is still pending" : "his drop isn't answered yet")}");
                 return false;
             }
-            HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname}: selector refused, drawing his {SlotName(slot)} directly");
-            bot.SetSlotItem(slot.Value, result => HandsAreHighPlugin.Try("weapon taken", () => selector.OnWeaponTaken(result)));
+            EquipmentSlot? slot = melee ? (HasMelee(bot) ? EquipmentSlot.Scabbard : (EquipmentSlot?)null) : GunOnBody(bot);
+            if (slot == null) return false;
+            BotWeaponSelector selector = owner.WeaponManager?.Selector;
+            if (selector == null) return false;
+
+            int token = ++s.DrawToken;
+            bool quick = !melee && slot == EquipmentSlot.Holster && Settings.Quickdraw.Value && HandsEmpty(bot);
+            float now = Time.realtimeSinceStartup;
+            // The timeline starts at the decision: kept across retries of one committed draw.
+            if (s.DrawCommitUntil <= 0f || s.TDecided < 0f) s.TDecided = now;
+            s.DrawPending = true;     // before the call: the callback may come back at once
+            s.DrawSince = Time.time;
+            s.DrawSlot = slot.Value;
+            s.DrawQuick = quick;
+            s.TDrawAsked = now;
+            s.TDrawReady = -1f;
+            s.TArmsDown = -1f;
+            if (quick)
+            {
+                bot.QuickdrawWeaponFast = true;
+                bot.QuickdrawTime = GameHelper.PastTime;
+            }
+
+            selector.UpdateWeaponsList();
+            if (selector.TryChangeToSlot(slot.Value, true, r => SurrenderRegistry.OnDrawn(s, token, Succeeded(r))))
+                return true;
+
+            if (selector.IsChanging || !HandsEmpty(bot))
+            {
+                s.DrawPending = false;
+                if (quick) bot.QuickdrawWeaponFast = false;
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: can't draw yet, hands busy ({DescribeHands(bot)})");
+                return false;
+            }
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: selector refused, drawing his {SlotName(slot)} directly");
+            bot.SetSlotItem(slot.Value, result =>
+            {
+                HandsAreHighPlugin.Try("weapon taken", () => selector.OnWeaponTaken(result));
+                SurrenderRegistry.OnDrawn(s, token, Succeeded(result));
+            });
             return true;
         }
 
-        internal static bool DrawMelee(BotOwner owner)
+        private static bool Succeeded(Result<IHandsController> r)
         {
-            if (!HasMelee(owner.GetPlayer)) return false;
-            owner.WeaponManager.Selector.ChangeToMelee();
-            return true;
+            try { return r.Succeed && r.Value != null; }
+            catch { return false; }
         }
 
         // No rounds in the gun and nothing to reload it with, or no gun at all.
@@ -271,6 +317,19 @@ namespace HandsAreHigh
                 list.Add(new KeyValuePair<EquipmentSlot, Item>(slot, item));
             }
             return list;
+        }
+
+        // Same test as ItemsFor, without the list: does he have anything for this order?
+        internal static bool HasItems(Player bot, EquipmentSlot[] slots, bool armourOnly)
+        {
+            foreach (EquipmentSlot slot in slots)
+            {
+                Item item = bot.Equipment?.GetSlot(slot)?.ContainedItem;
+                if (item == null) continue;
+                if (armourOnly && slot != EquipmentSlot.ArmorVest && !HasArmour(item)) continue;
+                return true;
+            }
+            return false;
         }
 
         internal static EquipmentSlot[] ArmourOrderSlots => ArmourSlots;

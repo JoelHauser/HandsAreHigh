@@ -68,7 +68,9 @@ namespace HandsAreHigh
 
         private void Run(SurrenderState s)
         {
-            bool check = Time.time >= s.NextCheck;
+            // A decision or a leave reaction that comes due between checks runs on that frame
+            // (once per due time), not up to a check interval later.
+            bool check = Time.time >= s.NextCheck || DueNow(s);
             if (check)
             {
                 s.NextCheck = Time.time + CheckInterval;
@@ -88,8 +90,30 @@ namespace HandsAreHigh
                 case Phase.Recovering: Recovering(s, check); break;
                 case Phase.PickingUp: PickingUp(s); break;
                 case Phase.Hiding: Hiding(s, check); break;
-                case Phase.Rearmed: Hold(1f); break;
+                case Phase.Rearmed: Rearmed(s); break;
             }
+        }
+
+        private static bool DueNow(SurrenderState s)
+        {
+            if (s.Phase != Phase.HandsUp) return false;
+            float now = Time.time;
+            if (s.DecideAt >= 0f && now >= s.DecideAt && s.RanDecideAt != s.DecideAt) { s.RanDecideAt = s.DecideAt; return true; }
+            if (s.LeaveAt >= 0f && now >= s.LeaveAt && s.RanLeaveAt != s.LeaveAt) { s.RanLeaveAt = s.LeaveAt; return true; }
+            return false;
+        }
+
+        // Drawing: standing, turned to the man he's drawing on, arms already coming down while
+        // the game's draw animation plays. He doesn't fire from here: the layer hands him to the
+        // normal AI once the weapon is ready (SurrenderRegistry.Tick / DrawSettled), so his
+        // first shot comes from the game's own aim and shoot logic with a ready weapon.
+        private void Rearmed(SurrenderState s)
+        {
+            Hold(1f);
+            if (!s.DrawPending) return;
+            Player c = s.Captor;
+            Vector3 at = Perception.Alive(c) ? c.Position : s.CaptorLastSeen;
+            Face(s, at + Vector3.up * 1.3f);
         }
 
         // ---- hands up ------------------------------------------------------------------
@@ -150,6 +174,27 @@ namespace HandsAreHigh
                 return;
             }
 
+            // He has decided to draw and the game refused (hands still busy): the same draw is
+            // tried again every check for a moment, without a new decision or a new roll.
+            if (s.DrawCommitUntil > 0f)
+            {
+                if (Time.time > s.DrawCommitUntil || Arsenal.GunOnBody(Me) == null)
+                {
+                    s.DrawCommitUntil = 0f;
+                    s.TDecided = -1f;
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: couldn't get the draw through ({Arsenal.DescribeHands(Me)}), keeps his hands up");
+                }
+                else
+                {
+                    if (Arsenal.Draw(s, BotOwner, false))
+                    {
+                        s.DrawCommitUntil = 0f;
+                        Rearm(s, $"draws his {Arsenal.SlotName(s.DrawSlot)} (second try)");
+                    }
+                    return;
+                }
+            }
+
             float now = Time.time;
             if (now >= s.NextSlowCheck)
             {
@@ -191,7 +236,7 @@ namespace HandsAreHigh
             // Is he covered? A change reaches his decisions after his reaction time.
             bool debugOpening = now < s.DebugOpeningUntil;
             string kind; float strength; bool clear;
-            bool covered = Reactions.Covered(captor, Me, seen, Settings.WatchAngle.Value, out kind, out strength, out clear);
+            bool covered = Reactions.Covered(s, captor, Me, seen, Settings.WatchAngle.Value, out kind, out strength, out clear);
             if (debugOpening) { covered = false; kind = "debug opening"; strength = 1f; clear = true; }
 
             NoticeApproach(s, dist);
@@ -339,7 +384,7 @@ namespace HandsAreHigh
                 StartScramble(s, threat, $"you left, {scrambleWhy}");
                 return;
             }
-            if (chosen.Name != null && chosen.Name.StartsWith("draw") && Arsenal.DrawGun(BotOwner))
+            if (chosen.Name != null && chosen.Name.StartsWith("draw") && Arsenal.Draw(s, BotOwner, false))
             {
                 Rearm(s, $"draws the {Arsenal.SlotName(gun)} he kept ({gone})");
                 return;
@@ -529,7 +574,8 @@ namespace HandsAreHigh
 
             if (chosen.Name == "knife")
             {
-                if (Arsenal.DrawMelee(BotOwner)) Rearm(s, $"goes for his knife at {dist:0.0} m");
+                if (Arsenal.Draw(s, BotOwner, true)) Rearm(s, $"goes for his knife at {dist:0.0} m");
+                else CommitDraw(s, "knife");
             }
             else if (chosen.Name == "scramble")
             {
@@ -546,14 +592,29 @@ namespace HandsAreHigh
                 s.TargetPoint = hidePoint;
                 s.HideMoving = true;
             }
-            else if (Arsenal.DrawGun(BotOwner))
+            else if (Arsenal.Draw(s, BotOwner, false))
             {
                 Rearm(s, $"draws his {Arsenal.SlotName(gun)} at {dist:0.0} m");
             }
             else
             {
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: tried to draw, the game refused the weapon change");
+                CommitDraw(s, Arsenal.SlotName(gun));
             }
+        }
+
+        // The game refused the draw he decided on: he stays committed to it for a moment
+        // (HandsUp retries it every check) instead of waiting for the next decision. Knife:
+        // no retry (it's only offered at arm's length; the moment passes).
+        private static void CommitDraw(SurrenderState s, string what)
+        {
+            if (what == "knife" || Settings.DrawRetrySeconds.Value <= 0f)
+            {
+                s.TDecided = -1f;
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: tried to draw his {what}, the game refused the weapon change");
+                return;
+            }
+            s.DrawCommitUntil = Time.time + Settings.DrawRetrySeconds.Value;
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: tried to draw his {what}, the game refused the weapon change; tries again for {Settings.DrawRetrySeconds.Value:0.0} s");
         }
 
         private static void Add(List<Choice> options, StringBuilder log, string name, float score)
@@ -587,7 +648,7 @@ namespace HandsAreHigh
             s.Scrambling = false;
             s.ScrambleCooldownUntil = Time.time + Settings.ScrambleCooldown.Value;
             HandsAreHighPlugin.Log.LogInfo($"{s.Name}: scramble failed: {why}");
-            if (Arsenal.GunOnBody(Me) != null && Arsenal.DrawGun(BotOwner))
+            if (Arsenal.GunOnBody(Me) != null && Arsenal.Draw(s, BotOwner, false))
             {
                 Rearm(s, "scramble failed, draws what he has");
                 return;
@@ -595,9 +656,12 @@ namespace HandsAreHigh
             s.BeginRetreat($"scramble failed ({why})", emergency: true);
         }
 
+        // The draw is already asked for (Arsenal.Draw) when this runs: the arms come down over
+        // DrawLowerSeconds while the game's draw animation starts underneath, in the same frame.
         private void Rearm(SurrenderState s, string reason)
         {
-            s.LowerArms(Settings.EmergencyLowerSeconds.Value);
+            s.DrawCommitUntil = 0f;
+            s.LowerArms(Settings.DrawLowerSeconds.Value);
             s.Order = Order.None;
             s.DropQueue.Clear();
             s.TargetWeapon = null;
@@ -643,7 +707,7 @@ namespace HandsAreHigh
                     ? $"{s.Name} did it: {done} item(s) dropped"
                     : $"{s.Name} dropped {done} of {s.Ordered.Count}; {kept} wouldn't come off";
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: order '{s.OrderName}': {msg}");
-                OrderMenu.Notify(msg);
+                if (s.OrderByHuman) OrderMenu.Notify(msg, kept == 0 ? NoteKind.Success : NoteKind.Error);
                 if (kept > 0) Voice.Say(s, VoiceEvent.Refuse);
             }
         }
@@ -728,7 +792,7 @@ namespace HandsAreHigh
         private void Decide(SurrenderState s)
         {
             EquipmentSlot? kept = Arsenal.GunOnBody(Me);
-            if (kept != null && Arsenal.DrawGun(BotOwner))
+            if (kept != null && Arsenal.Draw(s, BotOwner, false))
             {
                 Rearm(s, $"draws the {Arsenal.SlotName(kept)} he kept");
                 return;
@@ -768,7 +832,7 @@ namespace HandsAreHigh
                 }
             }
 
-            if (Settings.HighNerveKnife.Value && s.Nerve >= Settings.HighNerve.Value && Arsenal.HasMelee(Me) && Arsenal.DrawMelee(BotOwner))
+            if (Settings.HighNerveKnife.Value && s.Nerve >= Settings.HighNerve.Value && Arsenal.HasMelee(Me) && Arsenal.Draw(s, BotOwner, true))
             {
                 Rearm(s, $"no gun to find, comes back with his knife (nerve {s.Nerve:0.00})");
                 return;
@@ -843,7 +907,7 @@ namespace HandsAreHigh
                 GiveUpOn(s, "pick-up reported success but the gun isn't on him");
                 return;
             }
-            if (Arsenal.DrawGun(BotOwner))
+            if (Arsenal.Draw(s, BotOwner, false))
                 Rearm(s, $"rearmed with {weapon.ShortName.Localized()}{(s.Scrambling ? " after a scramble" : "")}");
             else
                 GiveUpOn(s, "has the gun but couldn't draw it");
@@ -962,7 +1026,7 @@ namespace HandsAreHigh
             {
                 float chance = Mathf.Clamp01(Settings.RecaptureResistance.Value * s.Nerve);
                 float roll = Random.value;
-                if (roll < chance && Arsenal.DrawGun(BotOwner))
+                if (roll < chance && Arsenal.Draw(s, BotOwner, false))
                 {
                     Rearm(s, $"caught again but draws (chance {chance:0.00}, roll {roll:0.00})");
                     return true;

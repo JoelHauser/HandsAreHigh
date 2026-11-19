@@ -6,15 +6,115 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
-**0.6.0 (0.5.0 + 0.6.0 in one commit), built on the work laptop against `C:\HUH` and pushed
-to `main` 2026-11-19; not installed, never run in game.** Everything in 0.5.0 and 0.6.0 is
-unverified in raid. No GitHub release.
+**0.8.0, built on the work laptop against `C:\HUH` 2026-11-19 (dist/HandsAreHigh-0.8.0.zip);
+0.7.0 + 0.8.0 in one commit, pushed to `main` 2026-11-19; not installed, never run in game.** 0.5.0-0.8.0 are all
+unverified in raid. No GitHub release. `C:\HUH` has no SAIN and no BigBrain (compiled against
+the scratchpad BigBrain 1.5.0); SAIN behaviour below comes from earlier notes, not this build.
 
-Next: Joel runs the 0.5.0 + 0.6.0 test plans with Profile on. Open idea (not built): a
-"converted" bot that stays friendly for the raid (would need enemy/group changes; today
-Follow is only an order: he stays HandsUp, hostile to the game's AI, and can still take an
-opening; it ends on escape, recapture, another order, you getting 25 m / 6 s out of sight,
-death or disable).
+Next: Joel runs the 0.8.0 plan, then 0.7.0, then 0.5.0 + 0.6.0 with Profile on. Open idea (not
+built): a "converted" bot that stays friendly for the raid.
+
+### 0.8.0 (bots take prisoners, restraint)
+
+Before: surrender only to a human (`NaturalSurrender.Evaluate`: "his target isn't a human
+player"); prisoner logic already took any `Player` captor.
+
+- Trigger: a Scav/PMC may give up to the bot he's fighting (his GoalEnemy, seen or just seen,
+  <= 25 m) if that bot is active, not held, and its group `IsEnemy(him)`; chance x 0.85 x
+  (1 if the foe has a gun with rounds, else 0.35); role odds unchanged (Scav >> PMC, bosses
+  off). Debug: Ctrl+`[` = the bot under the crosshair gives up to his current bot enemy.
+- Captor decision (Captors.cs, once): practical = firearm in hands, rounds, no other enemy
+  in sight, no incoming fire, prisoner in sight <= 20 m, < 4 bot encounters, not already
+  guarding, not held, a Scav/PMC brain, not a player ally. Take (0.65 x mercy) / spare
+  (0.75 x mercy, restraint without custody) / refuse. Busy or at a limit: a free squadmate
+  may take him. Plans: disarm+release, hold+release, disarm+hold; never follow; hold 25-70 s.
+  Busy (other enemy visible, fire) -> layer off at once, custody dropped after 12 s. Captor
+  down -> a free squadmate in sight takes over, else custody ends and restraint stays.
+- CaptorLayer (BigBrain, priority 70 on the same brains; below SAIN avoid-threat 80): stands,
+  `Steering.LookToPoint(prisoner chest)`, SAIN layer flag released as for prisoners. Also
+  drives idle squadmates watching (WatchUntil, 15 s). Player allies (`BotsGroup.IsAlly(main
+  player)`) never get it.
+- Orders.cs: one path for you and bots (`CanGive`: alive, HandsUp, range 3.5 m / 15 m, line
+  clear, bot = his custody). Bot speech `CommandVoice.SpeakAs` is feedback only.
+- Restraint.cs: (observer, prisoner) decision Respect / Ignore / LetGo / Reject, kept 120 s
+  or until a change (runs -> re-decided once; goes for a gun / draws -> all Reject + Distrust
+  for whoever saw). Made to hold by `EnemyInfo.SetIgnoreState(true)` (vanilla; BetterEnemy
+  skips it; Khorovod event uses it), prefix on `BotMemory.GoalEnemy` setter, prefix on
+  `ShootData.Shoot`, last-line prefix on `FirearmController.SetTriggerPressed` (aim within 6
+  deg of a restrained prisoner). Blocks there and hits by a restrained bot log `RESTRAINT
+  LEAK`; intentional refusals log `refuses` / `shot ... as decided`. Squad = captor's
+  BotsGroup within 80 m, same frame as the decision; squadmate refusal 2% x (2 - mercy).
+  Observers: one prisoner per frame, each every 0.5 s, bots within 50 m with an EnemyInfo
+  for him that is IsVisible; busy -> Ignore; else 0.8 x mercy (0.7 when running). Mercy =
+  personality table (Wreckless 0.55 .. Timmy 1.15; no SAIN: Scav 0.9, PMC 1, boss 0.6) x
+  per-raid 0.75-1.25; not nerve. Your allies treat your prisoner as their squad's.
+- Prisoner vs a bot captor (Decisions.cs): openings = no gun up, reloading, switching
+  weapons, captor busy fighting, captor inactive (asleep), nobody guarding (spared),
+  looking away, blocked line; no inventory check for bots; a squadmate (squad restraint,
+  <= 25 m) covering him and seen by him counts as covered.
+- Menu: only prisoners nobody guards (custody null); ordering one takes him over (logged).
+  Menu keys now work while walking (BepInEx IsDown refused any other held key).
+- Cleanup: prisoner leaves registry -> flags cleared, custody ended; observers pruned every
+  30 s; raid end / teardown clear all. Pit Fireteam: not found anywhere; closest public
+  match is pitAlex's Friendly PMC (no source); nothing integrated beyond IsAlly.
+
+### In-game test plan (0.8.0)
+
+Debug keys on, Log restraint decisions on. Grep `surrenders to him`, `Restraint:`, `holds`,
+`stops holding`, `ordered`, `RESTRAINT LEAK`, `refuses`.
+1. PMC vs Scav fight: Ctrl+`[` on the Scav. Log the PMC's decision; on take: `holds`, plan,
+   `ordered Stay/DropWeapons by <PMC>` once each, `Restraint: <squadmates> holds fire (squad)`
+   in the same second, nobody shoots him, then `let go by` and he runs.
+2. Same with a PMC prisoner (any role), and with SAIN on: zero `RESTRAINT LEAK` lines.
+3. Walk into the scene: the PMC turns on you (`busy with <you>`), the Scav gets an opening.
+4. Kill the captor: `takes over` or `nobody takes over, restraint stays` - no squad volley.
+5. `]` (opening) on the prisoner while held by a bot: he draws -> `refuses`/Reject for all,
+   squad fights him; flight unarmed -> `lets go` mostly.
+6. Natural: no debug keys, long PMC-vs-Scav fights; the Scav's check lines show `bot threat`.
+7. Profile on: restraint entries / bot captors counts bounded; no spikes.
+
+### 0.7.0 (order menu, hotbar separation, faster draws)
+
+Built 2026-11-19, never committed on its own; in the 0.8.0 commit.
+
+- Menu (OrderMenu.cs): bound to the bot it opened on (never redirected; closes with a note
+  when he's down / not hands up / asleep / > range + 0.75 m / out of sight 0.35 s; quietly
+  when you look > 40 deg away or a game screen shows the cursor). Numbered rows (1-9, 0
+  closes), wheel / `.` `=` move, `/` confirms; one `Submit` path, once a frame, re-checks
+  target + availability (nothing to drop, still dropping, already following / down).
+  IMGUI on Repaint only; layout rebuilt only on change; Bender font if a legacy Font of it is
+  loaded (Verbose logs which). Scale = height/1080 x Menu size, floor 0.8; right of the
+  crosshair, else edge, else left, else shrunk, else under the bot (checked for 15
+  resolutions x 4 sizes in a script, none covers the bot or clips).
+- Hotbar (InputGuard.cs): prefix on `InputManager.DispatchInput` (39-byte IL, not inlined)
+  removes commands before InputTree reaches any node. While the menu owns input: all of
+  SelectKnife / SelectSecondaryWeapon / QuickSelectSecondaryWeapon / SelectFirst/SecondPrimary /
+  SelectFastSlot4-0 / PressSlot4-0 + ScrollNext/Previous. Keys pressed while it owns input are
+  latched; after close only the hotbar commands bound to that key (read from
+  `SettingsManager.Control.Settings.GetAllKeyBindings()` at open) stay blocked until it's up
+  2 frames + max(0.06 s, 2 fixed steps). Ownership re-claimed per frame, lapses after 2.
+  Bindings never written.
+- Draw (Arsenal.Draw): one request at a time (DrawPending + token), none while the drop is
+  pending; refused draw retried every check for 1.5 s without a new roll; arms lower over
+  0.22 s while the draw animation starts (was a 0.08 s snap); in Rearmed he faces you and the
+  layer hands him to the AI when the game's draw callback says the weapon is ready (limit 3 s),
+  so the first shot is the AI's own with a ready gun. Sidearm: the game's quickdraw
+  (`QuickdrawWeaponFast/QuickdrawTime`, 1.5-2x draw speed) which the game only sets when a
+  gun in hand is swapped for the holster. Primaries have no fast draw: their draw animation
+  is the remaining delay. Decisions due between 0.25 s checks run that frame. Log:
+  `draw timeline (...)`. Re-surrender refused while a draw is pending.
+
+### In-game test plan (0.7.0)
+
+1. Menu at 1080p, 1440p, ultrawide, Menu size 0.6 / 2: readable, beside the bot, not clipped.
+2. Each number gives its order once (`ordered X` once); holding the key doesn't repeat.
+3. With a weapon / meds on 1-0: pressing a menu number never switches/uses them; hold the
+   number past the menu closing, release: nothing; press again: hotbar works. Unused numbers
+   (8, 9) and unavailable rows do nothing in the hotbar. Release-type slot binding too.
+4. Wheel moves the highlight without changing walk speed; `/` gives it.
+5. Look away, walk off, shoot him, Tab / Esc while open: menu closes, hotbar works at once.
+6. `]` on a bot with a sidearm only, then with a slung rifle: `draw timeline` (game quickdraw
+   on the sidearm), no snap, he turns to you, no shot before `weapon ready`, no busy hands.
 
 ### 0.6.0 (middle finger, Scav babble, performance audit)
 

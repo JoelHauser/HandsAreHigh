@@ -113,7 +113,7 @@ namespace HandsAreHigh
             Sb.Append($"Profile {span:0} s, {n} frames: avg {avg * 1000f:0.00} ms ({(avg > 0 ? 1f / avg : 0):0} fps), ");
             Sb.Append($"p50 {P(n, 0.5f):0.00}, p99 {P(n, 0.99f):0.00}, p99.9 {P(n, 0.999f):0.00}, worst {(n > 0 ? Sorted[n - 1] * 1000f : 0):0.00} ms; 1% low {low1:0} fps; ");
             Sb.Append($"GC gen0 +{GC.CollectionCount(0) - _gc0}, heap {GC.GetTotalMemory(false) / 1048576f:0} MB; ");
-            Sb.Append($"held {SurrenderRegistry.Count}, history {SurrenderRegistry.HistoryCount}, loot cache {Arsenal.CacheCount}\n  Hands Are High cost:");
+            Sb.Append($"held {SurrenderRegistry.Count}, bot captors {Captors.Count}, restraint entries {Restraint.EntryCount}, history {SurrenderRegistry.HistoryCount}, loot cache {Arsenal.CacheCount}\n  Hands Are High cost:");
             double totalMs = 0;
             for (int i = 0; i < (int)Sec.Count; i++)
             {
