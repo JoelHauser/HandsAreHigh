@@ -19,6 +19,13 @@ namespace HandsAreHigh
         {
             if (!SurrenderRegistry.Any) return;
             if (!SurrenderRegistry.TryGet(__instance, out SurrenderState s) || s.Dead) return;
+            // Frames on which the body animator didn't run (Player.ComplexUpdate sets
+            // _bodyupdated; a bot updated in the fixed-update queue skips frames at high fps):
+            // the bones still hold last frame's finished pose, ours included. Posing again on top
+            // of it blended partial weights twice (arms and hands crept towards their targets,
+            // then jumped back on the next animated frame). Nothing else writes the arm bones on
+            // those frames with empty hands (AbstractHandsController.ManualLateUpdate is empty).
+            if (!Kneel.BodyUpdated(__instance)) return;
             bool kneel = Kneel.Posing(s);
             if (s.Weight <= 0f && !kneel) return;
             long t0 = Perf.Begin();

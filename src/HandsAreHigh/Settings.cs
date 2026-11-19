@@ -253,6 +253,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<KneelStyleChoice> KneelTestStyle;
         internal static ConfigEntry<KneelRiseChoice> KneelTestRise;
         internal static ConfigEntry<KneelBraceChoice> KneelTestBrace;
+        internal static ConfigEntry<bool> KneelBracePalmFlip;
         internal static ConfigEntry<float> KneeHeight;
         internal static ConfigEntry<float> KneelThighAngle;
         internal static ConfigEntry<float> KneeSpread;
@@ -755,6 +756,8 @@ namespace HandsAreHigh
             KneelTestStyle = c.Bind(Debug, "Kneel test style", KneelStyleChoice.Auto, "Forces the descent style for every kneel (preview each one). Auto: chosen by the bot.");
             KneelTestRise = c.Bind(Debug, "Kneel test rise", KneelRiseChoice.Auto, "Forces the rise for an ordered stand-up (and picks the urgent rise key's kind). Auto: compliant for orders.");
             KneelTestBrace = c.Bind(Debug, "Kneel test brace", KneelBraceChoice.Auto, "Always / Never forces the knee brace on rises.");
+            KneelBracePalmFlip = c.Bind(Debug, "Kneel brace palm flip", false,
+                "Turns the bracing hand over (180 deg about the fingers). Only if the palm shows the back of the hand on the thigh: which side of the rig's palm bone faces down was inferred from the thumb root, not seen in game.");
             BindKneel(c);
             BindScenarios(c);
         }

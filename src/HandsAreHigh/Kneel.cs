@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace HandsAreHigh
 {
-    // Kneeling with the hands behind the head (0.11.0; styles, rise intents, knee brace 0.12.0).
+    // Kneeling with the hands behind the head (0.11.0; styles, rise intents, knee brace 0.12.0; brace rework and transition fixes 0.12.1).
     //
     // What the game offers (verified in the 0.16.9 client and its bundles):
     //   - No kneel, sit, get-up or brace clip exists in player_anim_controller (UnityPy search of
@@ -60,10 +60,30 @@ namespace HandsAreHigh
         internal readonly KneelLeg[] Legs = new KneelLeg[2];   // 0 left, 1 right
         internal float HipHalfWidth;
         internal float TorsoLength;   // hips to head bone
+        // Hand bones for laying the bracing palm flat (0 left, 1 right): the middle finger's root
+        // (finger direction) and the thumb's root (which way the palm faces). skeleton.bundle:
+        // fingers run along the palm's local -X, Digit31 0.108 m out, fingertip ~0.20 m.
+        internal readonly Transform[] Middle = new Transform[2], Thumb = new Transform[2];
+        // Forearm twist bones (Forearm1 -> Forearm2 -> Forearm3 -> Palm, 0.084 m apart): the
+        // roll in the palm's turn is shared with them so the wrist doesn't candy-wrap.
+        internal readonly Transform[] TwistA = new Transform[2], TwistB = new Transform[2];
+        internal bool HandOk;
+
+        internal bool Valid()
+        {
+            if (Pelvis == null || Head == null) return false;
+            for (int i = 0; i < 2; i++)
+            {
+                KneelLeg l = Legs[i];
+                if (l == null || l.Hip == null || l.Knee == null || l.Foot == null || l.Toe == null) return false;
+            }
+            return true;
+        }
     }
 
     // Timing of one transition. Windows are in t (0 standing .. 1 kneeling); the brace windows
-    // (rises only) are where the hand reaches the front thigh (In) and leaves it (Out).
+    // (rises only, t falling): BraceInB the hand sets off, BraceInA it is on the thigh; BraceOutB
+    // it starts to leave, BraceOutA it is free.
     internal sealed class KneelStyle
     {
         internal string Name;
@@ -82,17 +102,24 @@ namespace HandsAreHigh
         { Name = "frightened", LeadA = 0.02f, LeadB = 0.46f, TrailA = 0.24f, TrailB = 0.70f, HandsA = 0.38f, HandsB = 0.82f, LeanA = 0.02f, LeanB = 0.72f, LeanDeg = 18f, Step = 0.14f };
         internal static readonly KneelStyle OneKnee = new KneelStyle
         { Name = "one knee first", LeadA = 0.03f, LeadB = 0.36f, TrailA = 0.62f, TrailB = 0.90f, HandsA = 0.80f, HandsB = 1f, LeanA = 0.03f, LeanB = 0.88f, LeanDeg = 10f, Step = 0.34f };
-        // Rises. The brace holds while the front knee is up and within reach (0.78-0.98 of the
-        // arm at full contact in the offline check).
+        // Rises. Brace (0.12.1, offline brace_sim.py, 20-60 fps): the hand sets off as the hands
+        // leave his head and lands on the front thigh as that foot plants, when the hips have
+        // risen 0-3%; it holds through the push to ~45-50% risen while the IK goal stays within
+        // 0.86-0.92 of his arm, the elbow straightening (compliant 89->47 deg, defensive 79->56;
+        // escape ~constant: his knee is still rising into the hand), and leaves before the arm
+        // would be straight (1.0 at ~55-65% risen). 0.12.0 reached in 0.1 of t (70 ms on an
+        // escape) and let go at ~12% risen: a snap down and a snap off. Urgent rises are free by
+        // 0.17-0.18 (> the 0.15 leg hand-back); the compliant one releases until 0.03 (the hand
+        // goes all the way back up to hands-up), so an urgent switch mid-brace lets go by time.
         internal static readonly KneelStyle RiseCompliant = new KneelStyle
         { Name = "compliant", LeadA = 0.05f, LeadB = 0.50f, TrailA = 0.46f, TrailB = 0.84f, HandsA = 0.80f, HandsB = 1f, LeanA = 0.08f, LeanB = 0.86f, LeanDeg = 16f, Step = 0.30f,
-          BraceInA = 0.52f, BraceInB = 0.62f, BraceOutA = 0.31f, BraceOutB = 0.40f };
+          BraceInA = 0.50f, BraceInB = 0.88f, BraceOutA = 0.03f, BraceOutB = 0.28f };
         internal static readonly KneelStyle RiseDefensive = new KneelStyle
         { Name = "defensive", LeadA = 0.06f, LeadB = 0.48f, TrailA = 0.36f, TrailB = 0.78f, HandsA = 0.86f, HandsB = 1f, LeanA = 0.06f, LeanB = 0.80f, LeanDeg = 18f, Step = 0.26f,
-          BraceInA = 0.48f, BraceInB = 0.58f, BraceOutA = 0.30f, BraceOutB = 0.38f };
+          BraceInA = 0.44f, BraceInB = 0.78f, BraceOutA = 0.17f, BraceOutB = 0.28f };
         internal static readonly KneelStyle RiseEscape = new KneelStyle
         { Name = "escape", LeadA = 0.10f, LeadB = 0.52f, TrailA = 0.30f, TrailB = 0.74f, HandsA = 0.88f, HandsB = 1f, LeanA = 0.10f, LeanB = 0.92f, LeanDeg = 24f, Step = 0.36f,
-          BraceInA = 0.47f, BraceInB = 0.57f, BraceOutA = 0.30f, BraceOutB = 0.38f };
+          BraceInA = 0.48f, BraceInB = 0.78f, BraceOutA = 0.18f, BraceOutB = 0.31f };
 
         private const float CrouchAtT = 0.35f;    // going down: the game's crouch (capsule) from here
         private const float StandAtT = 0.50f;     // rising: the game's stand (capsule) from here
@@ -104,6 +131,16 @@ namespace HandsAreHigh
         private const float BraceLean = 16f;
         private const float WaitLimit = 6f;
         private const float FadeCompliant = 0.2f, FadeUrgent = 0.14f;
+        private const float RateEase = 0.06f;       // s: speed changes (retime, reversal) ease in, never jump
+        private const float RefWaitLimit = 0.5f;    // s without an animated frame to start from: no kneel
+        internal const float MinLowerSeconds = 0.25f;   // arms from behind his head: never faster
+        // Brace contact (sizes from skeleton.bundle; thigh radius approximate): palm centre on the
+        // top of the front thigh 0.15 m above the knee joint, wrist bent so the fingers lie along
+        // it towards the knee (tips at the kneecap), thumb inwards.
+        private const float BraceUp = 0.15f, ThighRadius = 0.075f, PalmCentre = 0.055f, PalmThick = 0.02f;
+        private const float WristMax = 80f;         // deg of wrist bend at most (offline: 59-63 needed)
+        private const float ThumbTilt = 27.7f;      // thumb root: 0.040 m to the side, 0.021 m palm-ward
+        private const float LetGoSeconds = 0.10f;   // an early let-go (draw, bolt, out of reach)
         private static readonly Collider[] Hits = new Collider[4];
 
         private static void Log(SurrenderState s, string msg)
@@ -202,6 +239,20 @@ namespace HandsAreHigh
             if (s.Suspended) return;   // asleep: the pose stays where it is
             float now = Time.time;
 
+            // Bones gone (body rebuilt, despawn racing us): stop posing at once; the animator
+            // owns every bone next frame. The rig is looked up again at the next kneel.
+            if (s.Rig != null && Posing(s) && !s.Rig.Valid())
+            {
+                HandsAreHighPlugin.Log.LogWarning($"{s.Name}: kneel: his skeleton changed under the pose; stops posing ({s.Kneel})");
+                s.Rig = null;
+                s.Kneel = KneelPhase.Standing;
+                s.KneelFade = 0f;
+                s.KneelVel = 0f;
+                s.KneelUrgent = false;
+                if (s.Order == Order.Kneel) Fallback(s, "his skeleton changed");
+                return;
+            }
+
             // No longer complying (escape, draw, scramble, shot, let go): up now, at the speed the
             // action needs. Already rising: same motion, new speed (never a restart).
             if (s.Phase != Phase.HandsUp && s.Kneel != KneelPhase.Standing && !s.KneelUrgent)
@@ -241,10 +292,25 @@ namespace HandsAreHigh
 
                 case KneelPhase.GoingDown:
                     if (!want) { StartRise(s, s.KneelUrgent ? s.KneelRise : KneelRise.Compliant, WhyUp(s)); break; }
-                    s.KneelT += dt / Mathf.Max(0.1f, s.KneelSecs);
+                    // Nothing moves until his standing pose is captured from an animated frame
+                    // (ApplyBody): starting the clock first made the first posed frame a jump.
+                    if (!s.KneelRefOk)
+                    {
+                        s.KneelRefWait += dt;
+                        if (s.KneelRefWait > RefWaitLimit)
+                        {
+                            s.Kneel = KneelPhase.Standing;
+                            s.KneelVel = 0f;
+                            Fallback(s, "no animated frame to start from");
+                        }
+                        break;
+                    }
+                    Advance(s, dt, 1f);
                     if (s.KneelT >= 1f)
                     {
                         s.KneelT = 1f;
+                        s.KneelVel = 0f;
+                        s.KneelBrace = false;
                         s.Kneel = KneelPhase.Down;
                         Log(s, $"kneel: on his knees, hands behind his head ({s.KneelStyle.Name}; {Timeline(s)})");
                         s.KneelTestNextAt = now + 1.2f;
@@ -259,31 +325,67 @@ namespace HandsAreHigh
                 case KneelPhase.GettingUp:
                     if (want && !s.KneelUrgent)
                     {
+                        // The brace is kept: the pose depends only on t, so the hand comes off
+                        // his knee the way it came on (0.12.0 cleared it here: a snap).
                         s.Kneel = KneelPhase.GoingDown;
                         s.KneelSecs = DownSeconds(s, s.KneelStyle);
-                        s.KneelBrace = false;
                         Log(s, $"kneel: back down from {s.KneelT:0.00} (ordered down again while rising; {s.KneelStyle.Name} timing kept)");
                         StartClock(s);
                         break;
                     }
-                    s.KneelT -= dt / Mathf.Max(0.1f, s.KneelSecs);
+                    Advance(s, dt, -1f);
                     // An urgent rise hands his legs back as soon as they are under him, so his
                     // first step follows without a pause; a compliant one finishes standing.
                     float end = s.KneelUrgent ? LegsFreeT : 0f;
                     if (s.KneelT <= end)
                     {
                         s.KneelT = Mathf.Max(0f, s.KneelT);
+                        s.KneelVel = 0f;
                         s.Kneel = KneelPhase.Standing;
                         s.KneelFade = s.KneelFadeTotal = s.KneelUrgent ? FadeUrgent : FadeCompliant;
                         Log(s, $"kneel: back on his feet ({s.KneelRise}{(s.KneelBrace ? ", braced on his knee" : "")}; {Timeline(s)})");
                         s.KneelUrgent = false;
-                        s.KneelBrace = false;
+                        // KneelBrace stays: whatever is left of it fades with the legs (BraceWeight).
                         s.KneelTestNextAt = now + 1.2f;
                     }
                     break;
             }
 
+            UpdateBrace(s, dt);
             DebugTest(s, now);
+        }
+
+        // t moves at the current transition's speed; a change of speed or direction (urgency,
+        // reversal) eases in over RateEase instead of jumping. Fresh starts set the speed
+        // outright: every window starts with a smoothstep, so the pose itself eases in.
+        private static void Advance(SurrenderState s, float dt, float dir)
+        {
+            float target = dir / Mathf.Max(0.1f, s.KneelSecs);
+            s.KneelVel += (target - s.KneelVel) * (1f - Mathf.Exp(-dt / RateEase));
+            s.KneelT = Mathf.Clamp01(s.KneelT + s.KneelVel * dt);
+        }
+
+        // Early let-go: the hands are needed (a draw, drop or hands change pending: the arm must
+        // be the game's before the animation shows), he is bolting on a timing that would still
+        // hold the knee at the leg hand-back, or the pose found the knee out of reach. Latched
+        // for the rest of the rise; the gate falls over LetGoSeconds (frame-rate independent).
+        private static void UpdateBrace(SurrenderState s, float dt)
+        {
+            if (!s.KneelBrace) return;
+            if (!s.KneelBraceLetGo)
+            {
+                string why = null;
+                if (s.DrawPending || s.HandsPending || s.DropPending) why = "his hands are needed (draw)";
+                else if (s.KneelBraceStretch) why = $"his knee is out of reach ({s.KneelBraceRatio:0.00} of his arm)";
+                else if (s.KneelUrgent && s.Kneel == KneelPhase.GettingUp && s.KneelStyle != null && s.KneelStyle.BraceOutA < LegsFreeT)
+                    why = "he's getting up in a hurry";
+                if (why != null)
+                {
+                    s.KneelBraceLetGo = true;
+                    if (BraceWeight(s) > 0.01f) Log(s, $"kneel: lets go of his knee early ({why})");
+                }
+            }
+            if (s.KneelBraceLetGo && s.KneelBraceGate > 0f) s.KneelBraceGate = Mathf.Max(0f, s.KneelBraceGate - dt / LetGoSeconds);
         }
 
         private static bool Wanted(SurrenderState s) =>
@@ -389,11 +491,16 @@ namespace HandsAreHigh
             {
                 s.KneelStyle = rise == KneelRise.Escape ? RiseEscape : rise == KneelRise.Defensive ? RiseDefensive : RiseCompliant;
                 s.KneelBrace = PickBrace(s, rise, out string braceWhy);
+                s.KneelBraceGate = 1f;
+                s.KneelBraceLetGo = false;
+                s.KneelBraceStretch = false;
                 s.KneelStepNow = Mathf.Min(s.KneelStyle.Step, s.KneelStep + 0.06f);   // no longer than the room found
                 if (Settings.LogKneel.Value && braceWhy != null) Log(s, $"kneel: brace on his knee: {braceWhy}");
             }
             s.KneelRise = rise;
             s.KneelSecs = RiseSeconds(s, rise);
+            // From rest at full speed (the windows ease in); mid-motion Advance eases the change.
+            if (fresh) s.KneelVel = -1f / Mathf.Max(0.1f, s.KneelSecs);
             if (!retime) { s.Kneel = KneelPhase.GettingUp; StartClock(s); }
             string ceiling = "";
             MovementContext mc = s.Bot.MovementContext;
@@ -410,7 +517,10 @@ namespace HandsAreHigh
             if (!Settings.KneelBrace.Value) return false;
             KneelBraceChoice c = Settings.KneelTestBrace.Value;
             if (c == KneelBraceChoice.Never) { why = "off (debug choice)"; return false; }
-            if (s.DrawPending) { why = "no: his hands are drawing"; return false; }
+            if (s.DrawPending || s.HandsPending || s.DropPending) { why = "no: his hands are busy"; return false; }
+            // Without the finger bones the wrist can't be laid flat: the fingers would go into
+            // the thigh. The rise goes ahead without the brace.
+            if (s.Rig == null || !s.Rig.HandOk) { why = "no: no finger bones in this rig to lay the hand flat"; return false; }
             if (c == KneelBraceChoice.Always) { why = "yes (debug choice)"; return true; }
             float chance = Settings.KneelBraceChance.Value * (rise == KneelRise.Escape ? 1.3f : rise == KneelRise.Defensive ? 0.45f : 1f) *
                            (1f + 0.8f * s.Injury) * (Heavy(s.Bot) ? 1.2f : 1f);
@@ -473,11 +583,15 @@ namespace HandsAreHigh
             s.KneelDescent = style;
             s.KneelStep = step;
             s.KneelStepNow = step;
-            s.KneelBraceWarned = false;
+            s.KneelBraceStretch = false;
+            s.KneelBraceLetGo = false;
+            s.KneelBraceGate = 1f;
             s.KneelLead = lead;
             s.KneelBrace = false;
             s.KneelRefOk = false;
+            s.KneelRefWait = 0f;
             s.KneelSecs = DownSeconds(s, style);
+            s.KneelVel = 1f / Mathf.Max(0.1f, s.KneelSecs);
             // Small, stable differences in how he ends up (from his seed, not per frame).
             float n1 = Mathf.Sin(s.Seed * 12.9898f) * 0.5f, n2 = Mathf.Sin(s.Seed * 78.233f) * 0.5f, n3 = Mathf.Sin(s.Seed * 37.719f) * 0.5f;
             s.KneelThighOff = 4f * n1;
@@ -498,7 +612,7 @@ namespace HandsAreHigh
             if (s.LegsBad) { why = "a leg is too badly hurt"; return false; }
             if (bot.IsInPronePose) { why = "prone"; return false; }
             if (bot.UsedSimplifiedSkeleton) { why = "simplified skeleton"; return false; }
-            if (s.Rig == null && !FindRig(bot, out s.Rig, out why)) return false;
+            if ((s.Rig == null || !s.Rig.Valid()) && !FindRig(bot, out s.Rig, out why)) return false;
             return Ground(s, out why) && Room(s, out why);
         }
 
@@ -522,6 +636,22 @@ namespace HandsAreHigh
             rig.TorsoLength = Mathf.Clamp(Vector3.Distance(head.position, (l.Hip.position + r.Hip.position) * 0.5f), 0.5f, 0.9f);
             if (Vector3.Dot(hips, p.Transform.Original.right) < 0f)
                 HandsAreHighPlugin.Log.LogWarning($"Kneel rig: {p.Profile?.Nickname}'s left hip is on his right (mirrored rig?); kneeling may look wrong");
+            Transform lp = b.LeftPalm, rp = b.RightPalm;
+            rig.Middle[0] = lp != null ? FindDeep(lp, "Base HumanLDigit31", 1) : null;
+            rig.Thumb[0] = lp != null ? FindDeep(lp, "Base HumanLDigit11", 1) : null;
+            rig.Middle[1] = rp != null ? FindDeep(rp, "Base HumanRDigit31", 1) : null;
+            rig.Thumb[1] = rp != null ? FindDeep(rp, "Base HumanRDigit11", 1) : null;
+            rig.HandOk = rig.Middle[0] != null && rig.Thumb[0] != null && rig.Middle[1] != null && rig.Thumb[1] != null;
+            for (int i = 0; i < 2; i++)
+            {
+                Transform palm = i == 0 ? lp : rp;
+                Transform t3 = palm != null ? palm.parent : null;
+                string sd = i == 0 ? "L" : "R";
+                if (t3 != null && t3.name == $"Base Human{sd}Forearm3" && t3.parent != null && t3.parent.name == $"Base Human{sd}Forearm2")
+                { rig.TwistB[i] = t3; rig.TwistA[i] = t3.parent; }
+            }
+            if (!rig.HandOk)
+                HandsAreHighPlugin.Log.LogWarning($"Kneel rig: {p.Profile?.Nickname}: no Digit31/Digit11 finger bones under the palms; he kneels, but never braces on his knee");
             if (Settings.VerboseLogs.Value)
                 HandsAreHighPlugin.Log.LogInfo($"Kneel rig: {p.Profile?.Nickname}: thigh {l.Thigh:0.000}/{r.Thigh:0.000} m, shin {l.Shin:0.000}/{r.Shin:0.000} m, " +
                     $"foot {l.FootLen:0.000} m, hips {rig.HipHalfWidth * 2f:0.000} m apart, torso {rig.TorsoLength:0.00} m");
@@ -711,11 +841,17 @@ namespace HandsAreHigh
             KneelStyle st = s.KneelStyle;
             if (!s.KneelBrace || st == null || !st.CanBrace) return 0f;
             float t = s.KneelT;
-            return Ss(st.BraceOutA, st.BraceOutB, t) * (1f - Ss(st.BraceInA, st.BraceInB, t));
+            float w = Ss(st.BraceOutA, st.BraceOutB, t) * (1f - Ss(st.BraceInA, st.BraceInB, t));
+            if (w <= 0f) return 0f;
+            w *= Mathf.SmoothStep(0f, 1f, s.KneelBraceGate);
+            // Anything left when his legs are handed back fades with them (no snap at the end).
+            if (s.Kneel == KneelPhase.Standing) w *= s.KneelFade / Mathf.Max(0.01f, s.KneelFadeTotal);
+            return w;
         }
 
-        // Player._bodyupdated (protected): true on frames the body animator ran.
-        private static readonly AccessTools.FieldRef<Player, bool> BodyUpdated = AccessTools.FieldRefAccess<Player, bool>("_bodyupdated");
+        // Player._bodyupdated (protected): true on frames the body animator ran (also gates
+        // ArmPosePatch as a whole).
+        internal static readonly AccessTools.FieldRef<Player, bool> BodyUpdated = AccessTools.FieldRefAccess<Player, bool>("_bodyupdated");
 
         private static Vector3 Local(Vector3 p, Vector3 o, Vector3 f, Vector3 r) { Vector3 d = p - o; return new Vector3(Vector3.Dot(d, r), d.y, Vector3.Dot(d, f)); }
         private static Vector3 World(Vector3 l, Vector3 o, Vector3 f, Vector3 r) => o + r * l.x + Vector3.up * l.y + f * l.z;
@@ -751,8 +887,9 @@ namespace HandsAreHigh
             Frame(p, out Vector3 o, out Vector3 f, out Vector3 r);
             if (!s.KneelRefOk)
             {
-                // Only at the very start of a descent is the animator's pose his standing one.
-                if (s.Kneel != KneelPhase.GoingDown || s.KneelT > 0.2f) return;
+                // Only at the very start of a descent is the animator's pose his standing one;
+                // Update holds t at 0 until this has run.
+                if (s.Kneel != KneelPhase.GoingDown || s.KneelT > 0.001f) return;
                 CaptureRef(s, rig, o, f, r);
             }
             float t = s.KneelT;
@@ -848,6 +985,7 @@ namespace HandsAreHigh
             ArmPose.Aim(leg.Knee, leg.Foot, foot - knee, w);
             ArmPose.Aim(leg.Foot, leg.Toe, toeDir, w);
             s.KneelKneePos[i] = leg.Knee.position;
+            s.KneelKneeFrame = Time.frameCount;
 
             if (Settings.KneelGizmos.Value)
             {
@@ -947,40 +1085,118 @@ namespace HandsAreHigh
         }
 
         // The front-side hand on top of the front thigh, just above the knee, while he pushes up
-        // over that leg. The point rides on the thigh (so the hand moves with the leg, never
-        // across it). Beyond comfortable reach the brace eases off instead of stretching the arm.
+        // over that leg (0.12.1 rewrite). What made 0.12.0 abrupt:
+        //   - the reach and the let-go each took 0.1 of t (0.07-0.17 s), straight from the
+        //     hands-up pose down to the knee and back;
+        //   - a reach gate, (1.04 - ratio) / 0.06, multiplied the weight: the shoulder-to-knee
+        //     distance crosses that 6 cm band in 1-2 frames as he leans and the knee comes up,
+        //     so the hand jumped most of the way in a single frame (offline: 36-66 cm/frame);
+        //   - the contact point was offset by world up, so it slid along the thigh as the thigh
+        //     tilted, and the wrist stayed straight: the fingers went 2-6 cm into the thigh.
+        // Now: the hand follows an arc (out to the side and over the thigh, landing from above)
+        // from wherever the arm actually is this frame; the contact point is rebuilt every frame
+        // from the solved leg on the thigh's top surface (it rides on the leg); the wrist bends so
+        // the palm lies on the thigh with the fingers towards the knee; out of reach is handled
+        // by the IK clamp on the way in and by a timed let-go while holding (UpdateBrace).
         internal static void ApplyBrace(Player p, SurrenderState s)
         {
-            float bw = BraceWeight(s);
-            if (bw <= 0.001f || s.Rig == null) return;
+            float e = BraceWeight(s);
+            KneelRig rig = s.Rig;
+            if (e <= 0.001f || rig == null || !rig.HandOk) return;
+            // The knee positions are this frame's solve only (ApplyBody may have skipped).
+            if (s.KneelKneeFrame != Time.frameCount) return;
             PlayerBones b = p.PlayerBones;
             if (b?.Upperarms == null || b.Forearms == null || b.Ribcage == null) return;
             Frame(p, out _, out Vector3 f, out Vector3 r);
             int leg = 1 - s.KneelLead;
-            float side = s.Rig.Legs[leg].Side;
+            float side = rig.Legs[leg].Side;
             if (!Arm(b, side, r, out Transform upper, out Transform fore, out Transform palm)) return;
-            Vector3 knee = s.KneelKneePos[leg], hip = s.Rig.Legs[leg].Hip.position;
-            Vector3 target = knee + Vector3.up * 0.07f + (hip - knee).normalized * 0.10f;
+            int hi = side > 0f ? 1 : 0;
+            Transform middle = rig.Middle[hi], thumb = rig.Thumb[hi];
+            if (middle == null || thumb == null) return;
+
+            // Contact frame on the front thigh: along = knee to hip; n = its top surface (up when
+            // the thigh is level, forward as it stands up), a little to the outside.
+            Vector3 knee = s.KneelKneePos[leg];
+            Vector3 along = rig.Legs[leg].Hip.position - knee;
+            if (along.sqrMagnitude < 1e-4f) return;
+            along.Normalize();
+            Vector3 outward = r * side;
+            Vector3 n = Perp(Vector3.up + f, along, f);
+            n = Perp(n + outward * 0.3f, along, n);
+            Vector3 fingers = Vector3.ProjectOnPlane(-along - outward * 0.25f, n);
+            if (fingers.sqrMagnitude < 1e-4f) return;
+            fingers.Normalize();
+            Vector3 target = knee + along * BraceUp + n * ThighRadius - fingers * PalmCentre + n * PalmThick;
 
             Vector3 sh = upper.position, el = fore.position, pa = palm.position;
             float a = Vector3.Distance(sh, el), c = Vector3.Distance(el, pa);
             if (a < 0.05f || c < 0.05f) return;
-            float ratio = Vector3.Distance(sh, target) / (a + c);
-            float reach = Mathf.Clamp01((1.04f - ratio) / 0.06f);
-            if (reach < 1f && !s.KneelBraceWarned && bw > 0.9f)
+            // Arc from the arm's own position this frame: control point between the two, pushed
+            // out from his side and up off the thigh, so the hand comes down onto it from above
+            // and leaves it upwards, never through the leg or across his body.
+            Vector3 ctrl = (pa + target) * 0.5f + outward * 0.10f + n * 0.12f;
+            float u = 1f - e;
+            Vector3 pos = pa * (u * u) + ctrl * (2f * e * u) + target * (e * e);
+
+            // Stretched while holding (on or past the contact point, the IK goal beyond his arm):
+            // let go by time rather than lock a straight arm. On the way in the IK clamp is
+            // expected (the knee is still coming up to meet the hand) and is not a stretch.
+            float ratio = Vector3.Distance(sh, pos) / (a + c);
+            if (e > 0.9f && ratio > 1f && s.KneelStyle != null && s.KneelT <= s.KneelStyle.BraceInA && !s.KneelBraceStretch)
             {
-                s.KneelBraceWarned = true;
-                Log(s, $"kneel: brace eased off (knee at {ratio:0.00} of his reach)");
+                s.KneelBraceStretch = true;   // UpdateBrace lets go over LetGoSeconds
+                s.KneelBraceRatio = ratio;
             }
-            bw *= reach;
-            if (bw <= 0.001f) return;
-            Vector3 pos = Vector3.Lerp(pa, target, bw);
-            Vector3 bendNow = Perp(el - sh, pa - sh, r * side);
-            Vector3 bendOut = (r * (side * 0.8f) - f * 0.3f + Vector3.up * 0.2f).normalized;
-            TwoBone(sh, pos, a, c, Vector3.Slerp(bendNow, bendOut, bw), out Vector3 elbow, out Vector3 hand);
+            Vector3 bendNow = Perp(el - sh, pa - sh, outward);
+            Vector3 bendOut = (outward * 0.8f - f * 0.3f + Vector3.up * 0.2f).normalized;
+            TwoBone(sh, pos, a, c, Vector3.Slerp(bendNow, bendOut, e), out Vector3 elbow, out Vector3 hand);
             ArmPose.Aim(upper, fore, elbow - sh, 1f);
             ArmPose.Aim(fore, palm, hand - elbow, 1f);
-            if (Settings.KneelGizmos.Value) s.GizmoPalm[side > 0 ? 1 : 0] = hand;
+
+            // Wrist: fingers along the thigh towards the knee, thumb inwards, palm down (the
+            // thumb root sits ThumbTilt palm-ward of the side), bent at most WristMax. Eased in
+            // over the second half of the reach, so it turns as the hand arrives.
+            float ww = Ss(0.4f, 1f, e);
+            if (ww > 0.001f)
+            {
+                Vector3 fore2 = hand - elbow;
+                Vector3 fingersW = fingers;
+                float bend = Vector3.Angle(fore2, fingers);
+                if (bend > WristMax) fingersW = Vector3.Slerp(fore2.normalized, fingers, WristMax / bend);
+                Vector3 inward = Vector3.ProjectOnPlane(-outward, fingersW).normalized;
+                Vector3 thumbWant = inward * Mathf.Cos(ThumbTilt * Mathf.Deg2Rad) - n * Mathf.Sin(ThumbTilt * Mathf.Deg2Rad);
+                if (Settings.KneelBracePalmFlip.Value) thumbWant = -thumbWant;
+                thumbWant = Vector3.ProjectOnPlane(thumbWant, fingersW);
+                Vector3 fLive = middle.position - palm.position;
+                Vector3 tLive = Vector3.ProjectOnPlane(thumb.position - palm.position, fLive);
+                if (thumbWant.sqrMagnitude > 1e-6f && tLive.sqrMagnitude > 1e-8f && fLive.sqrMagnitude > 1e-6f)
+                {
+                    Quaternion turn = Quaternion.LookRotation(fingersW, thumbWant) * Quaternion.Inverse(Quaternion.LookRotation(fLive, tLive));
+                    Quaternion want = Quaternion.Slerp(palm.rotation, turn * palm.rotation, ww);
+                    // A third of the roll about the forearm on each twist bone, the rest (and
+                    // all of the bend) at the wrist. Twist bones sit on the forearm axis, so the
+                    // hand's position doesn't move.
+                    Transform ta = rig.TwistA[hi], tb = rig.TwistB[hi];
+                    if (ta != null && tb != null)
+                    {
+                        Quaternion part = Quaternion.Slerp(Quaternion.identity, TwistAbout(want * Quaternion.Inverse(palm.rotation), fore2), 1f / 3f);
+                        ta.rotation = part * ta.rotation;
+                        tb.rotation = part * tb.rotation;
+                    }
+                    palm.rotation = want;
+                }
+            }
+            if (Settings.KneelGizmos.Value) s.GizmoPalm[hi] = hand;
+        }
+
+        // The part of q that turns about axis (swing-twist decomposition).
+        private static Quaternion TwistAbout(Quaternion q, Vector3 axis)
+        {
+            Vector3 v = Vector3.Project(new Vector3(q.x, q.y, q.z), axis);
+            float m = Mathf.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z + q.w * q.w);
+            if (m < 1e-6f) return Quaternion.identity;
+            return new Quaternion(v.x / m, v.y / m, v.z / m, q.w / m);
         }
 
         // ---- debug (same order path as the menu, via Orders.Give with debug = true) ---------

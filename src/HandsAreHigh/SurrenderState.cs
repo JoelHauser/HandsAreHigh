@@ -203,8 +203,14 @@ namespace HandsAreHigh
         internal KneelRise KneelRise;       // the rise in progress
         internal KneelRise KneelIntent;     // what the layer's decision needs (Kneel.Urge)
         internal bool KneelIntentSet;
+        internal float KneelVel;            // dt/dKneelT now; eased towards the target speed on a retime or reversal
         internal bool KneelBrace;           // front-side hand pushes on the front thigh this rise
-        internal bool KneelBraceWarned;
+        internal float KneelBraceGate = 1f; // 1 = brace as scheduled; falls to 0 once he lets go early
+        internal bool KneelBraceLetGo;      // letting go early (draw, bolt, out of reach): the gate falls
+        internal bool KneelBraceStretch;    // the pose found the knee beyond his reach while holding it
+        internal float KneelBraceRatio;
+        internal int KneelKneeFrame = -1;   // frame KneelKneePos was solved (the brace only uses this frame's)
+        internal float KneelRefWait;        // waiting for an animated frame to capture the standing pose
         internal float KneelFade, KneelFadeTotal;   // hand-back blend to the animator after a rise
         internal float KneelThighOff, KneelLeanOff, KneelSpreadOff;   // small per-bot posture differences
         internal readonly Vector3[] KneelRef = new Vector3[8];   // standing pose at the start, body-local: hips, knees, feet, toes (L,R)

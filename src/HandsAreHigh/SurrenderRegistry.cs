@@ -516,7 +516,11 @@ namespace HandsAreHigh
                 }
                 else
                 {
-                    s.Progress -= dt / Mathf.Max(0.01f, s.LowerSeconds > 0f ? s.LowerSeconds : Settings.LowerSeconds.Value);
+                    float lower = s.LowerSeconds > 0f ? s.LowerSeconds : Settings.LowerSeconds.Value;
+                    // From behind his head the hands have further to go: the emergency 0.08 s
+                    // whipped them past his head in ~5 frames. Kneel.MinLowerSeconds while kneeling.
+                    if (Kneel.Active(s)) lower = Mathf.Max(lower, Kneel.MinLowerSeconds);
+                    s.Progress -= dt / Mathf.Max(0.01f, lower);
                 }
                 s.Progress = Mathf.Clamp01(s.Progress);
                 s.Weight = Mathf.SmoothStep(0f, 1f, s.Progress);

@@ -11,7 +11,67 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 0.5.0-0.12.0 are all unverified in raid. No GitHub release. Preview of the motion (same solver,
 stick figure): https://claude.ai/artifact/BmomFjtD7GVoPCYSgKN5Aj
 
-Next: Joel runs the 0.12.0 kneel test plan (below), then 0.10.0 (scenarios), then the older plans.
+**0.12.1 (brace rework + transition fixes), built against `C:\HUH` 2026-11-19
+(dist/HandsAreHigh-0.12.1.zip), 0 warnings; committed and pushed to `main` 2026-11-19; not installed, never run in game.**
+Preview updated to 0.12.1 (same link as above): brace 0.12.1 vs 0.12.0 toggle, speed 1x-1/10x, hand path,
+fingers drawn, brace reach/elbow/wrist readouts. Its standing reference was wrong before (hips 0.93 m over
+ankles 0.08 m = ~44 deg knee bend); now 0.993 m (~8 deg). In game nothing of ours bends a standing bot's
+legs (Stance with hands up = 1); a compliant rise ends on the captured standing pose and blends to the
+animator over 0.2 s; urgent rises hand the legs back bent at t 0.15 on purpose (the walk takes over).
+
+Next: Joel runs the 0.12.1 plan (below; it replaces the 0.12.0 plan's steps 2-3), then 0.10.0
+(scenarios), then the older plans.
+
+### 0.12.1 (brace push-off, transition audit; Kneel.cs, ArmPose.cs, SurrenderRegistry.cs)
+
+Bugs found by reading the code + offline port (scratchpad brace_sim.py on kneel_sim2's solver):
+- Brace snapped: reach and let-go each 0.1 of t (70 ms escape), straight line hands-up -> knee;
+  and a reach gate `(1.04 - ratio) / 0.06` multiplied the weight: the shoulder-knee distance
+  crosses that band in 1-2 frames, so the hand jumped 36-66 cm in one frame. Contact point was
+  offset by world up (slid along the thigh as it tilted); wrist straight: fingers 2-6 cm inside
+  the thigh, forearm ~1 cm from it. Let go at ~10-26% of the push.
+- Reversal while rising cleared KneelBrace (hand snapped off); end of rise cleared it too.
+- ArmPosePatch posed on frames the body animator didn't run (`_bodyupdated` false, e.g. bots
+  in the fixed-update queue at high fps): partial weights blended twice -> creep then jump.
+- Changing urgency / reversing jumped t's speed (velocity step, up to 2.4x).
+- t advanced before the standing pose was captured (capture allowed up to t 0.2: first posed
+  frame could jump); never captured -> crouch look.
+- Escape from the knees: arms from behind the head in the 0.08 s "Fast lower time" (~5 frames).
+- A draw starting mid-brace would fight the draw animation for the arm (no let-go).
+- Rig transforms destroyed -> exception spam; stale rig reused at the next kneel.
+Fixes: brace = quadratic arc from the arm's current pose (out to the side, landing from above),
+contact on the thigh's top surface rebuilt per frame from the solved leg (BraceUp 0.15 m,
+ThighRadius 0.075), wrist laid flat (fingers to the knee, thumb in; finger bones Digit31/Digit11
+found by name, none -> no brace), roll shared with Forearm2/3; windows: compliant in 0.88->0.50
+out 0.28->0.03, defensive 0.78->0.44 / 0.28->0.17, escape 0.78->0.48 / 0.31->0.18 (contact at
+0-3% hips risen, hold to ~45-50%, reach <= 0.92, elbow straightens 89->47 compliant). Early
+let-go latch (`KneelBraceGate`, 0.10 s): draw/drop/hands pending, IK goal beyond the arm past
+contact, urgent switch on compliant timing. Leftover brace fades with KneelFade. KneelVel eased
+(0.06 s) on retime/reversal; fresh starts at full speed. t held at 0 until the capture (0.5 s
+limit -> fallback). Arms lower >= 0.25 s while kneeling (`Kneel.MinLowerSeconds`). ArmPosePatch
+returns on !_bodyupdated. `KneelRig.Valid()` checked per frame while posing.
+Offline (brace_sim.py, approximations for shoulder/hands-up): compliant hand peak 4.0 m/s
+(old 22), fingers >= +1.4 cm / forearm >= +4.5 cm clear of the thigh, torso >= 7 cm, wrist 59-63
+deg; urgent peaks ~9 m/s are the arms coming down, not the brace. Not checkable offline: real
+shoulder/arm pose, which side of the palm bone is the palm (thumb-root inference; config
+14. Debug "Kneel brace palm flip" if wrong), thigh thickness with kit, how it reads in game.
+
+### In-game test plan (0.12.1)
+
+Debug keys, Overlay, Log kneeling, Kneel gizmos on. Grep `kneel:`, `lets go of his knee`.
+1. Kneel test brace Always, rise Compliant, Shift+K; watch side, front, rear at 60 fps and capped
+   30: hand sets off as the hands leave the head, arcs out, lands on top of the front thigh (H at
+   the K mark's thigh) before the hips rise, stays put on the thigh while he pushes (elbow
+   straightening), lifts off around half-way up, goes back up to hands-up. Palm down, fingers
+   towards the knee, no fingers in the thigh, no twisted wrist. Palm up -> set palm flip, report.
+2. Same with Defensive and Escape (Ctrl+Alt+K): no pause before the first step; brace gone
+   before he walks; arms come down from the head in ~0.25 s, not a flick.
+3. Ctrl+K while rising with the hand on the knee: hand comes back off the way it came, no snap.
+4. Kneel test interruption Draw / Run at GettingUp 0.5: `lets go of his knee early (...)` once,
+   no arm fighting the draw; Kill at 0.5: ragdoll from the pose, no further `kneel:` lines.
+5. High fps (uncapped) vs capped 30: no shimmer of the raised arms on a held standing bot.
+6. Different kit: plate carrier + backpack, rig, no armour; helmet on/off: hand on the thigh,
+   not inside pouches or plates (report which kit clips).
 
 ### Notes after 0.10.0 (2026-11-19, nothing built)
 
