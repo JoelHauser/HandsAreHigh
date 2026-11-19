@@ -150,7 +150,7 @@ namespace HandsAreHigh
                 // Squadmates close by to back him make taking a prisoner a little more attractive.
                 int backing = Mathf.Min(2, Reactions.FreeAlliesNear(o, captor));
                 float chance = Mathf.Clamp01(Settings.AcceptChance.Value * mercy * (1f + 0.1f * backing));
-                float roll = Random.value;
+                float roll = Dice.Value;
                 log.Append($"practical, mercy x{mercy:0.00}, {backing} squadmate(s) near, take chance {chance:0.00}, roll {roll:0.00}");
                 if (roll < chance)
                 {
@@ -166,7 +166,7 @@ namespace HandsAreHigh
             if (!allied && TryHandToSquad(s, o, log)) { HandsAreHighPlugin.Log.LogInfo(log.ToString()); return; }
 
             float spare = Mathf.Clamp(Settings.SpareChance.Value * mercy, 0f, 0.98f);
-            float r2 = Random.value;
+            float r2 = Dice.Value;
             log.Append($"; spare chance {spare:0.00}, roll {r2:0.00}");
             if (r2 < spare)
             {
@@ -237,8 +237,43 @@ namespace HandsAreHigh
             Player captor = s.Captor;
             if (captor != null && !captor.IsAI && Perception.Alive(captor)) return;
             if (Impractical(o, s, out _) != null) return;
-            if (Random.value > 0.5f * Restraint.Mercy(o.GetPlayer, SurrenderRegistry.HistoryOf(o.GetPlayer))) return;
+            if (Dice.Value > 0.5f * Restraint.Mercy(o.GetPlayer, SurrenderRegistry.HistoryOf(o.GetPlayer))) return;
             Accept(s, o, "nobody holds him: takes custody");
+        }
+
+        // Debug scenarios (forced state): custody through the same Accept a real decision uses
+        // (plan, restraint, squad informed, ORBIT, voice), skipping only the decision itself and
+        // the perception/range/threat checks. Hard limits still refuse: he must be an active,
+        // living guard-capable bot, not held, not already guarding, not a player ally.
+        internal static bool ForceAccept(SurrenderState s, BotOwner o, string why, out string refused)
+        {
+            refused = null;
+            Player c = o?.GetPlayer;
+            if (s?.Bot == null || s.Dead || s.Phase != Phase.HandsUp) refused = "prisoner isn't holding his hands up";
+            else if (c == null || o.IsDead || !Perception.Alive(c)) refused = "captor isn't alive";
+            else if (o.BotState != EBotState.Active) refused = "captor isn't active yet";
+            else if (!CanGuard(c)) refused = $"no guarding behaviour for a {c.Profile?.Info?.Settings?.Role}";
+            else if (IsPlayerAlly(o)) refused = "captor is a player ally (allies never guard)";
+            else if (SurrenderRegistry.HoldsBot(c)) refused = "captor is held himself";
+            else if (ByBot.ContainsKey(c)) refused = "captor already guards someone";
+            else if (s.Custody != null) refused = $"already in {s.Custody.Name}'s custody";
+            if (refused != null) return false;
+            s.Captor = c;
+            Accept(s, o, why);
+            return true;
+        }
+
+        // Debug scenarios: start one of the captor's own glances now (the real glance code picks
+        // where he looks and for how long; the prisoner sees it as a real opening).
+        internal static bool ForceGlance(Player captor, out string why)
+        {
+            why = null;
+            if (captor == null || !ByBot.TryGetValue(captor, out CaptorState cs)) { why = "isn't guarding anyone"; return false; }
+            if (!Settings.CaptorGlances.Value) { why = "Captors look around is off"; return false; }
+            if (cs.Mode != CaptorMode.Guard) { why = $"is in {cs.Mode}, not guarding"; return false; }
+            cs.NextGlanceAt = Time.time;
+            cs.NextCheck = Time.time;
+            return true;
         }
 
         private static void Accept(SurrenderState s, BotOwner o, string why, bool takingOver = false)
@@ -251,9 +286,9 @@ namespace HandsAreHigh
                 Bot = c, Owner = o, Group = o.BotsGroup, Name = Restraint.Name(c), Prisoner = s,
                 Since = now,
                 HoldUntil = now + Settings.Between(Settings.HoldMin, Settings.HoldMax),
-                NextOrderAt = now + Random.Range(0.4f, 1.2f),
+                NextOrderAt = now + Dice.Range(0.4f, 1.2f),
                 ModeSince = now,
-                NextGlanceAt = now + Random.Range(4f, 9f)
+                NextGlanceAt = now + Dice.Range(4f, 9f)
             };
             BuildPlan(cs);
             ByBot[c] = cs;
@@ -268,7 +303,7 @@ namespace HandsAreHigh
             OrbitAdapter.KeepAwake(o, true, "holds a prisoner");
             OrbitAdapter.KeepAwake(s.Bot.AIData?.BotOwner, true, "held by a bot");
             // Turn-taking: his demand waits for the prisoner's own line (CaptorVoice).
-            CaptorVoice.Say(c, takingOver ? CaptorLine.TakeOver : CaptorLine.Demand, Random.Range(0.3f, 0.8f));
+            CaptorVoice.Say(c, takingOver ? CaptorLine.TakeOver : CaptorLine.Demand, Dice.Range(0.3f, 0.8f));
             HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: holds {s.Name} ({why}); plan {cs.PlanName}, lets him go within {cs.HoldUntil - now:0} s");
         }
 
@@ -278,7 +313,7 @@ namespace HandsAreHigh
         {
             bool armed = Arsenal.HasItems(cs.Prisoner.Bot, Arsenal.WeaponSlots, false);
             float a = armed ? 1f : 0f, b = 0.6f, c = armed ? 0.6f : 0f;
-            float pick = Random.value * (a + b + c);
+            float pick = Dice.Value * (a + b + c);
             cs.Plan.Clear();
             if (pick < a) { cs.PlanName = "disarm and release"; cs.Plan.Add(OrderKind.Stay); cs.Plan.Add(OrderKind.DropWeapons); }
             else if (pick < a + b) { cs.PlanName = "hold and release"; cs.Plan.Add(OrderKind.Stay); }
@@ -451,7 +486,7 @@ namespace HandsAreHigh
                     EnemyInfo e = kv.Value;
                     if (e == null || (object)e.Person == prisoner) continue;
                     if (e.Person?.HealthController == null || !e.Person.HealthController.IsAlive) continue;
-                    if (e.Person is Player ep && (Restraint.HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep))) continue;
+                    if (e.Person is Player ep && (Restraint.HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep))) continue;
                     if (e.IsVisible)
                     {
                         why = e.Person is Player pl ? Restraint.Name(pl) : "an enemy";
@@ -608,12 +643,12 @@ namespace HandsAreHigh
             {
                 Vector3 toPrisoner = s.Bot.Position - cs.Bot.Position; toPrisoner.y = 0f;
                 if (toPrisoner.sqrMagnitude < 0.01f) toPrisoner = cs.Bot.Transform.forward;
-                float side = Random.value < 0.5f ? -1f : 1f;
-                Vector3 dir = Quaternion.Euler(0f, side * Random.Range(60f, 150f), 0f) * toPrisoner.normalized;
+                float side = Dice.Value < 0.5f ? -1f : 1f;
+                Vector3 dir = Quaternion.Euler(0f, side * Dice.Range(60f, 150f), 0f) * toPrisoner.normalized;
                 cs.GlancePoint = cs.Bot.Position + dir * 10f + Vector3.up * 1.5f;
             }
-            cs.GlanceUntil = now + Random.Range(0.8f, 1.8f);
-            cs.NextGlanceAt = cs.GlanceUntil + (alert ? Random.Range(2f, 4f) : Random.Range(6f, 14f));
+            cs.GlanceUntil = now + Dice.Range(0.8f, 1.8f);
+            cs.NextGlanceAt = cs.GlanceUntil + (alert ? Dice.Range(2f, 4f) : Dice.Range(6f, 14f));
             if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: glances {(alert ? "towards where he last saw an enemy" : "around")} for {cs.GlanceUntil - now:0.0} s");
         }
 

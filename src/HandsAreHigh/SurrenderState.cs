@@ -220,7 +220,7 @@ namespace HandsAreHigh
         internal float NoticeDelay()
         {
             float r = Reaction * (1.15f - 0.3f * Nerve) * (1f + 0.5f * Injury);
-            return r * Random.Range(0.8f, 1.25f);
+            return r * Dice.Range(0.8f, 1.25f);
         }
 
         // A new surrender (first or recapture): what he noticed last time no longer applies.

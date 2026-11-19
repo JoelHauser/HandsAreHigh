@@ -70,16 +70,29 @@ namespace HandsAreHigh
                 if (budget <= 0) break;
 
                 if ((int)h.Role < 0) h.Role = ClassOf(bot);
-                if (!EligibleRole(h.Role) || SurrenderRegistry.HoldsBot(bot)) { h.NextEval = now + Settings.EvalInterval.Value; continue; }
+                if (!EligibleRole(h.Role) || SurrenderRegistry.HoldsBot(bot))
+                {
+                    h.NextEval = now + Settings.EvalInterval.Value;
+                    if (!EligibleRole(h.Role) && Scenarios.Watching(bot)) Blocked(bot, $"role {h.Role} not eligible (01. General: PMCs / bosses)");
+                    continue;
+                }
                 BotOwner owner = bot.AIData?.BotOwner;
                 if (owner == null || owner.BotState != EBotState.Active || owner.IsDead) { h.NextEval = now + Settings.EvalInterval.Value; continue; }
 
                 budget--;
-                h.NextEval = now + Settings.EvalInterval.Value * Random.Range(0.8f, 1.2f);
+                h.NextEval = now + Settings.EvalInterval.Value * Dice.Range(0.8f, 1.2f);
                 // Your teammates (your group, Pit Fireteam followers) stay under your orders.
-                if (!Settings.TeammatesSurrender.Value && Teammates.IsPlayerTeammate(owner)) continue;
+                if (!Settings.TeammatesSurrender.Value && Teammates.IsPlayerTeammate(owner))
+                {
+                    if (Scenarios.Watching(bot)) Blocked(bot, "your teammate (Your teammates can surrender is off)");
+                    continue;
+                }
                 TrackSquad(owner, h);
-                if (now < h.CooldownUntil) continue;
+                if (now < h.CooldownUntil)
+                {
+                    if (Scenarios.Watching(bot)) Blocked(bot, $"surrender cooldown {h.CooldownUntil - now:0} s");
+                    continue;
+                }
                 try { Evaluate(bot, owner, h); }
                 catch (System.Exception e) { HandsAreHighPlugin.Report("surrender check", e); }
             }
@@ -159,12 +172,12 @@ namespace HandsAreHigh
                 // The usual exits (no human target, far away): no message is built unless
                 // Verbose logs are on.
                 EnemyInfo goal = owner.Memory?.GoalEnemy;
-                if (goal == null) { if (Settings.VerboseLogs.Value) Blocked(bot, "no enemy targeted"); return; }
-                if (!(goal.Person is Player foe) || !Perception.Alive(foe)) { if (Settings.VerboseLogs.Value) Blocked(bot, "his target isn't a living player"); return; }
+                if (goal == null) { if (Verbose(bot)) Blocked(bot, "no enemy targeted"); return; }
+                if (!(goal.Person is Player foe) || !Perception.Alive(foe)) { if (Verbose(bot)) Blocked(bot, "his target isn't a living player"); return; }
                 if (foe.IsAI)
                 {
                     string no = BotFoeBlocked(bot, foe);
-                    if (no != null) { if (Settings.VerboseLogs.Value) Blocked(bot, no); return; }
+                    if (no != null) { if (Verbose(bot)) Blocked(bot, no); return; }
                 }
                 enemy = foe;
                 seenNow = goal.IsVisible;
@@ -176,7 +189,7 @@ namespace HandsAreHigh
                 bool fire = now - h.FireAt < 3f || (owner.Memory != null && owner.Memory.IsUnderFire);
                 if (!seenNow && since > Settings.SeenWithin.Value && !(fire && goal.HaveSeen && since < Settings.EnemyMemory.Value))
                 {
-                    if (Settings.VerboseLogs.Value) Blocked(bot, $"hasn't seen {foe.Profile?.Nickname} for {since:0} s and isn't under fire");
+                    if (Verbose(bot)) Blocked(bot, $"hasn't seen {Restraint.Name(foe)} for {since:0} s and isn't under fire");
                     return;
                 }
             }
@@ -262,7 +275,7 @@ namespace HandsAreHigh
 
             // Checks that can't lead to a roll are only logged with Verbose logs (they repeat
             // every few seconds for every bot in a fight); a roll is always logged.
-            if (!eligible && !(Settings.VerboseLogs.Value && pressure >= LogFloor)) return;
+            if (!eligible && !(Settings.VerboseLogs.Value && pressure >= LogFloor) && !Scenarios.Watching(bot)) return;
 
             WildSpawnType role = bot.Profile.Info.Settings.Role;
             string personality = SurrenderRegistry.PersonalityOf(bot, h);
@@ -289,13 +302,13 @@ namespace HandsAreHigh
             float chance = Mathf.Min(roleMax,
                 roleBase * curve * (1f - Settings.NerveResistance.Value * nerve) * persMult * kitMult * expMult * severeMult * demandMult * botMult);
             chance = Mathf.Clamp01(chance);
-            float roll = Random.value;
+            float roll = Dice.Value;
             bool gives = eligible && roll < chance;
             if (demanded) h.DemandUntil = 0f;   // one evaluation per demand: it never stacks
 
             var sb = new StringBuilder();
-            sb.Append($"{bot.Profile?.Nickname} ({role}, lvl {bot.Profile?.Info?.Level}{(string.IsNullOrEmpty(personality) ? "" : ", " + personality)}) ");
-            sb.Append($"vs {enemy.Profile?.Nickname}{(botFoe ? $" (bot {enemy.Profile?.Info?.Settings?.Role}, {credible})" : "")} {dist:0} m{(seenNow ? "" : $" (not in sight; believes him {Vector3.Distance(knownAt, enemy.Position):0} m from where he is)")}: pressure {pressure:0.00} [");
+            sb.Append($"{Restraint.Name(bot)} ({role}, lvl {bot.Profile?.Info?.Level}{(string.IsNullOrEmpty(personality) ? "" : ", " + personality)}) ");
+            sb.Append($"vs {Restraint.Name(enemy)}{(botFoe ? $" (bot {enemy.Profile?.Info?.Settings?.Role}, {credible})" : "")} {dist:0} m{(seenNow ? "" : $" (not in sight; believes him {Vector3.Distance(knownAt, enemy.Position):0} m from where he is)")}: pressure {pressure:0.00} [");
             sb.Append($"hurt {injury:0.00} ({injuryWhy}), ammo {ammo:0}, ");
             sb.Append($"fire {suppression:0.00} (near misses/hits {shots:0.0} = {ownFire:0.00}, SAIN {sainFire:0.00}, armour x{armourDull:0.00}), ");
             sb.Append($"outnumbered {outnumbered:0.00} ({hostiles} vs {friends}), squad {squad:0.00} ({squadWhy})]; {gate}; ");
@@ -311,8 +324,8 @@ namespace HandsAreHigh
             if (!gives) return;
             SurrenderRegistry.Surrender(bot, enemy, $"gave up ({gate}, pressure {pressure:0.00}, chance {chance:0.000}, {dist:0} m)", knownAt);
             HandsAreHighPlugin.Log.LogInfo(SurrenderRegistry.HoldsBot(bot)
-                ? $"{bot.Profile?.Nickname}: surrender activated (layer will take him on its next brain update)"
-                : $"{bot.Profile?.Nickname}: surrender activation FAILED (mod disabled or registry refused)");
+                ? $"{Restraint.Name(bot)}: surrender activated (layer will take him on its next brain update)"
+                : $"{Restraint.Name(bot)}: surrender activation FAILED (mod disabled or registry refused)");
         }
 
         // A bot he's fighting can only be the one he gives up to if bot captors are on, that bot
@@ -332,8 +345,11 @@ namespace HandsAreHigh
 
         // Why a bot isn't even considered (Verbose logs only: in a long fight between bots
         // this fired every few seconds per bot).
+        // Debug scenario participants: every check is logged (and so reaches the scenario timeline).
+        private static bool Verbose(Player bot) => Settings.VerboseLogs.Value || Scenarios.Watching(bot);
+
         private static void Blocked(Player bot, string why) =>
-            HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname} ({bot.Profile?.Info?.Settings?.Role}): no surrender check: {why}");
+            HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(bot)} ({bot.Profile?.Info?.Settings?.Role}): no surrender check: {why}");
 
         // The worst of several views of the same wounds (never a sum).
         internal static float Injury(Player bot, out string why)
@@ -402,6 +418,7 @@ namespace HandsAreHigh
             foreach (EnemyInfo e in infos.Values)
             {
                 if (e?.Person?.HealthController == null || !e.Person.HealthController.IsAlive) continue;
+                if (ScenarioShield.Active && ScenarioShield.Blocks(owner.GetPlayer, e.Person)) continue;
                 if (e.IsVisible || now - e.PersonalLastSeenTime < memory) n++;
             }
             return Mathf.Max(1, n);

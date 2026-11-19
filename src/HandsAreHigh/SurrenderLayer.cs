@@ -308,7 +308,7 @@ namespace HandsAreHigh
             }
             s.OpeningStrength = strength;
             if (s.DecideAt < 0f || now < s.DecideAt) return;
-            s.DecideAt = now + Settings.BreakInterval.Value * Random.Range(0.7f, 1.3f);
+            s.DecideAt = now + Settings.BreakInterval.Value * Dice.Range(0.7f, 1.3f);
             DecideOnOpening(s, captor, dist, debugOpening);
         }
 
@@ -330,7 +330,7 @@ namespace HandsAreHigh
             float hurt = 1f - 0.5f * s.Injury;
             float chance = Mathf.Clamp01(Settings.BreakChance.Value * nerveScale * s.OpeningStrength *
                                          (1f + Settings.OpportunityBoost.Value * scramble) * squad * hurt);
-            float roll = Random.value;
+            float roll = Dice.Value;
             bool acts = roll < chance;
             string why = $"{s.OpeningKind} for {now - s.OpenSince:0.0} s";
             if (Settings.VerboseLogs.Value || debug || (acts && Settings.LogDecisions.Value))
@@ -432,7 +432,7 @@ namespace HandsAreHigh
             if (options.Count == 0) { log.Append("-> nothing"); return default; }
             float total = 0f;
             foreach (Choice c in options) total += c.Score;
-            float pick = Random.value * total;
+            float pick = Dice.Value * total;
             Choice chosen = options[options.Count - 1];
             float acc = 0f;
             foreach (Choice c in options)
@@ -1066,7 +1066,7 @@ namespace HandsAreHigh
             if (Arsenal.GunOnBody(Me) != null)
             {
                 float chance = Mathf.Clamp01(Settings.RecaptureResistance.Value * s.Nerve);
-                float roll = Random.value;
+                float roll = Dice.Value;
                 if (roll < chance && Arsenal.Draw(s, BotOwner, false))
                 {
                     Rearm(s, $"caught again but draws (chance {chance:0.00}, roll {roll:0.00})");

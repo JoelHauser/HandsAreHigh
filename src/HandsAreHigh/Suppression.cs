@@ -106,7 +106,7 @@ namespace HandsAreHigh
                 // position, blurred by a tenth of the distance. Never the shooter himself.
                 BotHistory bh = SurrenderRegistry.HistoryOf(bot);
                 float blur = 0.1f * along;
-                bh.FireFrom = from + new Vector3(Random.Range(-blur, blur), 0f, Random.Range(-blur, blur));
+                bh.FireFrom = from + new Vector3(Dice.Range(-blur, blur), 0f, Dice.Range(-blur, blur));
                 bh.FireFromAt = Time.time;
             }
             Candidates.Clear();
@@ -137,6 +137,19 @@ namespace HandsAreHigh
             BotHistory h = SurrenderRegistry.HistoryOf(bot);
             if (Time.time - h.NearMissAt < SameBulletWindow) return;   // the near miss already counted it
             Record(bot, 1f, nearMiss: false, null, 0f);
+        }
+
+        // Debug scenarios only: a synthetic fire event (no shot, no near-miss geometry). It tests
+        // what the decisions do with suppression, never whether suppression is detected.
+        internal static void Synthetic(Player bot, float weight)
+        {
+            BotHistory h = SurrenderRegistry.HistoryOf(bot);
+            float now = Time.time;
+            // Keep what he had, re-based just past the event gap so this event isn't swallowed
+            // (the fade over that 0.1 s is negligible).
+            h.Fire = Decayed(h, now);
+            h.FireAt = now - MinEventGap - 0.001f;
+            Record(bot, weight, nearMiss: false, null, 0f);
         }
 
         internal static bool IsHostile(BotOwner owner, Player shooter)

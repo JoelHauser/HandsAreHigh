@@ -50,7 +50,7 @@ namespace HandsAreHigh
             Gestures.Cancel(s, "given an order");
             if (order != OrderKind.Leave)
             {
-                s.ComplyUntil = Mathf.Max(s.ComplyUntil, Time.time + Settings.OrderCompliance.Value * Random.Range(0.7f, 1.3f));
+                s.ComplyUntil = Mathf.Max(s.ComplyUntil, Time.time + Settings.OrderCompliance.Value * Dice.Range(0.7f, 1.3f));
                 s.DecideAt = -1f;
                 s.OpenSince = -1f;
                 s.LastCovered = true;

@@ -26,6 +26,7 @@ namespace HandsAreHigh
         private const string Debug = "14. Debug";
         private const string BotCaptor = "15. Bots taking prisoners";
         private const string RestraintSec = "16. Sparing surrendered enemies";
+        private const string ScenarioSec = "17. Debug Scenarios";
 
         // 01
         internal static ConfigEntry<bool> Enabled;
@@ -689,13 +690,49 @@ namespace HandsAreHigh
             Profile = c.Bind(Debug, "Profile", false,
                 "Off by default; costs nothing when off. On: logs frame times (avg, p50, p99, worst, 1% low), GC activity, our own cost per hook, tracked object counts, and any frame where our code took over 1 ms. For comparing runs with Enabled on and off.");
             ProfileSeconds = c.Bind(Debug, "Profile report every (s)", 10f, Range("", 2f, 120f));
+            BindScenarios(c);
+        }
+
+        // 17 Debug Scenarios
+        internal static ConfigEntry<bool> ScenariosEnabled;
+        internal static ConfigEntry<KeyboardShortcut> ScenarioKey;
+        internal static ConfigEntry<KeyboardShortcut> ScenarioUp;
+        internal static ConfigEntry<KeyboardShortcut> ScenarioDown;
+        internal static ConfigEntry<KeyboardShortcut> ScenarioLess;
+        internal static ConfigEntry<KeyboardShortcut> ScenarioMore;
+        internal static ConfigEntry<KeyboardShortcut> ScenarioConfirm;
+        internal static ConfigEntry<bool> ScenarioOverlay;
+        internal static ConfigEntry<bool> ScenarioConcurrent;
+        internal static ConfigEntry<int> ScenarioMaxBots;
+        internal static ConfigEntry<float> ScenarioSpawnTimeout;
+
+        private static void BindScenarios(ConfigFile c)
+        {
+            ScenariosEnabled = c.Bind(ScenarioSec, "Scenario tools", false,
+                "Off by default; does nothing at all when off. On: the scenario key below opens the scenario menu in a raid, to spawn a test encounter, watch it and clean it up. Debug only: it spawns bots.");
+            ScenarioKey = c.Bind(ScenarioSec, "Scenario menu key", KeyboardShortcut.Empty,
+                "Opens and closes the scenario menu (unbound by default: set one to use the tools).");
+            ScenarioUp = c.Bind(ScenarioSec, "Menu up", new KeyboardShortcut(KeyCode.UpArrow), "While the scenario menu is open.");
+            ScenarioDown = c.Bind(ScenarioSec, "Menu down", new KeyboardShortcut(KeyCode.DownArrow), "");
+            ScenarioLess = c.Bind(ScenarioSec, "Menu previous value", new KeyboardShortcut(KeyCode.LeftArrow), "");
+            ScenarioMore = c.Bind(ScenarioSec, "Menu next value", new KeyboardShortcut(KeyCode.RightArrow), "");
+            ScenarioConfirm = c.Bind(ScenarioSec, "Menu activate", new KeyboardShortcut(KeyCode.Return),
+                "Launches, fires an event, or runs the highlighted action. While the menu is open the hotbar and the mouse wheel are kept from the game (same guard as the order menu).");
+            ScenarioOverlay = c.Bind(ScenarioSec, "Scenario overlay", true,
+                "While a scenario runs: its participants, relationships, phases, reasons, forced values and a short timeline, top left.");
+            ScenarioConcurrent = c.Bind(ScenarioSec, "Allow concurrent scenarios", false,
+                "Off: a scenario can only be launched when none is running. On: several at once (each tracked and cleaned up on its own).");
+            ScenarioMaxBots = c.Bind(ScenarioSec, "Scenario bots at most", 12,
+                IntRange("Across all running scenarios. A launch that would exceed it is refused.", 1, 30));
+            ScenarioSpawnTimeout = c.Bind(ScenarioSec, "Spawn timeout (s)", 30f,
+                Range("A participant not spawned and active within this is reported as failed and the launch is cleaned up.", 5f, 120f));
         }
 
         internal static float RollNerve()
         {
             float lo = Mathf.Min(NerveMin.Value, NerveMax.Value);
             float hi = Mathf.Max(NerveMin.Value, NerveMax.Value);
-            return Random.Range(lo, hi);
+            return Dice.Range(lo, hi);
         }
 
         // The override applies live, to bots already met this raid too.
@@ -705,10 +742,10 @@ namespace HandsAreHigh
         {
             float lo = Mathf.Min(RegroupMin.Value, RegroupMax.Value);
             float hi = Mathf.Max(RegroupMin.Value, RegroupMax.Value);
-            return Random.Range(lo, hi);
+            return Dice.Range(lo, hi);
         }
 
         internal static float Between(ConfigEntry<float> a, ConfigEntry<float> b) =>
-            Random.Range(Mathf.Min(a.Value, b.Value), Mathf.Max(a.Value, b.Value));
+            Dice.Range(Mathf.Min(a.Value, b.Value), Mathf.Max(a.Value, b.Value));
     }
 }

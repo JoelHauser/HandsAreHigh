@@ -17,7 +17,7 @@ namespace HandsAreHigh
     {
         public const string PluginGuid = "com.joelhauser.handsarehigh";
         public const string PluginName = "Hands Are High";
-        public const string PluginVersion = "0.9.0";
+        public const string PluginVersion = "0.10.0";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").
@@ -80,6 +80,9 @@ namespace HandsAreHigh
             _teardown.Own(gameObject.AddComponent<Runtime>());
             _teardown.Own(gameObject.AddComponent<RuntimeGui>());
             _teardown.Add(Perf.Reset);
+            // Runs first: despawns scenario bots and lifts their overrides while the registry
+            // and patches still exist.
+            _teardown.Add(Scenarios.Teardown);
 
             PrepareMethods();
             Log.LogInfo($"{PluginName} {PluginVersion} loaded; surrender layer at priority {Settings.LayerPriority.Value}");

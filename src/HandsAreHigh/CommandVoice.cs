@@ -71,7 +71,7 @@ namespace HandsAreHigh
             ETagStatus tags = me.HealthStatus | ETagStatus.Combat;
             while (Options.Count > 0)
             {
-                int i = Random.Range(0, Options.Count);
+                int i = Dice.Range(0, Options.Count);
                 EPhraseTrigger line = Options[i];
                 Options.RemoveAt(i);
                 TagBank played = speaker.Play(line, tags, true);

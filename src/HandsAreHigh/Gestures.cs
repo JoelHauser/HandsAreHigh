@@ -90,7 +90,7 @@ namespace HandsAreHigh
             float pers = WigglePersonality(s.Personality);
             float nerve = 1.3f - 0.6f * s.Nerve;
             float chance = Mathf.Min(Settings.WiggleMaxChance.Value, Settings.WiggleChance.Value * pers * nerve);
-            float roll = Random.value;
+            float roll = Dice.Value;
             bool chosen = roll < chance;
             if (Settings.LogGestures.Value)
                 Log(s, $"wiggle opportunity ({when}): base {Settings.WiggleChance.Value:0.00} x personality {pers:0.0} x nerve {nerve:0.00} " +
@@ -151,7 +151,7 @@ namespace HandsAreHigh
             float bias = DefiantPersonality(s.Personality) * (0.5f + s.Nerve);
             float factor = 1f + Settings.DefiantInfluence.Value * (bias - 1f);
             float chance = Mathf.Clamp01(Mathf.Min(Settings.DefiantMaxChance.Value, Settings.DefiantChance.Value * factor));
-            float roll = Random.value;
+            float roll = Dice.Value;
             bool chosen = roll < chance;
             if (Settings.LogGestures.Value)
                 Log(s, $"middle finger roll: base {Settings.DefiantChance.Value:0.00} x {factor:0.00} (personality/nerve {bias:0.00}) = {chance:0.000} " +
@@ -245,7 +245,7 @@ namespace HandsAreHigh
             s.WigglePendingUntil = -1f;
             s.Gesture = GestureKind.Wiggle;
             s.GestureStart = now;
-            s.GestureSign = Random.value < 0.5f ? -1f : 1f;
+            s.GestureSign = Dice.Value < 0.5f ? -1f : 1f;
             Log(s, $"wiggle starts ({Settings.WiggleSwings.Value} x {Settings.WiggleSwingSeconds.Value:0.00} s, strength {Settings.WiggleStrength.Value:0.00})");
         }
 

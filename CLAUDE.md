@@ -6,6 +6,80 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.10.0 (debug scenarios), built against `C:\HUH` 2026-11-19 (dist/HandsAreHigh-0.10.0.zip),
+0 warnings; committed and pushed to `main` 2026-11-19; not installed, never run in game.**
+0.5.0-0.10.0 are all unverified in raid. No GitHub release.
+
+Next: Joel runs the 0.10.0 scenario test plan first (it makes the 0.5.0-0.9.0 plans quick to
+reproduce: most of their steps are presets now), then the older plans. Everything below 0.10.0 unchanged in behaviour
+except: every roll goes through `Dice` (UnityEngine.Random unless a scenario seed is set),
+scenario participants carry `Nickname#S1-Tag` in all log lines, and the restraint patches /
+threat loops also consult `ScenarioShield` (one bool when idle).
+
+### 0.10.0 (debug scenario sandbox, src/HandsAreHigh/Scenarios/)
+
+F12 > 17. Debug Scenarios: "Scenario tools" (off) + "Scenario menu key" (unbound). Off = Runtime
+never calls into it. Menu: arrows move/change, Enter activates (configurable); InputGuard claims
+input while open (hotbar + wheel blocked, keys latched); order menu suppressed while open.
+- Spawn (verified in the 0.16.9 decompile, never run): `BotCreationData.Create(GetProfileDataParams
+  (side, role, normal, 0, BotSpawnParams{ShallBeGroup(false,false)}), spawner._botCreator, 1, spawner)`,
+  `AddPosition(spot, nearest AICorePoint id)`, `_inSpawnProcess++`, `IBotCreator.ActivateBot(data,
+  GetClosestZone, false, groupAction, bot => spawner.ActivateBotCallback(...))`. groupAction = a new
+  BotsGroup built like GetGroupAndSetEnemies (enemies, SetBotAsEnemy, Groups.AddNoKey) for a
+  squad's first member, the same group (+SetBotAsEnemy) after; members requested one at a time.
+  Despawn: `BotLeaveData.RemoveFromMap` for living scenario bots only; corpses left.
+- Placement before any spawn: NavMesh sample 1.5 m, same level (1.6 m), ground ray, standing
+  capsule clear (0.35 m), 1.6 m from others/any player, complete path from the anchor (<= 3x+15 m);
+  rings to 6 m; a launch places everyone or spawns nobody. Anchor ahead (distance) or crosshair.
+- Stages Placing -> Spawning (setup truce between participants, observer override if on) ->
+  Setup (preset steps with timeouts; Fatal ones mark SETUP INCOMPLETE) -> truce lifted (except
+  pairs a preset keeps: FORCED) -> Running (scheduled events) -> cleanup.
+- Forced transitions: `SurrenderRegistry.Surrender(..., decideNow)` (false skips the bot captor's
+  roll), `Captors.ForceAccept` (the real Accept minus decision/perception checks; hard limits
+  kept), `Captors.ForceGlance`, existing DebugOpening/ForceRun/ForceGrab/Leave, gesture pending
+  windows. Synthetic suppression `Suppression.Synthetic` (labelled SIMULATED).
+- Shield (ScenarioShield.cs): (shooter, target) pairs, Observer (participant -> you; also the
+  EnemyInfo ignore flag) and Truce (no flag). Same GoalEnemy/ShootData/trigger hooks as restraint;
+  excluded from captor threat, OtherThreat, CountHostiles. Hits through it: SCENARIO SHIELD LEAK.
+- Timeline: a BepInEx ILogListener (only while a scenario runs) keeps our own log lines naming a
+  participant, classified choice / no action / not eligible / EXECUTION FAILED / event; plus
+  scenario notes (FORCED / SIMULATED / real). Participants' surrender checks are always logged.
+- Logging: every scenario note goes to the log as it happens (`Scenario #N +12.3s [kind]: ...`;
+  EXECUTION FAILED as warnings; exact repeats every 10th), except lines the timeline took from our
+  own log. Logged: launch + params, refusals, spawn requested/arrived (time, distance from the
+  validated spot, group, state), setup steps done/failed, truce/override changes, scheduled events
+  firing, menu open/close and events fired, deaths, custody and recovery-target changes, cleanup
+  report (items, despawns, shield blocks, full timeline), listener attach/detach. Verbose adds
+  shield pairs, profile timing, facing. Listener and condition exceptions are reported, not swallowed.
+- Cleanup: shield pairs lifted; tracked items (all kit slots at spawn + dropped gun) removed only
+  if loose (`GameWorld.DestroyLoot`), reported if in your inventory or on anyone else; living
+  scenario bots discharged from the registry then despawned; report + timeline to the log. Raid
+  change forgets; teardown cleans up in raid; tools turned off cleans up.
+- Seed: per-participant nerve/reaction/disposition from the seed (order independent); Dice
+  seeded for the mod's other rolls while that scenario runs. The game is not deterministic.
+- Presets (17): Player vs isolated Scav; Player vs PMC; Matched Scav and PMC; PMC captures Scav;
+  PMC squad captures a bot; Captor comes under fire; Captor reloads or looks away; Nearby dropped
+  weapon; Missing or blocked weapon; Armed vs unarmed prisoner; Captor dies; Third-party observer;
+  Long-range surrender; Pit Fireteam teammate capture (needs an existing follower, refuses
+  otherwise); Commands, speech and gestures; Death during surrender or recovery; Multiple
+  simultaneous encounters. Not supported: relocating a dropped gun or blocking its path on demand.
+- Offline checks done (DLL loaded in PowerShell 5.1): 17 presets build, every param wraps/clamps,
+  log classification on sample lines. Can't run offline (Unity ECalls): Dice, timeline, all game code.
+
+### In-game test plan (0.10.0)
+
+Scenario tools on, bind a menu key, Log decisions/restraint on. Grep `Scenario #`, `#S1-`,
+`SETUP INCOMPLETE`, `SCENARIO SHIELD LEAK`, `Scenario shield:`, `report`.
+1. Each preset once on Customs/Factory: spawn line per participant, no `spawn failed`, nobody in
+   a wall or on another floor, group ids shared within a squad only; Clean up: `removed
+   (BotLeaveData.RemoveFromMap)`, gun `removed from the ground`.
+2. Launch/clean up 5x: participant/ shield counts back to 0 (Profile line), no duplicate timeline
+   lines, no errors; F12 off mid-scenario cleans up.
+3. Menu open, press 1-0 and wheel: no hotbar use; close, hotbar works.
+4. Natural Scav preset: overlay `last check` updates every ~5 s; shoot past him: fire rises.
+5. Observer override on: participants never target you; off: they do.
+6. Take a scenario gun into your inventory, clean up: reported `IN YOUR INVENTORY`, still yours.
+
 **0.9.0, built on the work laptop against `C:\HUH` 2026-11-19 (dist/HandsAreHigh-0.9.0.zip),
 0 warnings; committed and pushed to `main` 2026-11-19; not installed, never run in game.**
 (0.7.0 + 0.8.0 were one commit before it.) 0.5.0-0.9.0 are all unverified in raid. No GitHub release.

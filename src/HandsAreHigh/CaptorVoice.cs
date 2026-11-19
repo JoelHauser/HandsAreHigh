@@ -203,7 +203,7 @@ namespace HandsAreHigh
             ETagStatus mask = MaskFor(sp.Bot);
             while (Options.Count > 0)
             {
-                int i = Random.Range(0, Options.Count);
+                int i = Dice.Range(0, Options.Count);
                 EPhraseTrigger trig = Options[i];
                 Options.RemoveAt(i);
                 TagBank played = null;

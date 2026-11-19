@@ -215,14 +215,14 @@ namespace HandsAreHigh
                 Set(s, m, RestraintKind.Reject, $"goes against {captorName}'s {decision}: he saw {s.Name} attack before", squad: true);
                 return;
             }
-            float roll = Random.value;
+            float roll = Dice.Value;
             if (roll < Settings.SquadRejectChance.Value * (2f - Mercy(mp, h)))
             {
                 Set(s, m, RestraintKind.Reject, $"goes against {captorName}'s {decision} (personality {Personality(mp, h)}, roll {roll:0.000})", squad: true);
                 return;
             }
             bool near = (mp.Position - s.Bot.Position).sqrMagnitude < 25f * 25f;
-            float watch = custody && near ? Settings.WatchSeconds.Value * Random.Range(0.6f, 1.2f) : 0f;
+            float watch = custody && near ? Settings.WatchSeconds.Value * Dice.Range(0.6f, 1.2f) : 0f;
             Set(s, m, holds, $"{captorName}'s {decision}{(watch > 0f ? ", watches him" : "")}", squad: true, watch: watch);
         }
 
@@ -371,7 +371,7 @@ namespace HandsAreHigh
             Player captor = s.Captor;
             if (captor != null && !captor.IsAI && Perception.Alive(captor) && o.BotsGroup != null && o.BotsGroup.IsAlly(captor))
             {
-                if (Random.value < Settings.SquadRejectChance.Value * (2f - Mercy(p, h)))
+                if (Dice.Value < Settings.SquadRejectChance.Value * (2f - Mercy(p, h)))
                     Set(s, o, RestraintKind.Reject, $"won't spare your prisoner {who} (personality {Personality(p, h)})", false);
                 else
                     Set(s, o, RestraintKind.Respect, $"your prisoner", true);
@@ -389,7 +389,7 @@ namespace HandsAreHigh
             float mercy = Mercy(p, h);
             float baseChance = situation == 0 ? Settings.ObserverRespect.Value : Settings.FleeingRespect.Value;
             float chance = Mathf.Clamp(baseChance * mercy, 0f, 0.97f);
-            float roll = Random.value;
+            float roll = Dice.Value;
             string why = $"{who} {(situation == 0 ? "has his hands up" : "runs, unarmed")}; mercy x{mercy:0.00} ({Personality(p, h)}), chance {chance:0.00}, roll {roll:0.00}";
             if (roll < chance)
             {
@@ -412,7 +412,7 @@ namespace HandsAreHigh
                     EnemyInfo e = kv.Value;
                     if (e == null || !e.IsVisible || (object)e.Person == prisoner) continue;
                     if (e.Person?.HealthController == null || !e.Person.HealthController.IsAlive) continue;
-                    if (e.Person is Player ep && (HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep))) continue;
+                    if (e.Person is Player ep && (HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep))) continue;
                     what = e.Person is Player pl ? Name(pl) : "an enemy";
                     return true;
                 }
@@ -430,7 +430,7 @@ namespace HandsAreHigh
         // (0.75-1.25). Documented tuning, not game data.
         internal static float Mercy(Player p, BotHistory h)
         {
-            if (h.Mercy <= 0f) h.Mercy = Random.Range(0.75f, 1.25f);
+            if (h.Mercy <= 0f) h.Mercy = Dice.Range(0.75f, 1.25f);
             float m;
             switch (Personality(p, h))
             {
@@ -519,7 +519,8 @@ namespace HandsAreHigh
             _cursor = 0;
         }
 
-        internal static string Name(Player p) => p?.Profile?.Nickname ?? "someone";
+        // Scenario participants carry their scenario tag (Nickname#S1-Scav) in every log line.
+        internal static string Name(Player p) => p == null ? "someone" : Scenarios.Label(p);
 
         // ---- the trigger guard ----------------------------------------------------------------
 
@@ -561,8 +562,12 @@ namespace HandsAreHigh
         [HarmonyPrefix]
         private static bool Prefix(EnemyInfo value, BotOwner ____owner)
         {
-            if (!Restraint.Any || value == null) return true;
-            try { return !Restraint.HoldsFire(____owner?.GetPlayer, value.Person); }
+            if ((!Restraint.Any && !ScenarioShield.Active) || value == null) return true;
+            try
+            {
+                Player self = ____owner?.GetPlayer;
+                return !Restraint.HoldsFire(self, value.Person) && !ScenarioShield.Blocks(self, value.Person);
+            }
             catch { return true; }
         }
     }
@@ -574,11 +579,19 @@ namespace HandsAreHigh
         [HarmonyPrefix]
         private static bool Prefix(BotOwner ____owner, ref bool __result)
         {
-            if (!Restraint.Any) return true;
+            if (!Restraint.Any && !ScenarioShield.Active) return true;
             try
             {
                 EnemyInfo goal = ____owner?.Memory?.GoalEnemy;
-                if (goal == null || !Restraint.HoldsFire(____owner.GetPlayer, goal.Person)) return true;
+                if (goal == null) return true;
+                if (ScenarioShield.Blocks(____owner.GetPlayer, goal.Person))
+                {
+                    ScenarioShield.LogBlocked(____owner.GetPlayer, goal.Person as Player, "ShootData.Shoot");
+                    ____owner.ShootData.EndShoot();
+                    __result = false;
+                    return false;
+                }
+                if (!Restraint.HoldsFire(____owner.GetPlayer, goal.Person)) return true;
                 Restraint.LogLeakBlocked(____owner.GetPlayer, goal.Person as Player, "ShootData.Shoot");
                 ____owner.ShootData.EndShoot();
                 __result = false;
@@ -595,12 +608,18 @@ namespace HandsAreHigh
         [HarmonyPrefix]
         private static void Prefix(Player.FirearmController __instance, ref bool pressed)
         {
-            if (!pressed || !Restraint.Any) return;
+            if (!pressed || (!Restraint.Any && !ScenarioShield.Active)) return;
             try
             {
                 Player shooter = __instance._player;
                 if (shooter == null || !shooter.IsAI) return;
-                if (!Restraint.AimedAtRestrained(shooter, out Player prisoner)) return;
+                if (ScenarioShield.Active && ScenarioShield.AimedAtShielded(shooter, out Player shielded))
+                {
+                    pressed = false;
+                    ScenarioShield.LogBlocked(shooter, shielded, "trigger");
+                    return;
+                }
+                if (!Restraint.Any || !Restraint.AimedAtRestrained(shooter, out Player prisoner)) return;
                 pressed = false;
                 Restraint.LogLeakBlocked(shooter, prisoner, "trigger");
             }

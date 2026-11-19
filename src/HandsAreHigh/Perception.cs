@@ -102,8 +102,8 @@ namespace HandsAreHigh
 
             for (int i = 0; i < tries; i++)
             {
-                float angle = Random.Range(-75f, 75f);
-                float dist = distance * Random.Range(0.6f, 1.3f);
+                float angle = Dice.Range(-75f, 75f);
+                float dist = distance * Dice.Range(0.6f, 1.3f);
                 Vector3 candidate = bot.Position + Quaternion.Euler(0f, angle, 0f) * away * dist;
                 if (!NavMesh.SamplePosition(candidate, out NavMeshHit hit, 6f, NavMesh.AllAreas)) continue;
 
@@ -138,8 +138,8 @@ namespace HandsAreHigh
             int tries = Settings.PathCandidates.Value;
             for (int i = 0; i < tries; i++)
             {
-                float angle = Random.Range(-110f, 110f);
-                float dist = radius * Random.Range(0.3f, 1f);
+                float angle = Dice.Range(-110f, 110f);
+                float dist = radius * Dice.Range(0.3f, 1f);
                 Vector3 candidate = bot.Position + Quaternion.Euler(0f, angle, 0f) * away * dist;
                 if (!NavMesh.SamplePosition(candidate, out NavMeshHit hit, 3f, NavMesh.AllAreas)) continue;
                 if (LineClear(threatEye, hit.position + Vector3.up * 1.2f)) continue;   // still exposed

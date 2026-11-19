@@ -119,5 +119,17 @@ namespace HandsAreHigh
             }
             catch { return false; }
         }
+
+        // A real Pit Fireteam follower (its boss is Pit Fireteam's pitAIBossPlayer), not merely
+        // a friendly bot. Debug scenarios use this to find an existing teammate.
+        internal static bool IsPitFollower(BotOwner o)
+        {
+            try
+            {
+                IBossToFollow boss = o?.BotFollower?.BossToFollow;
+                return boss != null && boss.GetType().Name == "pitAIBossPlayer";
+            }
+            catch { return false; }
+        }
     }
 }

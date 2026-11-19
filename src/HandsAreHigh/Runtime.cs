@@ -21,7 +21,7 @@ namespace HandsAreHigh
         {
             if (_gui == null) _gui = GetComponent<RuntimeGui>();
             if (_gui == null) return;
-            bool need = inRaid && (SurrenderRegistry.Any || OrderMenu.HasNote);
+            bool need = inRaid && (SurrenderRegistry.Any || OrderMenu.HasNote || ScenarioUi.NeedsGui);
             if (_gui.enabled != need) _gui.enabled = need;
         }
 
@@ -35,6 +35,7 @@ namespace HandsAreHigh
             if (!inRaid)
             {
                 if (Menu.IsOpen || InputGuard.Engaged) Menu.Reset();
+                if (ScenarioUi.Open) ScenarioUi.Reset();
                 SurrenderRegistry.EnsureRaid();
                 return;
             }
@@ -54,8 +55,16 @@ namespace HandsAreHigh
             Perf.End(Perf.Sec.Natural, t0);
 
             Player me = Singleton<GameWorld>.Instance.MainPlayer;
+            // Debug scenarios: nothing at all unless the tools are on or one is still running.
+            if (Settings.ScenariosEnabled.Value || Scenarios.Any)
+            {
+                try { Scenarios.Tick(me); } catch (Exception e) { HandsAreHighPlugin.Report("scenarios", e); }
+            }
             t0 = Perf.Begin();
-            try { Menu.Update(me); } catch (Exception e) { HandsAreHighPlugin.Report("order menu", e); }
+            if (!ScenarioUi.Open)
+            {
+                try { Menu.Update(me); } catch (Exception e) { HandsAreHighPlugin.Report("order menu", e); }
+            }
             Perf.End(Perf.Sec.Menu, t0);
 
             // Gameplay, not debug: the optional Shout Stop key (unbound by default).
@@ -158,6 +167,7 @@ namespace HandsAreHigh
         private void Draw()
         {
             Runtime.Menu.OnGUI();
+            if (ScenarioUi.NeedsGui) ScenarioUi.OnGUI();
             if (!Settings.Overlay.Value || !SurrenderRegistry.Any) return;
 
             if (_overlay == null) _overlay = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft, fontSize = 13 };
@@ -170,7 +180,7 @@ namespace HandsAreHigh
             {
                 if (s.Bot == null) continue;
                 float d = me != null ? Vector3.Distance(me.Position, s.Bot.Position) : 0f;
-                _sb.Append($"{s.Name}: {s.Phase}{(s.Suspended ? " (asleep)" : "")}, order {s.Order}, nerve {s.Nerve:0.00}, arms {s.Weight:0.00}, {d:0} m");
+                _sb.Append($"{(Scenarios.Watching(s.Bot) ? "[scenario] " : "")}{s.Name}: {s.Phase}{(s.Suspended ? " (asleep)" : "")}, order {s.Order}, nerve {s.Nerve:0.00}, arms {s.Weight:0.00}, {d:0} m");
                 if (s.TargetWeapon != null) _sb.Append($", going for {s.TargetWeapon.ShortName.Localized()}");
                 if (s.Phase == Phase.HandsUp)
                 {

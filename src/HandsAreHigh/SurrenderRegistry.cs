@@ -97,6 +97,7 @@ namespace HandsAreHigh
             if (States.Count > 0 || History.Count > 0)
                 HandsAreHighPlugin.Log.LogInfo("New raid: surrender state cleared");
             _world = world;
+            Scenarios.ForgetRaid();
             Restraint.Clear();
             Captors.Clear();
             CaptorVoice.Clear();
@@ -125,7 +126,7 @@ namespace HandsAreHigh
                 {
                     Nerve = Settings.RollNerve(),
                     Reaction = Settings.Between(Settings.ReactionMin, Settings.ReactionMax),
-                    NextEval = Time.time + Random.value * Settings.EvalInterval.Value
+                    NextEval = Time.time + Dice.Value * Settings.EvalInterval.Value
                 };
                 History[id] = h;
             }
@@ -163,7 +164,9 @@ namespace HandsAreHigh
 
         // knownAt: where he knows his threat to be (NaturalSurrender passes the EnemyInfo's last
         // sighting); null when the captor is right there (debug keys, being caught again).
-        internal static void Surrender(Player bot, Player captor, string reason, Vector3? knownAt = null)
+        // decideNow false (debug scenarios, forced custody only): a bot captor's decision is not
+        // asked here; the caller gives custody through Captors.ForceAccept straight after.
+        internal static void Surrender(Player bot, Player captor, string reason, Vector3? knownAt = null, bool decideNow = true)
         {
             if (bot == null || captor == null || !Settings.Enabled.Value) return;
             EnsureRaid();
@@ -199,7 +202,7 @@ namespace HandsAreHigh
                 StartDrop(existing);
                 Voice.Say(existing, VoiceEvent.Surrender);
                 Voice.ScheduleChatter(existing);
-                if (captor.IsAI) Captors.OnSurrender(existing, captor, reason);
+                if (captor.IsAI && decideNow) Captors.OnSurrender(existing, captor, reason);
                 return;
             }
 
@@ -207,9 +210,9 @@ namespace HandsAreHigh
             var s = new SurrenderState
             {
                 Bot = bot,
-                Name = bot.Profile?.Nickname ?? bot.ProfileId,
+                Name = Scenarios.Label(bot),
                 Captor = captor,
-                Seed = Random.value * 100f,
+                Seed = Dice.Value * 100f,
                 RolledNerve = h.Nerve,
                 CaptorLastSeen = knownAt ?? captor.Position,
                 DropPosition = bot.Position,
@@ -247,7 +250,7 @@ namespace HandsAreHigh
             // A captor who gives up loses his own prisoner (no capture loops); then the bot he
             // gave up to decides about him.
             Captors.EndFor(bot, "surrendered himself");
-            if (captor.IsAI) Captors.OnSurrender(s, captor, reason);
+            if (captor.IsAI && decideNow) Captors.OnSurrender(s, captor, reason);
         }
 
         // A human captor close and in sight has his surrender already (as before 0.9.0); far away,
@@ -458,7 +461,7 @@ namespace HandsAreHigh
                 if (s.Bot == null || s.Bot == victim || s.Phase != Phase.HandsUp || s.Suspended) continue;
                 if ((s.Bot.Position - at).sqrMagnitude > r * r) continue;
                 if (!Perception.LineClear(Perception.Eye(s.Bot), at + Vector3.up * 1.2f)) continue;
-                float roll = Random.value;
+                float roll = Dice.Value;
                 if (roll >= Settings.WitnessEscape.Value) continue;
                 s.BeginRetreat($"saw {what}", emergency: true);
             }
@@ -552,6 +555,21 @@ namespace HandsAreHigh
                 Restraint.ForgetPrisoner(p);
                 States.Remove(p);
             }
+        }
+
+        // A debug scenario is removing this bot (it is about to be despawned): the same exit as
+        // a bot finishing (Tick's Finished loop), at once: gestures and speech dropped, events
+        // unhooked, custody ended, restraint forgotten. No phase change, nothing done to him.
+        internal static bool Discharge(Player bot, string why)
+        {
+            if ((object)bot == null || !States.TryGetValue(bot, out SurrenderState s)) return false;
+            Release(s, why);
+            Unhook(s);
+            Captors.EndCustody(s, why);
+            Restraint.ForgetPrisoner(bot);
+            States.Remove(bot);
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: removed from the surrender registry ({why})");
+            return true;
         }
 
         // Every state that leaves the registry must come through here, or the old

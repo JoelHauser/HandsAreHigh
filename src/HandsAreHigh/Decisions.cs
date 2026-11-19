@@ -127,14 +127,14 @@ namespace HandsAreHigh
         {
             float now = Time.time;
             bool fresh = now >= s.ComplyUntil;
-            float hold = Settings.IntimidationSeconds.Value * (1.3f - 0.6f * s.Nerve) * Random.Range(0.8f, 1.2f);
+            float hold = Settings.IntimidationSeconds.Value * (1.3f - 0.6f * s.Nerve) * Dice.Range(0.8f, 1.2f);
             s.ComplyUntil = Mathf.Max(s.ComplyUntil, now + hold);
             s.DecideAt = -1f;
             s.OpenSince = -1f;
             s.LastCovered = true;
             Gestures.Cancel(s, "warning shot");
             if (!fresh) return;
-            if (Settings.Chatter.Value && Random.value < Mathf.Clamp01(Settings.ReplyChance.Value + 0.3f))
+            if (Settings.Chatter.Value && Dice.Value < Mathf.Clamp01(Settings.ReplyChance.Value + 0.3f))
                 Voice.Say(s, VoiceEvent.Threatened, s.NoticeDelay());
             if (Settings.LogDecisions.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: warning shot from {shooter.Profile?.Nickname} passed {miss:0.0} m away: freezes for {hold:0.0} s (nerve {s.Nerve:0.00})");

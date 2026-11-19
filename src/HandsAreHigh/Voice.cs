@@ -134,7 +134,7 @@ namespace HandsAreHigh
         // A reaction to something the player did: only sometimes, after his reaction time.
         internal static void Reply(SurrenderState s, VoiceEvent e)
         {
-            if (!Settings.Chatter.Value || Random.value >= Settings.ReplyChance.Value) return;
+            if (!Settings.Chatter.Value || Dice.Value >= Settings.ReplyChance.Value) return;
             Say(s, e, s.NoticeDelay());
         }
 
@@ -181,12 +181,12 @@ namespace HandsAreHigh
             if (!Settings.Chatter.Value || s.Phase != Phase.HandsUp || s.Suspended || s.Progress < 1f) return;
             if (s.NextChatter <= 0f || now < s.NextChatter || s.PendingVoice != null) return;
             ScheduleChatter(s);
-            if (Random.value >= Settings.ChatterChance.Value) return;
+            if (Dice.Value >= Settings.ChatterChance.Value) return;
 
             bool bold = s.Nerve >= 0.9f || (s.Nerve >= 0.7f && s.Fight >= 1.2f);
             VoiceEvent e;
-            if (Settings.DefiantRemarks.Value && bold && Random.value < 0.5f) e = VoiceEvent.Defiant;
-            else if (s.Injury >= 0.5f || Random.value < 0.35f) e = VoiceEvent.Plead;
+            if (Settings.DefiantRemarks.Value && bold && Dice.Value < 0.5f) e = VoiceEvent.Defiant;
+            else if (s.Injury >= 0.5f || Dice.Value < 0.35f) e = VoiceEvent.Plead;
             else e = VoiceEvent.Idle;
             Say(s, e);
         }
@@ -230,7 +230,7 @@ namespace HandsAreHigh
             ETagStatus mask = MaskFor(s.Bot);
             while (Options.Count > 0)
             {
-                int i = Random.Range(0, Options.Count);
+                int i = Dice.Range(0, Options.Count);
                 EPhraseTrigger line = Options[i];
                 Options.RemoveAt(i);
                 TagBank played = null;
