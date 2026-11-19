@@ -27,17 +27,30 @@ namespace HandsAreHigh
             // those frames with empty hands (AbstractHandsController.ManualLateUpdate is empty).
             if (!Kneel.BodyUpdated(__instance)) return;
             bool kneel = Kneel.Posing(s);
-            if (s.Weight <= 0f && !kneel) return;
+            bool look = Presence.Posing(s);
+            if (s.Weight <= 0f && !kneel && !look) return;
             long t0 = Perf.Begin();
-            // One owner per bone, in order: the kneel's body (pelvis, torso, legs), then the
-            // hands-up arms in the corrected torso frame, then the hands-behind-head arms, then
-            // the knee brace (one arm). The standing pose never runs after the kneel's.
+            // One owner per bone, in order: the kneel's body (pelvis, torso, legs), the torso's
+            // share of a look and a flinch's hunch (upper spine, collarbones), then the hands-up
+            // arms in the corrected torso frame, the neck and head (look, flinch), then the
+            // hands-behind-head arms (they follow the head), then the knee brace (one arm). The
+            // standing pose never runs after the kneel's.
             if (kneel)
             {
                 try { Kneel.ApplyBody(__instance, s); }
                 catch (System.Exception e) { HandsAreHighPlugin.Report("kneel pose", e); }
             }
+            if (look)
+            {
+                try { Presence.ApplyUpper(__instance, s); }
+                catch (System.Exception e) { HandsAreHighPlugin.Report("look torso", e); }
+            }
             if (s.Weight > 0f) ArmPose.Apply(__instance, s);
+            if (look)
+            {
+                try { Presence.ApplyHead(__instance, s); }
+                catch (System.Exception e) { HandsAreHighPlugin.Report("look head", e); }
+            }
             if (kneel)
             {
                 try { Kneel.ApplyHands(__instance, s); Kneel.ApplyBrace(__instance, s); }
@@ -169,7 +182,7 @@ namespace HandsAreHigh
         // arms and bots don't shake in step.
         private static Vector2 Tremble(SurrenderState s, int arm)
         {
-            float amp = Settings.TrembleDegrees.Value;
+            float amp = Settings.TrembleDegrees.Value * Presence.Tremble(s);
             if (amp <= 0f) return Vector2.zero;
             float t = Time.time * Settings.TrembleSpeed.Value + s.Seed + arm * 13.7f;
             return new Vector2(Mathf.PerlinNoise(t, 0.5f) - 0.5f, Mathf.PerlinNoise(0.5f, t) - 0.5f) * (2f * amp);

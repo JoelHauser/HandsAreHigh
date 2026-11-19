@@ -200,6 +200,7 @@ namespace HandsAreHigh
                     else if (s.WigglePendingUntil >= 0f || s.DefiantPendingUntil >= 0f) _sb.Append(", gesture pending");
                 }
                 if (Kneel.Describe(s) is string kneel) _sb.Append($", {kneel}");
+                if (Presence.Describe(s) is string look) _sb.Append($", {look}");
                 if (s.PendingVoice != null) _sb.Append($", to say {s.PendingVoice}");
                 _sb.Append('\n');
                 lines++;

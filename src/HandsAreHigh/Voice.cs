@@ -183,10 +183,12 @@ namespace HandsAreHigh
             ScheduleChatter(s);
             if (Dice.Value >= Settings.ChatterChance.Value) return;
 
-            bool bold = s.Nerve >= 0.9f || (s.Nerve >= 0.7f && s.Fight >= 1.2f);
+            // Demeanor colours what he says (a defiant man insults more, a frightened one pleads
+            // more); it doesn't change what he does.
+            bool bold = s.Nerve >= 0.9f || (s.Nerve >= 0.7f && s.Fight >= 1.2f) || Presence.Defiant(s);
             VoiceEvent e;
-            if (Settings.DefiantRemarks.Value && bold && Dice.Value < 0.5f) e = VoiceEvent.Defiant;
-            else if (s.Injury >= 0.5f || Dice.Value < 0.35f) e = VoiceEvent.Plead;
+            if (Settings.DefiantRemarks.Value && bold && Dice.Value < (Presence.Defiant(s) ? 0.65f : 0.5f)) e = VoiceEvent.Defiant;
+            else if (s.Injury >= 0.5f || Dice.Value < Mathf.Clamp01(0.35f * Presence.Plead(s))) e = VoiceEvent.Plead;
             else e = VoiceEvent.Idle;
             Say(s, e);
         }

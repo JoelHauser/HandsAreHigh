@@ -133,6 +133,7 @@ namespace HandsAreHigh
             s.OpenSince = -1f;
             s.LastCovered = true;
             Gestures.Cancel(s, "warning shot");
+            Presence.OnWarningShot(s);
             if (!fresh) return;
             if (Settings.Chatter.Value && Dice.Value < Mathf.Clamp01(Settings.ReplyChance.Value + 0.3f))
                 Voice.Say(s, VoiceEvent.Threatened, s.NoticeDelay());

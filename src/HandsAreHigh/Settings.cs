@@ -28,6 +28,7 @@ namespace HandsAreHigh
         private const string BotCaptor = "15. Bots taking prisoners";
         private const string RestraintSec = "16. Sparing surrendered enemies";
         private const string ScenarioSec = "17. Debug Scenarios";
+        private const string PresenceSec = "18. Attention and demeanor";
 
         // 01
         internal static ConfigEntry<bool> Enabled;
@@ -267,6 +268,26 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> KneelMaxSlope;
         internal static ConfigEntry<bool> KneelFallbackCrouch;
         internal static ConfigEntry<bool> LogKneel;
+        internal static ConfigEntry<bool> KneelReposition;
+        internal static ConfigEntry<float> KneelSpotRadius;
+        internal static ConfigEntry<KneelEscapeChoice> KneelTestEscape;
+        // 18 Attention and demeanor
+        internal static ConfigEntry<bool> DemeanorEnabled;
+        internal static ConfigEntry<float> DemeanorStrength;
+        internal static ConfigEntry<bool> HeadMovement;
+        internal static ConfigEntry<float> GlanceMin;
+        internal static ConfigEntry<float> GlanceMax;
+        internal static ConfigEntry<float> HeadMaxYaw;
+        internal static ConfigEntry<float> HeadMaxDown;
+        internal static ConfigEntry<float> HeadMaxUp;
+        internal static ConfigEntry<float> HeadSpeed;
+        internal static ConfigEntry<float> TorsoAssist;
+        internal static ConfigEntry<bool> KneelIdle;
+        internal static ConfigEntry<float> KneelIdleStrength;
+        internal static ConfigEntry<bool> Flinch;
+        internal static ConfigEntry<float> FlinchStrength;
+        internal static ConfigEntry<float> FlinchCooldown;
+        internal static ConfigEntry<bool> LogAttention;
         internal static ConfigEntry<bool> KneelGizmos;
         internal static ConfigEntry<KeyboardShortcut> KneelKey;
         internal static ConfigEntry<KeyboardShortcut> StandKey;
@@ -671,6 +692,9 @@ namespace HandsAreHigh
             LogDecisions = c.Bind(Debug, "Log decisions", true,
                 "Each choice a held bot makes (act on an opening, react to you leaving) with its main reasons. Rolls where he stays put only with Verbose logs.");
             LogGestures = c.Bind(Debug, "Log gestures", true, "Wiggle rolls, starts, completions, skips and interruptions.");
+            LogAttention = c.Bind(Debug, "Log attention", false, "Each glance (what at, why) and each change of demeanor. Demeanor choices are also logged with Log decisions.");
+            KneelTestEscape = c.Bind(Debug, "Kneel test escape outcome", KneelEscapeChoice.Auto,
+                "When a bot escaping from his knees is covered again (aim at him while he rises from a forced run, Ctrl+Alt+K with Kneel test rise Escape): force what he does. Auto: his own roll.");
             LogVoice = c.Bind(Debug, "Log voice", true,
                 "Every line a held bot (or you, for orders) says, and whether audio actually started (or why not: no such line in his voice, out of earshot, speaker busy).");
             // 15 Bots taking prisoners
@@ -794,8 +818,32 @@ namespace HandsAreHigh
             KneelMaxStep = c.Bind(KneelSec, "Max ground step (m)", 0.12f,
                 Range("Ground under each knee and foot must be within this of where he stands, or he doesn't kneel (stairs, ledges, rubble).", 0.03f, 0.3f));
             KneelMaxSlope = c.Bind(KneelSec, "Max slope (deg)", 20f, Range("Steeper ground under a knee or foot: he doesn't kneel.", 5f, 40f));
-            KneelFallbackCrouch = c.Bind(KneelSec, "Crouch when kneeling is impossible", true,
-                "Where kneeling isn't possible (ground, walls, a hurt leg): on, he crouches with his hands up; off, he stays standing with his hands up. Either way the reason is logged and shown.");
+            KneelFallbackCrouch = c.Bind(KneelSec, "Crouch when kneeling is impossible", false,
+                "Where kneeling isn't possible (ground, walls, both legs hurt, no spot with room nearby): on, he crouches with his hands up; off (default from 0.13.0), he stays standing with his hands up. Either way the reason is logged and shown.");
+            KneelReposition = c.Bind(KneelSec, "Step to a spot with room", true,
+                "No room or ground to kneel where he stands (a wall at his back, stairs, a slope, kit that won't fit): he looks once round him for a spot that fits and walks there with his hands up, facing you, then kneels. At most two short walks per order; otherwise he stays as the setting above says and the reason is shown.");
+            KneelSpotRadius = c.Bind(KneelSec, "Room search radius (m)", 2f,
+                Range("How far from where he stands a spot to kneel is looked for (four rings of eight spots, nearest first).", 0.5f, 4f));
+
+            DemeanorEnabled = c.Bind(PresenceSec, "Demeanor styles", true,
+                "Each held bot carries himself in one of four ways for the encounter (resigned, frightened, cautious, defiant), from nerve, SAIN personality, wounds, incoming fire and squadmates near (faction only a mild tendency). It shapes how he kneels and rises, where he looks, how much he fidgets and flinches and what he says. Presentation only: it never changes whether he complies, breaks or fights.");
+            DemeanorStrength = c.Bind(PresenceSec, "Demeanor strength", 1f, Range("How different the styles look from each other. 0: everyone neutral.", 0f, 1.5f));
+            HeadMovement = c.Bind(PresenceSec, "Head movement", true,
+                "Held bots watch their captor and now and then glance at what they know about: their dropped gun, where fire came from, a squadmate in sight, a way out, the ground. A glance holds briefly and returns to the captor; it never means he is about to act.");
+            GlanceMin = c.Bind(PresenceSec, "Glance every min (s)", 3f, Range("Time between glances, between min and max, scaled by demeanor (defiant men hold your eyes longer).", 1f, 30f));
+            GlanceMax = c.Bind(PresenceSec, "Glance every max (s)", 9f, Range("", 1f, 60f));
+            HeadMaxYaw = c.Bind(PresenceSec, "Head turn max (deg)", 70f, Range("Left/right from his body. About half of it with his hands behind his head.", 20f, 85f));
+            HeadMaxDown = c.Bind(PresenceSec, "Head down max (deg)", 35f, Range("", 5f, 60f));
+            HeadMaxUp = c.Bind(PresenceSec, "Head up max (deg)", 20f, Range("At most 5 deg with his hands behind his head.", 0f, 40f));
+            HeadSpeed = c.Bind(PresenceSec, "Head speed (deg per s)", 200f, Range("Top speed of a head turn (eased in and out).", 40f, 600f));
+            TorsoAssist = c.Bind(PresenceSec, "Torso turn max (deg)", 15f, Range("A look further than 25 deg to the side turns his upper back by up to this much; never his hips or kneeling body.", 0f, 30f));
+            KneelIdle = c.Bind(PresenceSec, "Kneeling idle movement", true,
+                "While he kneels: an occasional small weight shift of the hips and settling of the elbows, on his own random timing; knees and feet stay put. The game's own breathing is kept (not doubled).");
+            KneelIdleStrength = c.Bind(PresenceSec, "Kneeling idle strength", 1f, Range("", 0f, 2f));
+            Flinch = c.Bind(PresenceSec, "Flinch at near misses", true,
+                "A round passing close to a held bot's head (anyone's, within the near-miss radius, nothing in between) makes him duck his head and hunch his shoulders for half a second. Cosmetic: a hit is handled as a hit, and nothing waits for the flinch.");
+            FlinchStrength = c.Bind(PresenceSec, "Flinch strength", 1f, Range("", 0f, 1.5f));
+            FlinchCooldown = c.Bind(PresenceSec, "Flinch cooldown (s)", 0.7f, Range("Automatic fire can't restart it faster than this; each flinch leaves the next weaker for a few seconds.", 0.2f, 5f));
         }
 
         // 17 Debug Scenarios

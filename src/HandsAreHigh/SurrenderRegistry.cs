@@ -202,6 +202,7 @@ namespace HandsAreHigh
                 StartDrop(existing);
                 Voice.Say(existing, VoiceEvent.Surrender);
                 Voice.ScheduleChatter(existing);
+                Presence.NewEncounter(existing);
                 if (captor.IsAI && decideNow) Captors.OnSurrender(existing, captor, reason);
                 return;
             }
@@ -225,6 +226,7 @@ namespace HandsAreHigh
             s.HitHandler = (info, part, absorbed) =>
             {
                 s.WasHit = true;
+                Presence.OnHit(s);   // a hit is not a flinch: the layer's hit response owns him
                 try { Restraint.OnPrisonerHit(s, info); } catch (System.Exception e) { HandsAreHighPlugin.Report("prisoner hit", e); }
             };
             bot.BeingHitAction += s.HitHandler;
@@ -247,6 +249,7 @@ namespace HandsAreHigh
             StartDrop(s);
             Voice.Say(s, VoiceEvent.Surrender);
             Voice.ScheduleChatter(s);
+            Presence.NewEncounter(s);
             // A captor who gives up loses his own prisoner (no capture loops); then the bot he
             // gave up to decides about him.
             Captors.EndFor(bot, "surrendered himself");
@@ -506,6 +509,7 @@ namespace HandsAreHigh
                 // try/catch inline: a lambda here would allocate a closure per bot per frame.
                 try { Voice.Tick(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("voice", e); }
                 try { Kneel.Update(s, dt); } catch (System.Exception e) { HandsAreHighPlugin.Report("kneel", e); }
+                try { Presence.Update(s, dt); } catch (System.Exception e) { HandsAreHighPlugin.Report("presence", e); }
                 try { Gestures.Update(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("gestures", e); }
 
                 if (s.ArmsUp)

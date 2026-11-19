@@ -6,6 +6,68 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.13.0 IN PROGRESS (2026-11-19, work laptop): code written, `dotnet build` against `C:\HUH`
+succeeds with 0 warnings; NOT packed (no zip), not installed, never run in game, no offline sim
+run for it.** Committed mid-work at Joel's request. Eight-part request (kneel spot, rise-to-walk,
+head attention, interrupted escape, injury-aware kneel, kneeling idle, flinch, demeanor).
+
+Where it was left off (resume here):
+- Done in code: everything listed below. Last step done: review pass over Kneel.Update /
+  ApplyBody / ApplyHands; fixed freeze-before-reversal order, kept KneelAnchorFwd through the rise
+  (resetting it made legs jump), debug-opening guard in ReassessEscape, overlay/gizmo for the spot.
+- Still to do: (1) finish the review of Presence.cs (head axis measurement, sign conventions are
+  reasoned, not seen), SearchSpot, ReassessEscape; (2) offline check: extend scratchpad
+  kneel_sim2/brace_sim (old session c1653c59) for the new style `Free` hand-off points (0.20/0.20/
+  0.24) and the moved urgent brace windows (defensive out 0.31->0.21, escape 0.36->0.25), which
+  were NOT re-simulated; (3) `scripts\pack.ps1 -SPTPath C:\HUH -BigBrainDll <bigbrain>` to make
+  dist/HandsAreHigh-0.13.0.zip; (4) write the 0.13.0 in-game test plan here; (5) report to Joel.
+- Changed default: "Crouch when kneeling is impossible" now false (spec: stay standing). Joel's
+  existing cfg keeps `true`; tell him to flip it.
+
+0.13.0 contents:
+- Kneel spot (Kneel.cs TryBegin/SearchSpot/SpotWalk/SpotFailed; layer HandsUp Order.Kneel):
+  Request only refuses what no step fixes (HardChecks: rig, prone, simplified skeleton, both legs
+  broken/destroyed). At start: Fits = ground + room (vest widens torso capsule, backpack capsule
+  behind, helmet raises top) + front-step room for either leg. Not fitting: one search, 4 rings
+  (0.25/0.45/0.7/1 x "Room search radius" 2 m) x 8 angles, 6 candidates/frame, heavy budget;
+  candidate must be on NavMesh at his level, >= 1.5 m from captor, in captor's sight if seen,
+  standing capsule clear, short complete path (<= 2.5x straight + 1 m). Walks there (MoveTo, hands
+  up, no sprint, facing captor; Phase stays HandsUp so captors/Restraint see hands up), arrive
+  0.3 m, stall 2 s / 6 s limit; max 2 walks per order; else Fallback with menu note. Waits for
+  facing within 15 deg before starting.
+- Rise into walk: KneelStyle.Free per style (hand-off t when walking: steady 0.20, frightened
+  0.17, one-knee 0.14, compliant 0.20, defensive 0.20, escape 0.24; was 0.15 urgent-only).
+  Compliant rises also hand off early when the layer wants to walk (Kneel.WantsToWalk from MoveTo;
+  FadeWalk 0.18). BUG FIXED: MoveTo set NextMoveOrder = 0 while legs locked, so Retreating re-ran
+  the retreat search every frame of the rise; now -1. MoveTo asks SetPose(1) while locked (was 0:
+  crouch dip at hand-off). Pivot: last 0.12 t before hand-off, body turns toward travel via
+  BotSteering.LookToDirection(dir, 140 deg/s), clamped 70 deg from the feet; legs solved in the
+  kneel's frame (FeetFrame / KneelAnchorFwd) so feet stay planted. Rearmed uses the same pivot.
+- Interrupted escape (SurrenderLayer.ReassessEscape, MarkKneelEscape): run/hide/scramble taken
+  while kneeling (and debug force run/grab); captor covers again (Reactions.Covered, reaction
+  delay) during the rise or 0.6 s after hand-off -> one decision: carry on / back down (first 55%
+  of rise only) / stand hands up, weighted by progress, nerve, personality, kind, distance,
+  injury; 60% freeze 0.35-0.8 s first (KneelHoldUntil). Clears walk, sprint, gun claim (scramble
+  cooldown), hide, grace; ComplyUntil >= 4 s; Kneel.Recomply continues from current t. Draws and
+  hits never reconsidered. Debug: "Kneel test escape outcome".
+- Injury (Kneel.ReadLimbs): per-leg hurt from leg health, heavy bleed 0.4, broken 0.7 (game's
+  IsBodyPartBroken, same as its LegDamaged limp), destroyed 1; arms broken/destroyed. Hurt leg
+  leads (healthy front leg carries him), no side swap when favouring; leg >= 0.5 -> frightened
+  x0.15, one-knee x2. Down/rise time use max(injury, front leg), not a product (old LegsBad x1.5
+  removed). Brace: no brace with a bad front-side arm (also let go mid-rise), chance x(1+front
+  hurt), >= 0.85 when front >= 0.5. AdaptToWounds every 0.5 s mid-transition: slower only.
+- Presence.cs (new): demeanor Resigned/Frightened/Cautious/Defiant per encounter (weights logged;
+  steps one worse on wound +0.25 / heavy fire / warning shot, back after 25 s calm; min 12 s
+  between changes); affects descent weights/times, compliant rise time, brace chance, tremble,
+  chatter (plead/defiant), glances, idle, flinch. Head: smoothed yaw/pitch to captor or glance
+  (gun he believes is there, fire origin < 8 s, squadmate in sight, way out, ground), limits
+  config, half yaw / 5 deg up with hands behind head, torso (Spine3) assist up to 15 deg; neck
+  40% / head 60%; head forward measured once per surrender from the animated pose. Kneel hands
+  follow HeadDelta round the skull. Idle while Down: hip shift + elbow settle on random timers;
+  no extra breathing. Flinch: Suppression.OnShot -> Presence.OnShot for any shooter, near miss
+  past the head, cooldown 0.7 s + habituation; cancelled by hits. Config section 18.
+- Version bumped to 0.13.0 in csproj + plugin.
+
 **0.12.0 (kneel styles, rise intents, knee brace, no crouch look), built against `C:\HUH` 2026-11-19
 (dist/HandsAreHigh-0.12.0.zip), 0 warnings; committed and pushed to `main` 2026-11-19 (0.11.0 in the same commit); not installed, never run in game.**
 0.5.0-0.12.0 are all unverified in raid. No GitHub release. Preview of the motion (same solver,

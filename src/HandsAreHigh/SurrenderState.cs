@@ -234,6 +234,35 @@ namespace HandsAreHigh
         internal Player KneelTestBy;
         internal bool ForceDraw;            // debug: deterministic draw (kneel interruption test)
         internal bool SprintHeld;           // a sprint the layer wanted while the kneel still had his legs
+
+        // 0.13.0: a better spot to kneel (bounded search, a short compliant walk, hands up).
+        internal int KneelMoves;            // walks to a new spot for this order (max Kneel.MaxSpotMoves)
+        internal int KneelSearchI = -1;     // next candidate to check (-1: no search running)
+        internal Vector3 KneelSearchFrom;
+        internal string KneelSearchWhy;     // why where he stands won't do (kept for the report)
+        internal bool KneelSpotMoving;
+        internal Vector3 KneelSpot;
+        internal float KneelSpotSince;
+        internal Vector3 KneelSpotProgress;
+        internal float KneelSpotProgressAt;
+        internal readonly float[] KneelScratch = new float[6];
+        // Rise flowing into the first step.
+        internal int KneelMoveFrame = -100; // last frame the layer wanted to walk while the kneel had his legs
+        internal float KneelFreedAt = -1000f;   // legs handed back to the game (end of a rise)
+        internal float KneelHoldUntil;      // t held still (a freeze while reconsidering an escape)
+        // Interrupted escape from the knees: one reassessment per attempt.
+        internal bool KneelEscape;          // the current escape started from his knees (an opening)
+        internal string KneelEscapeKind;
+        internal float KneelEscapeT;        // t when it started
+        internal float KneelEscapeSeen = -1f;   // renewed coverage first seen
+        internal float KneelEscapeNotice;   // ...noticed at
+        // Limbs (Kneel.ReadLimbs): 0..1 per leg (0 left, 1 right), arms unusable for a brace.
+        internal readonly float[] KneelLegHurt = new float[2];
+        internal readonly bool[] KneelArmBad = new bool[2];
+        internal float KneelLimbsAt = -1000f;
+
+        // Demeanor, head attention, kneeling idle, flinch (Presence.cs).
+        internal readonly PresenceState Look = new PresenceState();
         internal readonly Vector3[] GizmoKnee = new Vector3[2], GizmoFoot = new Vector3[2], GizmoPalm = new Vector3[2];
 
         // Lifecycle: set by the game's death/unspawn event; nothing of ours acts on him after.
@@ -293,6 +322,9 @@ namespace HandsAreHigh
             CoveredSince = -1f;
             FollowToCover = false;
             KneelFallback = null;
+            KneelEscape = false;
+            KneelSpotMoving = false;
+            KneelSearchI = -1;
             KneelTestLeft = 0;
             KneelTestArmed = false;
             ForceDraw = false;

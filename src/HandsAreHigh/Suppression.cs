@@ -66,6 +66,8 @@ namespace HandsAreHigh
             float radius = Settings.NearMissRadius.Value;
             float range = Settings.NearMissRange.Value;
             if (!shooter.IsAI && SurrenderRegistry.Any) WarningShots(shooter, from, dir, radius, range);
+            // Near misses past a held man's head, by anyone: a cosmetic flinch (Presence).
+            if (SurrenderRegistry.Any) Presence.OnShot(shooter, from, dir);
             // Gunfire is heard: a held man can tell his captor is shooting (Reactions), a captor
             // can tell he is being shot at. Only kept while anyone is held (one lookup per shot).
             if (SurrenderRegistry.Any) SurrenderRegistry.HistoryOf(shooter).ShotAt = Time.time;

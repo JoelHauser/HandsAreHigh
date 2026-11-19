@@ -30,6 +30,8 @@ namespace HandsAreHigh
         private const float ReachDist = 0.5f;
         private const float ScrambleGrace = 0.75f;
         private const int MaxDropAttempts = 3;
+        private const float PivotSpeed = 140f;        // deg/s: turning on his planted feet at the end of a rise
+        private const float FirstStepWindow = 0.6f;   // s after his legs are free: an escape can still be called off
 
         public SurrenderLogic(BotOwner botOwner) : base(botOwner) { }
 
@@ -82,6 +84,10 @@ namespace HandsAreHigh
                 }
             }
 
+            // An escape from his knees, and his captor covers him again before he's away.
+            if (s.KneelEscape && check && (s.Phase == Phase.Retreating || s.Phase == Phase.Hiding || s.Phase == Phase.Recovering) && ReassessEscape(s))
+                return;
+
             switch (s.Phase)
             {
                 case Phase.HandsUp: HandsUp(s, check); break;
@@ -110,7 +116,13 @@ namespace HandsAreHigh
         private void Rearmed(SurrenderState s)
         {
             Hold(1f);
-            if (!s.DrawPending || Kneel.LegsLocked(s)) return;   // turns once his knees are off the ground
+            if (!s.DrawPending) return;
+            if (Kneel.LegsLocked(s))
+            {
+                // Turns on his planted feet once his knees are off the ground, the rest after.
+                if (Kneel.PivotOpen(s)) BotOwner.Steering.LookToDirection(Kneel.PivotDir(s, ThreatPos(s, s.Captor) - Me.Position), PivotSpeed);
+                return;
+            }
             Face(s, ThreatPos(s, s.Captor) + Vector3.up * 1.3f);
         }
 
@@ -125,7 +137,16 @@ namespace HandsAreHigh
             {
                 // Kneeling (Kneel.cs) owns the pose while it runs; its fallback (logged) is the
                 // crouch with hands up that 0.10.0 and earlier used for this order.
-                case Order.Kneel: Hold(Kneel.HoldPose(s)); break;
+                case Order.Kneel:
+                    // No room where he stands: a short walk to a spot that has it (Kneel.SearchSpot),
+                    // hands up, no sprint, still facing his captor. Captors and observers see a
+                    // man with his hands up (Phase HandsUp), as for Follow: no escape.
+                    if (Kneel.SpotWalking(s))
+                    {
+                        if (!MoveTo(s, s.KneelSpot, sprint: false)) Kneel.SpotFailed(s, "no path from here");
+                    }
+                    else Hold(Kneel.HoldPose(s));
+                    break;
                 case Order.Follow when captorAlive: Follow(s, captor); break;
                 default: Hold(Settings.Stance.Value); break;
             }
@@ -144,6 +165,7 @@ namespace HandsAreHigh
             {
                 s.ForceRun = false;
                 s.BeginRetreat("debug: forced run", emergency: true);
+                MarkKneelEscape(s, "run");
                 return;
             }
             if (s.ForceGrab)
@@ -151,7 +173,7 @@ namespace HandsAreHigh
                 s.ForceGrab = false;
                 if (!captorAlive) { HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced grab: no captor"); return; }
                 float q = ScrambleQuality(s, captor.Position, Perception.Eye(captor), out string qWhy, forced: true);
-                if (q > 0f) StartScramble(s, captor.Position, $"debug: forced, {qWhy}");
+                if (q > 0f) { StartScramble(s, captor.Position, $"debug: forced, {qWhy}"); MarkKneelEscape(s, "scramble"); }
                 else HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced grab not possible: {qWhy}");
                 return;
             }
@@ -627,10 +649,12 @@ namespace HandsAreHigh
             else if (chosen.Name == "scramble")
             {
                 StartScramble(s, ThreatPos(s, captor), scrambleWhy);
+                MarkKneelEscape(s, "scramble");
             }
             else if (chosen.Name == "run")
             {
                 s.BeginRetreat("bolts during an opening", emergency: true);
+                MarkKneelEscape(s, "run");
             }
             else if (chosen.Name == "hide")
             {
@@ -638,6 +662,7 @@ namespace HandsAreHigh
                 s.HideSearchPending = false;   // already found one
                 s.TargetPoint = hidePoint;
                 s.HideMoving = true;
+                MarkKneelEscape(s, "hide");
             }
             else if (Arsenal.Draw(s, BotOwner, false))
             {
@@ -647,6 +672,112 @@ namespace HandsAreHigh
             {
                 CommitDraw(s, Arsenal.SlotName(gun));
             }
+        }
+
+        // ---- an escape from the knees, called off or not ---------------------------------
+
+        // Only escapes on foot that he chose (an opening, or the debug run/grab), started while
+        // he was on his knees or getting there. Draws are never called off: the draw is already
+        // with the game's hands controller, and a second hands change on top of it is the
+        // busy-hands glitch. Hits are never reconsidered (a man who was shot runs).
+        private static void MarkKneelEscape(SurrenderState s, string kind)
+        {
+            if (!Kneel.Active(s)) return;
+            s.KneelEscape = true;
+            s.KneelEscapeKind = kind;
+            s.KneelEscapeT = s.KneelT;
+            s.KneelEscapeSeen = -1f;
+        }
+
+        // His captor covers him again while he is getting up (or on his first step): noticed after
+        // his own reaction time, then one decision for this attempt, never re-made (no bouncing
+        // between rising and kneeling):
+        //   carry on     - more likely the further up he is, with nerve, a fighter or a runner by
+        //                  personality, and with distance between them;
+        //   back down    - only in the first half of the rise: low nerve, timid;
+        //   up, hands up - a standing surrender from where he is.
+        // Giving up often starts with a moment frozen, hands showing. The motion continues from
+        // his actual pose (Kneel.Recomply: same t and timing, no restart, no snap). Recapture
+        // proper (SpottedAgain, with its grace) is unchanged.
+        private bool ReassessEscape(SurrenderState s)
+        {
+            float now = Time.time;
+            bool rising = Kneel.Active(s);
+            if (!rising && now - s.KneelFreedAt > FirstStepWindow) { s.KneelEscape = false; return false; }
+            Player captor = s.Captor;
+            if (!Perception.Alive(captor)) { s.KneelEscape = false; return false; }
+            float dist = Vector3.Distance(captor.Position, Me.Position);
+            bool seen = Perception.Sees(Me, captor, dist);
+            // A debug opening ignores your aim until it ends, here as everywhere.
+            bool covered = seen && now >= s.DebugOpeningUntil && Reactions.Covered(s, captor, Me, true, Settings.WatchAngle.Value, out _, out _, out _);
+            if (!covered) { s.KneelEscapeSeen = -1f; return false; }
+            if (s.KneelEscapeSeen < 0f)
+            {
+                s.KneelEscapeSeen = now;
+                s.KneelEscapeNotice = now + s.NoticeDelay();
+                return false;
+            }
+            if (now < s.KneelEscapeNotice) return false;
+            s.KneelEscape = false;   // decided: once per attempt
+
+            float p = rising ? Mathf.Clamp01(1f - s.KneelT / Mathf.Max(0.05f, s.KneelEscapeT)) : 1f;
+            float nerve = s.Nerve;
+            float timid = Presence.Timid(s.Personality);
+            string kind = s.KneelEscapeKind ?? "run";
+            float kindW = kind == "scramble" ? 1.15f * s.Fight : kind == "hide" ? 0.8f * s.Flee : s.Flee;
+            float commit = (0.25f + nerve) * kindW * (0.5f + 1.2f * p) * (dist > 1.5f * Settings.EscapeMinDistance.Value ? 1.3f : 0.8f) * (1f - 0.4f * s.Injury);
+            float down = rising && p < 0.55f ? (1.3f - nerve) * timid * (1f - p / 0.55f) * 1.3f : 0f;
+            float up = (1.2f - nerve) * (0.4f + p) * 0.8f;
+            var options = new List<Choice>(3);
+            var log = new StringBuilder($"{s.Name}: covered again {(rising ? $"{p:P0} of the way up" : "on his first step")} ({kind}, {dist:0.0} m, nerve {nerve:0.00}" +
+                                        $"{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}): ");
+            switch (Settings.KneelTestEscape.Value)
+            {
+                case KneelEscapeChoice.Commit: down = up = 0f; log.Append("(debug: carry on) "); break;
+                case KneelEscapeChoice.BackDown: commit = up = 0f; down = rising ? 1f : 0f; log.Append("(debug: back down) "); break;
+                case KneelEscapeChoice.StandUp: commit = down = 0f; up = 1f; log.Append("(debug: stand) "); break;
+            }
+            Add(options, log, "carry on", commit);
+            Add(options, log, "back down", down);
+            Add(options, log, "stand, hands up", up);
+            Choice c = Pick(options, log);
+            if (c.Name == null || c.Name == "carry on")
+            {
+                if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo(log.ToString());
+                return false;
+            }
+            bool backDown = c.Name == "back down";
+            float freeze = Dice.Value < 0.6f * (timid > 1f ? 1.25f : 1f) ? Dice.Range(0.35f, 0.8f) : 0f;
+            if (freeze > 0f) log.Append($"; freezes {freeze:0.0} s first");
+            if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo(log.ToString());
+
+            // Everything the escape had set up is dropped: the walk, the sprint, the claim on a
+            // gun, the hide spot, the grace.
+            StopMoving();
+            BotOwner.Sprint(false);
+            s.SprintHeld = false;
+            if (s.Scrambling) s.ScrambleCooldownUntil = now + Settings.ScrambleCooldown.Value;
+            s.Scrambling = false;
+            s.TargetWeapon = null;
+            s.HideMoving = false;
+            s.HideSearchPending = false;
+            s.GraceUntil = 0f;
+            s.AimedBy = null;
+            s.CaptorLastSeen = captor.Position;
+            s.CaptorHiddenSince = -1f;
+            s.Order = backDown ? Order.Kneel : Order.None;
+            s.KneelFallback = null;
+            s.KneelMoves = 0;
+            s.RaiseArms();
+            s.SetPhase(Phase.HandsUp, backDown ? "gives up the escape, back down on his knees" : "gives up the escape, stands with his hands up");
+            s.LastCovered = true;
+            s.OpenSince = -1f;
+            s.DecideAt = -1f;
+            s.LeaveAt = -1f;
+            s.ComplyUntil = now + Mathf.Max(4f, Settings.OrderCompliance.Value) * Dice.Range(0.8f, 1.2f);
+            Kneel.Recomply(s, backDown, freeze, backDown ? "gave up the escape" : "gave up the escape, stands");
+            Voice.Reply(s, VoiceEvent.Plead);
+            return true;
         }
 
         // The game refused the draw he decided on: he stays committed to it for a moment
@@ -1160,9 +1291,19 @@ namespace HandsAreHigh
             {
                 if (s.Moving) { BotOwner.StopMove(); BotOwner.SetTargetMoveSpeed(0f); s.Moving = false; }
                 BotOwner.Sprint(false);
-                SetPose(0f);
+                // The game's stand comes back as he rises (Kneel.Pose keeps the crouch until
+                // t 0.5): his capsule and the animator are already standing at the hand-off, so
+                // the walk starts upright (0.12.1 asked for the crouch here, a dip after the rise).
+                SetPose(1f);
                 ResetProgress(s);
-                s.NextMoveOrder = 0f;
+                // The route is kept for when his legs are free: Retreating picks a route only
+                // while NextMoveOrder is 0, and 0.12.1 reset it here, so a rising bot searched a
+                // new retreat route (up to PathCandidates path solves) every frame of the rise.
+                if (s.NextMoveOrder == 0f) s.NextMoveOrder = -1f;
+                // His rise hands the legs over at its hand-off point, and near the end he may turn
+                // on his planted feet towards where he's going (the rest of the turn while walking).
+                Kneel.WantsToWalk(s, point);
+                if (Kneel.PivotOpen(s)) BotOwner.Steering.LookToDirection(Kneel.PivotDir(s, point - Me.Position), PivotSpeed);
                 return true;
             }
             SetPose(1f);
