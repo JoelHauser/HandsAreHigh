@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Comfort.Common;
 using EFT;
+using EFT.HandBook;
 using EFT.Interactive;
 using EFT.InventoryLogic;
 using UnityEngine;
@@ -60,37 +62,94 @@ namespace HandsAreHigh
 
         // A gun in his hands goes on the ground (and is returned); a knife goes back in its
         // sheath. Holstered and slung guns stay on him, which is what makes a later draw possible.
-        internal static Item EmptyHands(Player bot)
+        //
+        // Order matters: hands first, then the throw. Throwing the item still in hands makes
+        // the game equip his next weapon in its place (Player.SetControllerInsteadRemovedOne),
+        // which would put his pistol in his hands.
+        // onEmpty: the game's own callback once the hands controller is empty (arms may rise).
+        // onThrown: the throw transaction's result (false: the gun went back on his body).
+        internal static Item EmptyHands(Player bot, Action onEmpty, Action<bool> onThrown)
         {
             Item inHands = bot.HandsController?.Item;
             if (inHands is Weapon)
             {
-                bot.SetEmptyHands(_ => HandsAreHighPlugin.Try("throw weapon",
-                    () => bot.InventoryController.ThrowItem(inHands, false, null)));
+                Empty(bot, () =>
+                {
+                    onEmpty?.Invoke();
+                    HandsAreHighPlugin.Try("throw weapon",
+                        () => bot.InventoryController.ThrowItem(inHands, false, result => onThrown?.Invoke(result.Succeed)));
+                });
                 return inHands;
             }
-            if (IsMelee(inHands)) bot.SetEmptyHands(_ => { });
+            if (IsMelee(inHands)) Empty(bot, onEmpty);
             return null;
+        }
+
+        // Player.SetEmptyHands is Proceed(empty hands) + SetInHands(false). With Fast weapon
+        // drop on, the same Process is started with fastHide = true, the flag the game itself
+        // uses for a quick weapon switch (Player.Proceed(Weapon): CheckForFastWeaponSwitch),
+        // so the firearm plays its short hide instead of the full holster.
+        private static void Empty(Player bot, Action onEmpty)
+        {
+            // The callback also arrives when the change fails; only a success empties the hands
+            // (a failure leaves DropPending set, and CheckDrop asks again).
+            Callback<IEmptyHandsController> done = result =>
+            {
+                if (!result.Succeed) return;
+                HandsAreHighPlugin.Try("hands empty", () => bot.SetInHands(false));
+                onEmpty?.Invoke();
+            };
+            if (!Settings.FastHolster.Value)
+            {
+                bot.SetEmptyHands(result => { if (result.Succeed) onEmpty?.Invoke(); });
+                return;
+            }
+            new Player.Process<Player.EmptyHandsController, IEmptyHandsController>(
+                bot,
+                () => Player.EmptyHandsController.CreateController<Player.EmptyHandsController>(bot),
+                null,
+                fastHide: true).Proceed(null, done, true);
         }
 
         internal static bool IsMelee(Item item) => item?.GetItemComponent<KnifeComponent>() != null;
 
+        // What he reaches for: the gun slung on his back first, then the sidearm. A knife only
+        // when he carries no gun at all (Joel, 2026-11-18).
+        private static readonly EquipmentSlot[] DrawOrder =
+        {
+            EquipmentSlot.FirstPrimaryWeapon, EquipmentSlot.SecondPrimaryWeapon, EquipmentSlot.Holster
+        };
+
         internal static EquipmentSlot? GunOnBody(Player bot)
         {
-            foreach (EquipmentSlot slot in GunSlots)
+            foreach (EquipmentSlot slot in DrawOrder)
                 if (bot.Equipment?.GetSlot(slot)?.ContainedItem is Weapon) return slot;
             return null;
         }
 
+        internal static string SlotName(EquipmentSlot? slot) =>
+            slot == EquipmentSlot.Holster ? "sidearm" : slot == null ? "nothing" : "slung gun";
+
         internal static bool HasMelee(Player bot) =>
             bot.Equipment?.GetSlot(EquipmentSlot.Scabbard)?.ContainedItem != null;
 
+        // Through the bot's own selector, as a main-weapon change: TryChangeToSlot only lets
+        // a non-main change through when _canChangeToSupportWeapons is set (usually off for a
+        // holster), which is why pistol draws were refused. If the selector still refuses
+        // (IsWeaponReady false, change cooldown), the same Player.SetSlotItem it would call,
+        // with its OnWeaponTaken so the bot's weapon manager picks the gun up.
         internal static bool DrawGun(BotOwner owner)
         {
-            EquipmentSlot? slot = GunOnBody(owner.GetPlayer);
+            Player bot = owner.GetPlayer;
+            EquipmentSlot? slot = GunOnBody(bot);
             if (slot == null) return false;
-            owner.WeaponManager.Selector.UpdateWeaponsList();
-            return owner.WeaponManager.Selector.TryChangeToSlot(slot.Value, slot == EquipmentSlot.FirstPrimaryWeapon);
+            BotWeaponSelector selector = owner.WeaponManager.Selector;
+            selector.UpdateWeaponsList();
+            if (selector.TryChangeToSlot(slot.Value, true)) return true;
+
+            HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname}: selector busy, drawing his {SlotName(slot)} directly");
+            bot.SetSlotItem(slot.Value, result => HandsAreHighPlugin.Try("weapon taken", () => selector.OnWeaponTaken(result)));
+            return true;
         }
 
         internal static bool DrawMelee(BotOwner owner)
@@ -116,6 +175,45 @@ namespace HandsAreHigh
             {
                 return false;
             }
+        }
+
+        // ---- what he has to lose -----------------------------------------------------------
+
+        // Kit value: handbook base price (the trader reference price, Singleton<Handbook>,
+        // the same source ORBIT uses) of everything he carries; -1 when the handbook isn't
+        // loaded, which the surrender model treats as neutral. Looked up through StructuredItems
+        // directly: Handbook.GetBasePrice logs an error for every item without an entry.
+        // Protection: best armour class worn (vest, rig, helmet, including plates) / 6.
+        // Cached per bot for KitRecheck seconds, so the inventory is walked rarely.
+        internal static void AssessKit(Player bot, BotHistory h)
+        {
+            if (Time.time - h.KitAt < Settings.KitRecheck.Value) return;
+            h.KitAt = Time.time;
+
+            InventoryEquipment eq = bot.Equipment;
+            if (eq == null) return;
+
+            int best = 0;
+            foreach (EquipmentSlot slot in ArmourSlots)
+            {
+                Item item = eq.GetSlot(slot)?.ContainedItem;
+                if (item == null) continue;
+                ArmorComponent own = item.GetItemComponent<ArmorComponent>();
+                if (own != null) best = Math.Max(best, own.ArmorClass);
+                foreach (ArmorComponent plate in item.GetItemComponentsInChildren<ArmorComponent>())
+                    best = Math.Max(best, plate.ArmorClass);
+            }
+            h.Protection = Mathf.Clamp01(best / 6f);
+
+            Handbook handbook = Singleton<Handbook>.Instance;
+            if (handbook?.StructuredItems == null) { h.KitValue = -1f; return; }
+            double total = 0;
+            foreach (Item item in eq.GetAllItems())
+            {
+                if (handbook.StructuredItems.TryGetValue(item.TemplateId.ToString(), out HandbookNode node) && node?.Data != null)
+                    total += node.Data.Price * Math.Max(1, item.StackObjectsCount);
+            }
+            h.KitValue = (float)total;
         }
 
         // ---- orders --------------------------------------------------------------------

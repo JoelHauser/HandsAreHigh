@@ -75,6 +75,21 @@ namespace HandsAreHigh
             return found;
         }
 
+        // A complete NavMesh path's corners, for BotMover.GoToByWay. (BotOwner.GoToPoint is not
+        // used: it routes over the bot's cover-point graph, which failed for most targets in
+        // testing, and its default mustHaveWay = true teleports the bot to a cover point when
+        // it fails; BotPathFinderCorePoints.GoToPosition.)
+        internal static bool PathTo(Vector3 from, Vector3 to, out Vector3[] corners)
+        {
+            corners = null;
+            if (!NavMesh.SamplePosition(from, out NavMeshHit start, 2f, NavMesh.AllAreas)) return false;
+            if (!NavMesh.SamplePosition(to, out NavMeshHit end, 2f, NavMesh.AllAreas)) return false;
+            if (!NavMesh.CalculatePath(start.position, end.position, NavMesh.AllAreas, Path) ||
+                Path.status != NavMeshPathStatus.PathComplete) return false;
+            corners = Path.corners;
+            return corners != null && corners.Length > 0;
+        }
+
         internal static bool Reachable(Vector3 from, Vector3 to)
         {
             // Both ends snapped to the NavMesh: a gun on a table or a body's root sits off it.

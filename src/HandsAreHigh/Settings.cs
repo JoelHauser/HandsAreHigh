@@ -5,6 +5,7 @@ namespace HandsAreHigh
 {
     // Every tuning value, in numbered F12 sections. All of it applies live except the
     // layer priority, which BigBrain only reads once at startup.
+    // Section and key names must never contain = \ " ' [ ] (BepInEx throws; pack.ps1 checks).
     internal static class Settings
     {
         private const string General = "01. General";
@@ -13,6 +14,7 @@ namespace HandsAreHigh
         private const string Pressure = "04. Pressure";
         private const string Role = "05. Role and personality";
         private const string Coverage = "06. While held";
+        private const string Opening = "06. Taking an opening";
         private const string Retreat = "07. Retreat and recapture";
         private const string Recovery = "08. Regroup and rearm";
         private const string Hiding = "09. Hiding and movement";
@@ -35,6 +37,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> EvalInterval;
         internal static ConfigEntry<float> SurrenderCooldown;
         internal static ConfigEntry<float> SurrenderDistance;
+        internal static ConfigEntry<float> SeenWithin;
         internal static ConfigEntry<float> PressureThreshold;
         internal static ConfigEntry<int> RequiredFactors;
         internal static ConfigEntry<float> BaseChance;
@@ -44,31 +47,50 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> InjuryThreshold;
         internal static ConfigEntry<float> InjuryWeight;
         internal static ConfigEntry<float> AmmoWeight;
-        internal static ConfigEntry<float> OutnumberedWeight;
-        internal static ConfigEntry<float> SquadWeight;
         internal static ConfigEntry<float> SuppressionWeight;
-        internal static ConfigEntry<float> SquadMemory;
-        internal static ConfigEntry<float> SuppressionMemory;
-        internal static ConfigEntry<float> EnemyMemory;
-        internal static ConfigEntry<float> AllyRadius;
+        internal static ConfigEntry<float> SuppressionHalfLife;
+        internal static ConfigEntry<float> SustainedFireEvents;
+        internal static ConfigEntry<float> OutnumberedWeight;
         internal static ConfigEntry<float> OutnumberedRatio;
+        internal static ConfigEntry<float> EnemyMemory;
+        internal static ConfigEntry<float> SquadWeight;
+        internal static ConfigEntry<float> SquadMemory;
+        internal static ConfigEntry<float> AloneFactor;
+        internal static ConfigEntry<float> AllyRadius;
         // 05
         internal static ConfigEntry<float> ScavMultiplier;
         internal static ConfigEntry<float> PmcMultiplier;
         internal static ConfigEntry<float> PersonalityMin;
         internal static ConfigEntry<float> PersonalityMax;
+        internal static ConfigEntry<float> ArmourConfidence;
+        internal static ConfigEntry<float> KitValueWeight;
+        internal static ConfigEntry<float> KitValueFull;
+        internal static ConfigEntry<float> ExperienceComposure;
+        internal static ConfigEntry<float> KitRecheck;
         // 06
         internal static ConfigEntry<float> LeaveDistance;
         internal static ConfigEntry<float> LeaveSeconds;
         internal static ConfigEntry<float> WatchAngle;
+        internal static ConfigEntry<bool> BoltWhenShot;
+        internal static ConfigEntry<bool> FastHolster;
+        internal static ConfigEntry<float> DropRetrySeconds;
+        // 07
         internal static ConfigEntry<float> OpeningDelay;
         internal static ConfigEntry<float> BreakInterval;
         internal static ConfigEntry<float> BreakChance;
+        internal static ConfigEntry<float> OpportunityBoost;
         internal static ConfigEntry<float> KnifeRange;
         internal static ConfigEntry<float> SidearmRange;
-        internal static ConfigEntry<bool> BoltWhenShot;
-        internal static ConfigEntry<float> DropRetrySeconds;
-        // 07
+        internal static ConfigEntry<float> ScrambleRange;
+        internal static ConfigEntry<float> ExposureDistance;
+        internal static ConfigEntry<float> EscapeMinDistance;
+        internal static ConfigEntry<float> DrawWeight;
+        internal static ConfigEntry<float> KnifeWeight;
+        internal static ConfigEntry<float> ScrambleWeight;
+        internal static ConfigEntry<float> EscapeWeight;
+        internal static ConfigEntry<float> ScrambleTimeout;
+        internal static ConfigEntry<float> ScrambleCooldown;
+        // 08
         internal static ConfigEntry<float> RetreatDistance;
         internal static ConfigEntry<float> Grace;
         internal static ConfigEntry<float> ResurrenderDistance;
@@ -77,7 +99,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> RecaptureResistance;
         internal static ConfigEntry<float> RetreatTimeout;
         internal static ConfigEntry<float> ArrivalTolerance;
-        // 08
+        // 09
         internal static ConfigEntry<float> RegroupMin;
         internal static ConfigEntry<float> RegroupMax;
         internal static ConfigEntry<bool> RecoverOwnWeapon;
@@ -89,14 +111,14 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> PickupRange;
         internal static ConfigEntry<float> PickupTimeout;
         internal static ConfigEntry<bool> HighNerveKnife;
-        // 09
+        // 10
         internal static ConfigEntry<float> HideRecheck;
         internal static ConfigEntry<float> CoverRadius;
         internal static ConfigEntry<int> PathCandidates;
         internal static ConfigEntry<int> PathRetries;
         internal static ConfigEntry<float> StallSeconds;
         internal static ConfigEntry<float> ProgressMeters;
-        // 10
+        // 11
         internal static ConfigEntry<bool> OrdersEnabled;
         internal static ConfigEntry<KeyboardShortcut> MenuKey;
         internal static ConfigEntry<KeyboardShortcut> NextKey;
@@ -108,14 +130,14 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> KitOrder;
         internal static ConfigEntry<bool> ArmourOrder;
         internal static ConfigEntry<bool> FollowOrder;
-        // 11
+        // 12
         internal static ConfigEntry<bool> LocalReactions;
         internal static ConfigEntry<float> WitnessRadius;
         internal static ConfigEntry<float> WitnessEscape;
         internal static ConfigEntry<bool> BotVoice;
         internal static ConfigEntry<float> VoiceCooldown;
         internal static ConfigEntry<bool> Hints;
-        // 12
+        // 13
         internal static ConfigEntry<float> UpperArmRaise;
         internal static ConfigEntry<float> UpperArmForward;
         internal static ConfigEntry<float> ForearmForward;
@@ -129,15 +151,17 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> TrembleSpeed;
         internal static ConfigEntry<float> Stance;
         internal static ConfigEntry<bool> FaceCaptor;
-        // 13
-        internal static ConfigEntry<bool> SainPersonality;
-        internal static ConfigEntry<bool> PauseWhenAsleep;
         // 14
+        internal static ConfigEntry<bool> SainPersonality;
+        internal static ConfigEntry<bool> SainSuppression;
+        internal static ConfigEntry<bool> PauseWhenAsleep;
+        // 15
         internal static ConfigEntry<bool> DebugKeys;
         internal static ConfigEntry<KeyboardShortcut> SurrenderKey;
         internal static ConfigEntry<KeyboardShortcut> OpeningKey;
         internal static ConfigEntry<KeyboardShortcut> LeaveKey;
         internal static ConfigEntry<float> DebugKeyDistance;
+        internal static ConfigEntry<float> DebugOpeningSeconds;
         internal static ConfigEntry<bool> Overlay;
         internal static ConfigEntry<bool> VerboseLogs;
         internal static ConfigEntry<bool> NerveOverride;
@@ -155,7 +179,7 @@ namespace HandsAreHigh
             // 01 General
             Enabled = c.Bind(General, "Enabled", true, "Off: no new surrenders, and bots already held are let go.");
             NaturalSurrender = c.Bind(General, "Bots surrender on their own", true,
-                "Hurt, out of ammo, outnumbered or left alone, a bot may give up. Off: only the debug key starts a surrender.");
+                "Hurt, pinned down, out of ammo, outnumbered or left alone, a bot may give up. Off: only the debug key starts a surrender.");
             IncludePmcs = c.Bind(General, "PMCs can surrender", true, "Off: only Scavs. Bosses and followers never surrender.");
             LayerPriority = c.Bind(General, "Layer priority (restart)", 95,
                 IntRange("BigBrain priority. SAIN uses 20-24 and 80, ORBIT 19.", 1, 200));
@@ -167,14 +191,16 @@ namespace HandsAreHigh
             HighNerve = c.Bind(NerveSec, "High nerve from", 0.75f, Range("Bots at or above this will come back with only a knife.", 0f, 1f));
 
             // 03 Surrendering on their own
-            EvalInterval = c.Bind(Natural, "Check every (s)", 5f, Range("How often each bot weighs giving up. One roll per check.", 1f, 60f));
+            EvalInterval = c.Bind(Natural, "Check every (s)", 5f, Range("How often each bot weighs giving up. One roll per check, never caught up after a pause.", 1f, 60f));
             SurrenderCooldown = c.Bind(Natural, "Cooldown after a surrender (s)", 30f,
                 Range("Once he's fighting again, how long before he can give up again.", 0f, 300f));
-            SurrenderDistance = c.Bind(Natural, "Within (m)", 30f, Range("Only gives up to a player he can see this close.", 1f, 100f));
+            SurrenderDistance = c.Bind(Natural, "Within (m)", 30f, Range("Only gives up to a player this close.", 1f, 100f));
+            SeenWithin = c.Bind(Natural, "Seen within (s)", 3f,
+                Range("He must see that player now or have seen him this recently: a pinned-down man behind cover still knows where you are.", 0f, 15f));
             PressureThreshold = c.Bind(Natural, "Pressure needed", 0.5f,
                 Range("Sum of the weighted reasons (section 04) before he rolls at all.", 0f, 1f));
             RequiredFactors = c.Bind(Natural, "Reasons needed", 2, IntRange("How many separate reasons must apply at once.", 1, 5));
-            BaseChance = c.Bind(Natural, "Base chance", 0.08f, Range("Per check, times pressure, nerve, role and personality.", 0f, 1f));
+            BaseChance = c.Bind(Natural, "Base chance", 0.08f, Range("Per check, times pressure, nerve, role, personality, kit and experience.", 0f, 1f));
             MaxChance = c.Bind(Natural, "Max chance", 0.20f, Range("Per check, after everything.", 0f, 1f));
             NerveResistance = c.Bind(Natural, "Nerve resistance", 0.85f, Range("1: a bot with full nerve never gives up.", 0f, 1f));
 
@@ -182,41 +208,71 @@ namespace HandsAreHigh
             InjuryThreshold = c.Bind(Pressure, "Hurt below (health fraction)", 0.35f, Range("Where injury starts to count.", 0.05f, 1f));
             InjuryWeight = c.Bind(Pressure, "Injury weight", 0.35f, Range("", 0f, 1f));
             AmmoWeight = c.Bind(Pressure, "Out of ammo weight", 0.30f, Range("No rounds left for his gun and none to reload, or no gun at all.", 0f, 1f));
+            SuppressionWeight = c.Bind(Pressure, "Suppression weight", 0.35f,
+                Range("Incoming fire: hits and shots aimed close to him (and SAIN's suppression level if installed).", 0f, 1f));
+            SuppressionHalfLife = c.Bind(Pressure, "Suppression half-life (s)", 4f, Range("How fast the effect of incoming fire fades.", 0.5f, 30f));
+            SustainedFireEvents = c.Bind(Pressure, "Full suppression at (shots)", 6f,
+                Range("Recent shots at him (after fading) for the full suppression weight. One stray shot counts for little.", 1f, 30f));
             OutnumberedWeight = c.Bind(Pressure, "Outnumbered weight", 0.20f, Range("", 0f, 1f));
-            SquadWeight = c.Bind(Pressure, "Squad lost weight", 0.30f, Range("", 0f, 1f));
-            SuppressionWeight = c.Bind(Pressure, "Under fire weight", 0.10f, Range("", 0f, 1f));
-            SquadMemory = c.Bind(Pressure, "Squad loss counts for (s)", 30f, Range("", 1f, 180f));
-            SuppressionMemory = c.Bind(Pressure, "Being hit counts for (s)", 5f, Range("", 0.5f, 30f));
-            EnemyMemory = c.Bind(Pressure, "Enemy counts for (s)", 10f,
-                Range("An enemy he saw this recently counts toward being outnumbered.", 1f, 60f));
-            AllyRadius = c.Bind(Pressure, "Allies within (m)", 40f, Range("", 5f, 150f));
             OutnumberedRatio = c.Bind(Pressure, "Fully outnumbered at", 2f,
                 Range("Enemies per friendly (counting himself) for the full outnumbered weight.", 1.1f, 6f));
+            EnemyMemory = c.Bind(Pressure, "Enemy counts for (s)", 10f,
+                Range("An enemy he saw this recently counts toward being outnumbered.", 1f, 60f));
+            SquadWeight = c.Bind(Pressure, "Squad weight", 0.30f, Range("Squadmates killed recently, or squad alive but none of them close.", 0f, 1f));
+            SquadMemory = c.Bind(Pressure, "Squad loss counts for (s)", 30f, Range("", 1f, 180f));
+            AloneFactor = c.Bind(Pressure, "Squad too far away", 0.5f,
+                Range("Squad factor when his squad is alive but nobody is within the ally radius.", 0f, 1f));
+            AllyRadius = c.Bind(Pressure, "Allies within (m)", 40f, Range("", 5f, 150f));
 
-            // 05 Role and personality
+            // 05 Who he is
             ScavMultiplier = c.Bind(Role, "Scav multiplier", 1f, Range("", 0f, 3f));
             PmcMultiplier = c.Bind(Role, "PMC multiplier", 0.65f, Range("", 0f, 3f));
             PersonalityMin = c.Bind(Role, "Personality multiplier min", 0.5f, Range("Applied to the bravest SAIN personalities.", 0f, 3f));
             PersonalityMax = c.Bind(Role, "Personality multiplier max", 1.5f, Range("Applied to Cowards.", 0f, 3f));
+            ArmourConfidence = c.Bind(Role, "Armour confidence", 0.3f,
+                Range("How much class 6 armour dulls the fear from incoming fire and being outnumbered. Never removes it.", 0f, 0.9f));
+            KitValueWeight = c.Bind(Role, "Kit value weight", 0.25f,
+                Range("A man with expensive kit has more to lose: up to this much more willing to bargain for his life.", 0f, 1f));
+            KitValueFull = c.Bind(Role, "Kit value full at (roubles)", 250000f,
+                Range("Handbook value of everything he carries for the full kit value weight.", 10000f, 3000000f));
+            ExperienceComposure = c.Bind(Role, "Experience composure", 0.35f,
+                Range("Level and difficulty make him calmer: up to this much less likely to give up. Never immune.", 0f, 0.8f));
+            KitRecheck = c.Bind(Role, "Re-value kit every (s)", 30f, Range("", 5f, 300f));
 
             // 06 While held
             LeaveDistance = c.Bind(Coverage, "Captor gone beyond (m)", 25f, Range("Further than this while he can see you: he runs.", 5f, 100f));
             LeaveSeconds = c.Bind(Coverage, "Out of sight for (s)", 6f, Range("He can't see you this long: he runs.", 0.5f, 30f));
             WatchAngle = c.Bind(Coverage, "Covered within (deg)", 30f,
                 Range("Looking further away than this counts as an opening. So do reloading, the inventory, no gun in hand and no line of sight.", 1f, 90f));
-            OpeningDelay = c.Bind(Coverage, "Opening must last (s)", 1.5f, Range("", 0f, 10f));
-            BreakInterval = c.Bind(Coverage, "Roll every (s)", 1f, Range("While there's an opening.", 0.1f, 10f));
-            BreakChance = c.Bind(Coverage, "Break chance", 0.15f, Range("Per roll, times his nerve.", 0f, 1f));
-            KnifeRange = c.Bind(Coverage, "Knife range (m)", 4f, Range("Closer than this he goes for his knife.", 0.5f, 10f));
-            SidearmRange = c.Bind(Coverage, "Draw range (m)", 30f,
-                Range("Closer than this (beyond knife range) he draws a gun he still carries. Further away he keeps waiting.", 1f, 100f));
             BoltWhenShot = c.Bind(Coverage, "Bolt when shot", true, "Hit while his hands are up, by anyone: he runs.");
-            DropRetrySeconds = c.Bind(Coverage, "Drop retry after (s)", 1.5f,
-                Range("If the gun is still in his hands, he tries dropping it again. After 3 tries he fights instead.", 0.5f, 5f));
+            FastHolster = c.Bind(Coverage, "Fast weapon drop", true,
+                "Empties his hands with the game's quick holster (as in a fast weapon switch) before throwing the gun. Off: the normal holster animation.");
+            DropRetrySeconds = c.Bind(Coverage, "Ask again after (s)", 1f,
+                Range("If the game hasn't emptied his hands by then, ask again. After 3 tries he fights instead.", 0.3f, 5f));
 
-            // 07 Retreat and recapture
+            // 07 Taking an opening
+            OpeningDelay = c.Bind(Opening, "Opening must last (s)", 1.5f, Range("", 0f, 10f));
+            BreakInterval = c.Bind(Opening, "Roll every (s)", 1f, Range("While there's an opening.", 0.1f, 10f));
+            BreakChance = c.Bind(Opening, "Break chance", 0.15f, Range("Per roll, scaled by nerve (30% at nerve 0, 100% at nerve 1).", 0f, 1f));
+            OpportunityBoost = c.Bind(Opening, "Gun nearby boost", 2f,
+                Range("His own gun close, reachable and away from you multiplies the break chance by up to 1 + this.", 0f, 5f));
+            KnifeRange = c.Bind(Opening, "Knife range (m)", 4f, Range("Closer than this a knife is an option.", 0.5f, 10f));
+            SidearmRange = c.Bind(Opening, "Draw range (m)", 30f, Range("Closer than this drawing a gun he still carries is an option.", 1f, 100f));
+            ScrambleRange = c.Bind(Opening, "Scramble range (m)", 10f,
+                Range("His dropped gun within this distance (and reachable) is an option: he runs for it.", 1f, 30f));
+            ExposureDistance = c.Bind(Opening, "Gun safe from you beyond (m)", 8f,
+                Range("The closer you stand to his dropped gun, the less he wants to go for it.", 1f, 30f));
+            EscapeMinDistance = c.Bind(Opening, "Run only beyond (m)", 6f, Range("Closer than this, running isn't an option.", 0f, 30f));
+            DrawWeight = c.Bind(Opening, "Weight: draw", 1f, Range("How the options compare. Each is scaled by nerve, personality and the situation.", 0f, 5f));
+            KnifeWeight = c.Bind(Opening, "Weight: knife", 0.8f, Range("", 0f, 5f));
+            ScrambleWeight = c.Bind(Opening, "Weight: scramble for his gun", 1.6f, Range("", 0f, 5f));
+            EscapeWeight = c.Bind(Opening, "Weight: run", 0.5f, Range("", 0f, 5f));
+            ScrambleTimeout = c.Bind(Opening, "Scramble time limit (s)", 8f, Range("", 2f, 30f));
+            ScrambleCooldown = c.Bind(Opening, "No second scramble for (s)", 15f, Range("After a scramble is stopped, so he doesn't flip back and forth.", 0f, 120f));
+
+            // 08 Retreat and recapture
             RetreatDistance = c.Bind(Retreat, "Retreat distance (m)", 35f, Range("", 5f, 150f));
-            Grace = c.Bind(Retreat, "Grace after running (s)", 4f, Range("After he starts running.", 0f, 30f));
+            Grace = c.Bind(Retreat, "Grace after running (s)", 4f, Range("After he starts running, how long before he can be caught again.", 0f, 30f));
             ResurrenderDistance = c.Bind(Retreat, "Caught again within (m)", 12f, Range("", 1f, 50f));
             AimTolerance = c.Bind(Retreat, "Aim within (deg)", 10f, Range("How directly you must aim at him to catch him again.", 1f, 45f));
             AimConfirm = c.Bind(Retreat, "Aim for (s)", 0.4f, Range("", 0f, 3f));
@@ -225,7 +281,7 @@ namespace HandsAreHigh
             RetreatTimeout = c.Bind(Retreat, "Retreat time limit (s)", 15f, Range("", 3f, 60f));
             ArrivalTolerance = c.Bind(Retreat, "Arrived within (m)", 2f, Range("", 0.5f, 5f));
 
-            // 08 Regroup and rearm
+            // 09 Regroup and rearm
             RegroupMin = c.Bind(Recovery, "Regroup min (s)", 4f, Range("Time watching where he last saw you before deciding.", 0f, 60f));
             RegroupMax = c.Bind(Recovery, "Regroup max (s)", 12f, Range("", 0f, 60f));
             RecoverOwnWeapon = c.Bind(Recovery, "Go back for his own gun", true, "If it's still there and you weren't near it.");
@@ -238,7 +294,7 @@ namespace HandsAreHigh
             PickupTimeout = c.Bind(Recovery, "Pick-up time limit (s)", 5f, Range("", 1f, 20f));
             HighNerveKnife = c.Bind(Recovery, "Fight with a knife", true, "High-nerve bots with no gun to find come back with their knife.");
 
-            // 09 Hiding and movement
+            // 10 Hiding and movement
             HideRecheck = c.Bind(Hiding, "Look again every (s)", 8f, Range("", 1f, 60f));
             CoverRadius = c.Bind(Hiding, "Cover search radius (m)", 20f, Range("", 3f, 100f));
             PathCandidates = c.Bind(Hiding, "Points tried", 12, IntRange("Candidate spots per retreat or cover search.", 2, 48));
@@ -246,7 +302,7 @@ namespace HandsAreHigh
             StallSeconds = c.Bind(Hiding, "Stuck after (s)", 3f, Range("Without making progress.", 0.5f, 15f));
             ProgressMeters = c.Bind(Hiding, "Progress (m)", 0.5f, Range("Movement that counts as progress.", 0.1f, 3f));
 
-            // 10 Orders
+            // 11 Orders
             OrdersEnabled = c.Bind(Interact, "Orders", true, "Look at a held bot up close and press the menu key.");
             MenuKey = c.Bind(Interact, "Menu / confirm key", new KeyboardShortcut(KeyCode.Slash),
                 "Opens the order menu while you look at a held bot; press again to give the highlighted order.");
@@ -260,15 +316,15 @@ namespace HandsAreHigh
             ArmourOrder = c.Bind(Interact, "Allow armour order", true, "");
             FollowOrder = c.Bind(Interact, "Allow follow order", true, "");
 
-            // 11 Reactions and voice
+            // 12 Reactions and voice
             LocalReactions = c.Bind(Feedback, "Other held bots react", true, "A held bot who sees another one shot runs.");
             WitnessRadius = c.Bind(Feedback, "Sees it within (m)", 40f, Range("", 5f, 150f));
             WitnessEscape = c.Bind(Feedback, "Chance he runs", 1f, Range("", 0f, 1f));
             BotVoice = c.Bind(Feedback, "Bot voice lines", true, "The game's own lines (hold fire, roger, negative...).");
             VoiceCooldown = c.Bind(Feedback, "Voice cooldown (s)", 12f, Range("", 1f, 120f));
-            Hints = c.Bind(Feedback, "On-screen hints", true, "A small prompt when you can give orders.");
+            Hints = c.Bind(Feedback, "On-screen hints", true, "A small prompt when you can give orders, and debug confirmations.");
 
-            // 12 Arm pose
+            // 13 Arm pose
             UpperArmRaise = c.Bind(Pose, "Upper arm raise (deg)", 12f,
                 Range("Elbow height: 0 = level with the shoulder, positive = above.", -40f, 80f));
             UpperArmForward = c.Bind(Pose, "Upper arm forward (deg)", 25f,
@@ -288,24 +344,27 @@ namespace HandsAreHigh
             Stance = c.Bind(Pose, "Stance with hands up", 1f, Range("1 = standing, 0 = full crouch.", 0f, 1f));
             FaceCaptor = c.Bind(Pose, "Face the player", true, "Turns to face whoever holds him.");
 
-            // 13 Other mods
+            // 14 Other mods
             SainPersonality = c.Bind(Compat, "Read SAIN personality", true,
-                "Cowards and Timmys give up sooner, Chads and GigaChads later. No effect without SAIN.");
+                "Cowards and Timmys give up sooner and run more, Chads and GigaChads hold out and fight more. No effect without SAIN.");
+            SainSuppression = c.Bind(Compat, "Read SAIN suppression", true,
+                "Uses SAIN's suppression level as well as the game's own incoming-fire signal (the higher counts). No effect without SAIN.");
             PauseWhenAsleep = c.Bind(Compat, "Pause while a bot is asleep", true,
                 "If another mod (ORBIT's Ghost Mode) puts a held bot to sleep, he drops any plan to fetch a gun and decides again when he wakes.");
 
-            // 14 Debug
-            DebugKeys = c.Bind(Debug, "Debug keys", false, "Turns on the three keys below.");
+            // 15 Debug
+            DebugKeys = c.Bind(Debug, "Debug keys", false, "Turns on the three keys below. Each acts only on the bot under your crosshair.");
             SurrenderKey = c.Bind(Debug, "Surrender bot", new KeyboardShortcut(KeyCode.LeftBracket),
-                "Forces the bot nearest your crosshair (or nearest in range) to surrender.");
+                "The bot under your crosshair surrenders. Nothing happens if no bot is under it.");
             OpeningKey = c.Bind(Debug, "Give them an opening", new KeyboardShortcut(KeyCode.RightBracket),
-                "Every held bot acts as if you looked away, whatever his nerve: tests the knife / draw.");
+                "The held bot under your crosshair treats you as not covering him for a few seconds; his own rolls decide what he does.");
             LeaveKey = c.Bind(Debug, "Pretend you left", new KeyboardShortcut(KeyCode.Backspace),
-                "Every held bot acts as if you walked off: tests retreat and rearming.");
-            DebugKeyDistance = c.Bind(Debug, "Surrender key range (m)", 40f, Range("", 2f, 150f));
+                "The held bot under your crosshair acts as if you walked off.");
+            DebugKeyDistance = c.Bind(Debug, "Surrender key range (m)", 60f, Range("", 2f, 200f));
+            DebugOpeningSeconds = c.Bind(Debug, "Opening lasts (s)", 6f, Range("", 1f, 30f));
             Overlay = c.Bind(Debug, "Overlay", false, "Lists every held bot: phase, order, nerve, arms.");
             VerboseLogs = c.Bind(Debug, "Verbose logs", false, "Logs every roll, including the ones that change nothing.");
-            NerveOverride = c.Bind(Debug, "Override nerve", false, "Every bot uses the value below for new surrenders and surrender checks, instead of his own roll.");
+            NerveOverride = c.Bind(Debug, "Override nerve", false, "Every bot uses the value below instead of his own roll, live.");
             NerveOverrideValue = c.Bind(Debug, "Nerve value", 0.5f, Range("", 0f, 1f));
             ErrorLogCooldown = c.Bind(Debug, "Repeat errors every (s)", 10f, Range("The same error is logged at most this often.", 1f, 120f));
         }

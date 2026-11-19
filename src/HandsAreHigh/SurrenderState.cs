@@ -46,11 +46,19 @@ namespace HandsAreHigh
         internal Item DroppedWeapon;    // the gun he dropped, to come back for
         internal Vector3 DropPosition;
 
+        // Drop timeline (Time.realtimeSinceStartup), logged once his arms are fully up, so the
+        // game's own holster/throw latency can be told apart from our timers.
+        internal float TStart = -1f, TDropRequested = -1f, THandsEmpty = -1f, TThrown = -1f;
+        internal bool TimingLogged;
+
         // Rearming.
         internal readonly HashSet<Item> Skip = new HashSet<Item>();   // guns he failed to reach or take
         internal Item TargetWeapon;     // the gun he's walking to: other surrendered bots leave it alone
         internal Vector3 TargetPoint;
         internal bool HideMoving;
+        internal bool Scrambling;       // ran for his gun during an opening: sprints, no regroup first
+        internal float ScrambleCooldownUntil;
+        internal int HidCount;          // hide-and-look-again cycles since last caught: only the first is logged
 
         // What he knows about the captor. After losing sight he only uses the last sighting.
         internal Vector3 CaptorLastSeen;
@@ -85,11 +93,13 @@ namespace HandsAreHigh
         internal float ReportAt = -1f;
 
         internal bool Suspended;        // asleep (ORBIT Ghost Mode) or otherwise inactive
-        internal bool ForcedOpening;    // debug keys
-        internal bool ForcedLeave;
+        internal float DebugOpeningUntil;   // debug key: treated as not covered until then (this bot only)
+        internal bool ForcedLeave;          // debug key: this bot only
         internal float NextVoice;
 
-        internal void SetPhase(Phase p, string reason)
+        // quiet: routine repeats (hiding and looking again every few seconds) only go to the
+        // log with Verbose logs on.
+        internal void SetPhase(Phase p, string reason, bool quiet = false)
         {
             Phase old = Phase;
             Phase = p;
@@ -97,8 +107,10 @@ namespace HandsAreHigh
             NextMoveOrder = 0f;
             Retries = 0;
             HideMoving = false;
+            if (p != Phase.Recovering && p != Phase.PickingUp) Scrambling = false;
             ProgressFrom = Bot != null ? Bot.Position : Vector3.zero;
             ProgressSince = Time.time;
+            if (quiet && !Settings.VerboseLogs.Value) return;
             HandsAreHighPlugin.Log.LogInfo(old == p
                 ? $"{Name}: {p} ({reason})"
                 : $"{Name}: {old} -> {p} ({reason})");

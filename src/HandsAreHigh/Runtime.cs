@@ -22,11 +22,49 @@ namespace HandsAreHigh
 
             if (!Settings.DebugKeys.Value) return;
             if (Settings.SurrenderKey.Value.IsDown())
-                HandsAreHighPlugin.Try("surrender key", () => DebugSurrender(me));
+                HandsAreHighPlugin.Try("surrender key", () => DebugCommand("surrender", me));
             if (Settings.OpeningKey.Value.IsDown())
-                SurrenderRegistry.ForceOpening();
+                HandsAreHighPlugin.Try("opening key", () => DebugCommand("opening", me));
             if (Settings.LeaveKey.Value.IsDown())
-                SurrenderRegistry.ForceCaptorLeft();
+                HandsAreHighPlugin.Try("leave key", () => DebugCommand("leave", me));
+        }
+
+        // Every debug key acts on exactly one bot: the one under the crosshair, resolved once
+        // here and passed on by reference. No bot under it: nothing happens, and it says so.
+        private static void DebugCommand(string command, Player me)
+        {
+            if (me == null || Singleton<GameWorld>.Instance == null) return;
+            Player target = Targeting.BotUnderCrosshair(me, Settings.DebugKeyDistance.Value);
+            string outcome;
+
+            if (target == null)
+            {
+                outcome = "no bot under your crosshair";
+            }
+            else if (command == "surrender")
+            {
+                if (!NaturalSurrender.Eligible(target))
+                    outcome = $"not a Scav or PMC ({target.Profile?.Info?.Settings?.Role}), can't surrender";
+                else if (SurrenderRegistry.TryGet(target, out SurrenderState held) && held.Phase == Phase.HandsUp)
+                    outcome = "already has his hands up";
+                else
+                {
+                    SurrenderRegistry.Surrender(target, me, "debug key");
+                    outcome = SurrenderRegistry.HoldsBot(target) ? "surrenders" : "didn't surrender (mod disabled?)";
+                }
+            }
+            else if (!SurrenderRegistry.TryGet(target, out SurrenderState s))
+            {
+                outcome = "isn't surrendered";
+            }
+            else
+            {
+                outcome = command == "opening" ? SurrenderRegistry.DebugOpening(s) : SurrenderRegistry.DebugLeave(s);
+            }
+
+            string who = target != null ? target.Profile?.Nickname : null;
+            HandsAreHighPlugin.Log.LogInfo($"Debug {command}: target {Targeting.Describe(target)}: {outcome}");
+            OrderMenu.Notify(who == null ? $"Debug {command}: {outcome}" : $"Debug {command}: {who} {outcome}");
         }
 
         private void OnGUI()
@@ -56,43 +94,5 @@ namespace HandsAreHigh
             return n;
         }
 
-        // The debug key picks the bot closest to your crosshair (within 20 degrees), or
-        // failing that the nearest one in range.
-        private static void DebugSurrender(Player me)
-        {
-            GameWorld world = Singleton<GameWorld>.Instance;
-            if (world == null || me == null) return;
-
-            Vector3 eye = me.Position + Vector3.up * 1.5f;
-            Vector3 look = me.LookDirection;
-            float maxDist = Settings.DebugKeyDistance.Value;
-
-            Player best = null;
-            float bestAngle = 20f;
-            Player nearest = null;
-            float nearestDist = maxDist;
-
-            foreach (Player p in world.AllAlivePlayersList)
-            {
-                if (p == null || p == me || !p.IsAI || p.AIData?.BotOwner == null) continue;
-                if (!NaturalSurrender.Eligible(p) || SurrenderRegistry.HoldsBot(p)) continue;
-
-                Vector3 to = p.Position + Vector3.up * 1.2f - eye;
-                float dist = to.magnitude;
-                if (dist > maxDist) continue;
-
-                float angle = Vector3.Angle(look, to);
-                if (angle < bestAngle) { bestAngle = angle; best = p; }
-                if (dist < nearestDist) { nearestDist = dist; nearest = p; }
-            }
-
-            Player target = best ?? nearest;
-            if (target == null)
-            {
-                HandsAreHighPlugin.Log.LogInfo("Surrender key: no eligible bot in range");
-                return;
-            }
-            SurrenderRegistry.Surrender(target, me, "debug key");
-        }
     }
 }

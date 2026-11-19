@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 using Comfort.Common;
 using DrakiaXYZ.BigBrain.Brains;
@@ -26,6 +27,8 @@ namespace HandsAreHigh
     {
         private const float CheckInterval = 0.25f;
         private const float MoveOrderInterval = 1f;
+        private const float ReachDist = 0.5f;
+        private const float ScrambleGrace = 0.75f;
         private const int MaxDropAttempts = 3;
 
         public SurrenderLogic(BotOwner botOwner) : base(botOwner) { }
@@ -108,13 +111,6 @@ namespace HandsAreHigh
                 s.BeginRetreat("debug: captor left", emergency: false);
                 return;
             }
-            if (s.ForcedOpening)
-            {
-                s.ForcedOpening = false;
-                if (!TryBreak(s, dist, "debug opening"))
-                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: nothing he can use at {dist:0.0} m, keeps his hands up");
-                return;
-            }
 
             // What he can see of the captor. Out of sight, he only knows where he last saw him.
             bool seen = Perception.LineClear(Perception.Eye(Me), Perception.Eye(captor));
@@ -138,8 +134,10 @@ namespace HandsAreHigh
                 }
             }
 
-            // Captor not covering him (no line of sight counts too): an opening.
-            if (seen && Perception.Covering(captor, Me, Settings.WatchAngle.Value))
+            // Captor not covering him (no line of sight counts too, and so does the debug
+            // opening for this one bot): an opening.
+            bool debugOpening = Time.time < s.DebugOpeningUntil;
+            if (!debugOpening && seen && Perception.Covering(captor, Me, Settings.WatchAngle.Value))
             {
                 s.UnwatchedSince = -1f;
                 return;
@@ -149,17 +147,22 @@ namespace HandsAreHigh
             if (Time.time < s.NextBreakRoll) return;
             s.NextBreakRoll = Time.time + Settings.BreakInterval.Value;
 
-            float chance = Mathf.Clamp01(Settings.BreakChance.Value * s.Nerve);
+            // His own gun close, reachable and away from you makes an opening much more tempting.
+            float scramble = ScrambleQuality(s, captor, out string scrambleWhy);
+            float nerveScale = Mathf.Lerp(0.3f, 1f, s.Nerve);
+            float chance = Mathf.Clamp01(Settings.BreakChance.Value * nerveScale * (1f + Settings.OpportunityBoost.Value * scramble));
             float roll = Random.value;
-            if (Settings.VerboseLogs.Value)
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening, chance {chance:0.00}, roll {roll:0.00}");
+            if (Settings.VerboseLogs.Value || debugOpening)
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening{(debugOpening ? " (debug)" : "")}, nerve {s.Nerve:0.00}, " +
+                    $"gun nearby {scramble:0.00} ({scrambleWhy}), chance {chance:0.00}, roll {roll:0.00}{(roll < chance ? " -> takes it" : "")}");
             if (roll >= chance) return;
 
-            TryBreak(s, dist, $"opening (chance {chance:0.00}, roll {roll:0.00})");
+            TakeOpening(s, captor, dist, scramble, scrambleWhy);
         }
 
-        // The weapon in his hands should be gone by now. If it isn't, try again, and after
-        // a few tries give up surrendering rather than pose holding a gun.
+        // The game's callback normally clears DropPending within the holster time. If it
+        // hasn't come, ask again; after a few tries give up surrendering rather than pose
+        // holding a gun.
         private bool CheckDrop(SurrenderState s)
         {
             if (Arsenal.HandsFree(Me))
@@ -179,34 +182,155 @@ namespace HandsAreHigh
             }
             s.DropAttempts++;
             s.DropSince = Time.time;
-            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: weapon still in hands, drop try {s.DropAttempts}");
-            HandsAreHighPlugin.Try("drop weapon in hands", () =>
-            {
-                Item dropped = Arsenal.EmptyHands(Me);
-                if (dropped != null) { s.DroppedWeapon = dropped; s.DropPosition = Me.Position; }
-            });
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: weapon still in hands after {Settings.DropRetrySeconds.Value:0.0} s, drop try {s.DropAttempts}");
+            SurrenderRegistry.RequestDrop(s);
             return false;
         }
 
-        // Go for whatever he still has, picked by range.
-        private bool TryBreak(SurrenderState s, float dist, string why)
+        // ---- taking an opening -----------------------------------------------------------
+
+        // 0..1: how good a grab for his own dropped gun would be right now. Closer, reachable,
+        // and the further you are from it (and the less you can see it), the better.
+        private float ScrambleQuality(SurrenderState s, Player captor, out string why)
         {
-            if (dist <= Settings.KnifeRange.Value && Arsenal.HasMelee(Me) && Arsenal.DrawMelee(BotOwner))
+            Item gun = s.DroppedWeapon;
+            if (gun == null) { why = "he didn't drop a gun"; return 0f; }
+            if (Time.time < s.ScrambleCooldownUntil) { why = "stopped once, not again yet"; return 0f; }
+            if (s.Skip.Contains(gun)) { why = "failed to get it before"; return 0f; }
+            float d = Vector3.Distance(Me.Position, s.DropPosition);
+            float range = Settings.ScrambleRange.Value;
+            if (d > range) { why = $"{d:0} m away, over {range:0} m"; return 0f; }
+            if (ClaimedByOther(s, gun)) { why = "another held bot is going for it"; return 0f; }
+            if (!Arsenal.StillThere(gun, s.DropPosition)) { why = "it's gone"; return 0f; }
+            if (!Perception.Reachable(Me.Position, s.DropPosition)) { why = "no path to it"; return 0f; }
+
+            float fromCaptor = Vector3.Distance(captor.Position, s.DropPosition);
+            float exposure = 1f - Mathf.Clamp01(fromCaptor / Settings.ExposureDistance.Value);
+            if (!Perception.LineClear(Perception.Eye(captor), s.DropPosition + Vector3.up * 0.3f)) exposure *= 0.5f;
+            float proximity = 1f - d / range;
+            why = $"{d:0.0} m from him, you {fromCaptor:0.0} m from it";
+            return Mathf.Clamp01(Mathf.Sqrt(proximity) * (1f - 0.7f * exposure));
+        }
+
+        private static bool ClaimedByOther(SurrenderState s, Item gun)
+        {
+            foreach (SurrenderState other in SurrenderRegistry.All)
+                if (other != s && other.TargetWeapon == gun) return true;
+            return false;
+        }
+
+        private struct Choice
+        {
+            internal string Name;
+            internal float Score;
+        }
+
+        // He takes his chance: every option he has is weighed, logged, and one is picked at
+        // random in proportion to its weight. A gun he still carries beats a knife (slung gun
+        // first, then sidearm); the knife is only for a man with no gun on him.
+        private void TakeOpening(SurrenderState s, Player captor, float dist, float scramble, string scrambleWhy)
+        {
+            string personality = SainAdapter.Personality(BotOwner);
+            SainAdapter.Leanings(personality, out float fight, out float flee);
+            float nerve = s.Nerve;
+            EquipmentSlot? gun = Arsenal.GunOnBody(Me);
+
+            var options = new List<Choice>(4);
+            var log = new StringBuilder();
+            log.Append($"{s.Name} takes an opening at {dist:0.0} m (nerve {nerve:0.00}{(string.IsNullOrEmpty(personality) ? "" : ", " + personality)}): ");
+
+            if (gun == null) log.Append("draw: no gun on him; ");
+            else if (dist > Settings.SidearmRange.Value) log.Append($"draw: you're beyond {Settings.SidearmRange.Value:0} m; ");
+            else Add(options, log, "draw " + Arsenal.SlotName(gun), Settings.DrawWeight.Value * (0.4f + nerve) * fight);
+
+            if (gun != null) log.Append("knife: has a gun to draw; ");
+            else if (!Arsenal.HasMelee(Me)) log.Append("knife: none; ");
+            else if (dist > Settings.KnifeRange.Value) log.Append($"knife: you're beyond {Settings.KnifeRange.Value:0} m; ");
+            else Add(options, log, "knife", Settings.KnifeWeight.Value * (0.2f + nerve) * fight);
+
+            if (scramble <= 0f) log.Append($"scramble: {scrambleWhy}; ");
+            else Add(options, log, "scramble", Settings.ScrambleWeight.Value * scramble * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f));
+
+            if (dist < Settings.EscapeMinDistance.Value) log.Append($"run: you're within {Settings.EscapeMinDistance.Value:0} m; ");
+            else Add(options, log, "run", Settings.EscapeWeight.Value * Mathf.Max(0.1f, 1.3f - nerve) * flee);
+
+            if (options.Count == 0)
             {
-                Rearm(s, $"goes for his knife at {dist:0.0} m, {why}");
-                return true;
+                HandsAreHighPlugin.Log.LogInfo(log.Append("-> nothing he can do, keeps his hands up").ToString());
+                return;
             }
-            if (dist <= Settings.SidearmRange.Value && Arsenal.GunOnBody(Me) != null)
+
+            float total = 0f;
+            foreach (Choice c in options) total += c.Score;
+            float pick = Random.value * total;
+            Choice chosen = options[options.Count - 1];
+            float acc = 0f;
+            foreach (Choice c in options)
             {
-                if (Arsenal.DrawGun(BotOwner))
-                {
-                    Rearm(s, $"draws at {dist:0.0} m, {why}");
-                    return true;
-                }
+                acc += c.Score;
+                if (pick <= acc) { chosen = c; break; }
+            }
+            HandsAreHighPlugin.Log.LogInfo(log.Append($"-> {chosen.Name} (roll {pick:0.00} of {total:0.00})").ToString());
+
+            if (chosen.Name == "knife")
+            {
+                if (Arsenal.DrawMelee(BotOwner)) Rearm(s, $"goes for his knife at {dist:0.0} m");
+            }
+            else if (chosen.Name == "scramble")
+            {
+                StartScramble(s, captor, scrambleWhy);
+            }
+            else if (chosen.Name == "run")
+            {
+                s.BeginRetreat("bolts during an opening", emergency: true);
+            }
+            else if (Arsenal.DrawGun(BotOwner))
+            {
+                Rearm(s, $"draws his {Arsenal.SlotName(gun)} at {dist:0.0} m");
+            }
+            else
+            {
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: tried to draw, the game refused the weapon change");
             }
-            // Nothing that suits the range: he keeps his hands up and waits.
-            return false;
+        }
+
+        private static void Add(List<Choice> options, StringBuilder log, string name, float score)
+        {
+            score = Mathf.Max(0f, score);
+            log.Append($"{name} {score:0.00}; ");
+            if (score > 0f) options.Add(new Choice { Name = name, Score = score });
+        }
+
+        // Arms down at once and a sprint for his own gun; the pick-up is the real transaction.
+        private void StartScramble(SurrenderState s, Player captor, string why)
+        {
+            s.LowerArms(Settings.EmergencyLowerSeconds.Value);
+            s.Order = Order.None;
+            s.DropQueue.Clear();
+            s.TargetWeapon = s.DroppedWeapon;
+            s.TargetPoint = s.DropPosition;
+            s.GraceUntil = Time.time + ScrambleGrace;
+            s.CaptorLastSeen = captor.Position;
+            Voice.Say(s, EPhraseTrigger.OnFight);
+            s.SetPhase(Phase.Recovering, $"scrambles for his {s.DroppedWeapon.ShortName.Localized()} ({why})");
+            s.Scrambling = true;
+        }
+
+        // The scramble didn't work: he won't try it again straight away. With a gun still on
+        // him and you close, he draws; otherwise he runs.
+        private void FailScramble(SurrenderState s, string why)
+        {
+            if (s.TargetWeapon != null) s.Skip.Add(s.TargetWeapon);
+            s.TargetWeapon = null;
+            s.Scrambling = false;
+            s.ScrambleCooldownUntil = Time.time + Settings.ScrambleCooldown.Value;
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: scramble failed: {why}");
+            if (Arsenal.GunOnBody(Me) != null && Arsenal.DrawGun(BotOwner))
+            {
+                Rearm(s, "scramble failed, draws what he has");
+                return;
+            }
+            s.BeginRetreat($"scramble failed ({why})", emergency: true);
         }
 
         private void Rearm(SurrenderState s, string reason)
@@ -334,9 +458,10 @@ namespace HandsAreHigh
         // How to get back in the fight, best option first.
         private void Decide(SurrenderState s)
         {
-            if (Arsenal.GunOnBody(Me) != null && Arsenal.DrawGun(BotOwner))
+            EquipmentSlot? kept = Arsenal.GunOnBody(Me);
+            if (kept != null && Arsenal.DrawGun(BotOwner))
             {
-                Rearm(s, "draws the gun he kept");
+                Rearm(s, $"draws the {Arsenal.SlotName(kept)} he kept");
                 return;
             }
 
@@ -375,41 +500,50 @@ namespace HandsAreHigh
             }
 
             s.TargetWeapon = null;
-            GoHide(s, "nothing to fight with");
+            GoHide(s, "nothing to fight with", quiet: s.Phase == Phase.Regrouping && s.HidCount++ > 0);
         }
 
         private void Recovering(SurrenderState s, bool check)
         {
-            if (!MoveTo(s, s.TargetPoint, sprint: false))
+            if (!MoveTo(s, s.TargetPoint, sprint: s.Scrambling))
             {
-                GiveUpOn(s, "no path to it");
+                if (s.Scrambling) FailScramble(s, "no path to it");
+                else GiveUpOn(s, "no path to it");
                 return;
             }
             if (!check) return;
             if (SpottedAgain(s)) return;
 
             // Someone else got there first.
-            if (Time.time - s.PhaseSince > 1f && !Arsenal.StillThere(s.TargetWeapon, s.TargetPoint))
+            if (Time.time - s.PhaseSince > 0.5f && !Arsenal.StillThere(s.TargetWeapon, s.TargetPoint))
             {
-                GiveUpOn(s, "it's gone");
+                if (s.Scrambling) FailScramble(s, "it's gone");
+                else GiveUpOn(s, "it's gone");
                 return;
             }
 
             if (Arrived(s.TargetPoint, Settings.PickupRange.Value))
             {
                 BotOwner.StopMove();
-                s.SetPhase(Phase.PickingUp, $"picking up {s.TargetWeapon.ShortName.Localized()}");
                 Item weapon = s.TargetWeapon;
+                bool scrambling = s.Scrambling;
+                s.SetPhase(Phase.PickingUp, $"picking up {weapon.ShortName.Localized()}");
+                s.Scrambling = scrambling;
                 Arsenal.PickUp(Me, weapon, ok => HandsAreHighPlugin.Try("after pick-up", () => AfterPickUp(weapon, ok)));
                 return;
             }
             if (Stalled(s))
             {
-                GiveUpOn(s, "stuck on the way");
+                if (s.Scrambling) FailScramble(s, "stuck on the way");
+                else GiveUpOn(s, "stuck on the way");
                 return;
             }
-            if (Time.time - s.PhaseSince > Settings.RecoveryTimeout.Value)
-                GiveUpOn(s, "took too long");
+            float limit = s.Scrambling ? Settings.ScrambleTimeout.Value : Settings.RecoveryTimeout.Value;
+            if (Time.time - s.PhaseSince > limit)
+            {
+                if (s.Scrambling) FailScramble(s, "took too long");
+                else GiveUpOn(s, "took too long");
+            }
         }
 
         private void AfterPickUp(Item weapon, bool ok)
@@ -417,7 +551,8 @@ namespace HandsAreHigh
             if (!SurrenderRegistry.TryGet(Me, out SurrenderState s) || s.Phase != Phase.PickingUp || s.TargetWeapon != weapon) return;
             if (!ok)
             {
-                GiveUpOn(s, "pick-up failed (no room, or taken)");
+                if (s.Scrambling) FailScramble(s, "pick-up failed (no room, or taken)");
+                else GiveUpOn(s, "pick-up failed (no room, or taken)");
                 return;
             }
             if (!Arsenal.Carries(Me, weapon))
@@ -426,7 +561,7 @@ namespace HandsAreHigh
                 return;
             }
             if (Arsenal.DrawGun(BotOwner))
-                Rearm(s, $"rearmed with {weapon.ShortName.Localized()}");
+                Rearm(s, $"rearmed with {weapon.ShortName.Localized()}{(s.Scrambling ? " after a scramble" : "")}");
             else
                 GiveUpOn(s, "has the gun but couldn't draw it");
         }
@@ -435,7 +570,10 @@ namespace HandsAreHigh
         {
             Hold(Settings.Stance.Value);
             if (Time.time - s.PhaseSince > Settings.PickupTimeout.Value)
-                GiveUpOn(s, "pick-up never finished");
+            {
+                if (s.Scrambling) FailScramble(s, "pick-up never finished");
+                else GiveUpOn(s, "pick-up never finished");
+            }
         }
 
         private void GiveUpOn(SurrenderState s, string why)
@@ -449,10 +587,10 @@ namespace HandsAreHigh
 
         // Nothing to fight with: gets out of sight of where he last saw you, stays low,
         // and looks again every few seconds.
-        private void GoHide(SurrenderState s, string why)
+        private void GoHide(SurrenderState s, string why, bool quiet = false)
         {
             BotOwner.StopMove();
-            s.SetPhase(Phase.Hiding, why);
+            s.SetPhase(Phase.Hiding, why, quiet);
             if (Perception.CanSee(Me, s.CaptorLastSeen) &&
                 Perception.RetreatPoint(Me, s.CaptorLastSeen, Settings.CoverRadius.Value, true, out s.TargetPoint))
             {
@@ -482,7 +620,8 @@ namespace HandsAreHigh
             if (Time.time - s.PhaseSince > Settings.HideRecheck.Value)
             {
                 s.RegroupUntil = Time.time;
-                s.SetPhase(Phase.Regrouping, "looks again");   // Decide comes back here if there's still nothing
+                // Decide comes back to Hiding if there's still nothing; logged once, not every 8 s.
+                s.SetPhase(Phase.Regrouping, "looks again", quiet: true);
             }
         }
 
@@ -521,7 +660,8 @@ namespace HandsAreHigh
                 }
             }
             BotOwner.StopMove();
-            SurrenderRegistry.Surrender(Me, aiming, "caught again");
+            s.HidCount = 0;
+            SurrenderRegistry.Surrender(Me, aiming, s.Scrambling ? "caught mid-scramble" : "caught again");
             return true;
         }
 
@@ -534,7 +674,8 @@ namespace HandsAreHigh
             BotOwner.SetPose(pose);
         }
 
-        // Re-issues the path every second; false if there's no complete way there.
+        // Follows a NavMesh path we computed (BotMover.GoToByWay), re-issued every second;
+        // false if there's no complete way there. Never BotOwner.GoToPoint (see Perception.PathTo).
         private bool MoveTo(SurrenderState s, Vector3 point, bool sprint)
         {
             BotOwner.SetPose(1f);
@@ -544,9 +685,11 @@ namespace HandsAreHigh
             s.NextMoveOrder = Time.time + MoveOrderInterval;
             if (first) ResetProgress(s);
 
-            var status = BotOwner.GoToPoint(point, false, 1f);
+            if (!Perception.PathTo(Me.Position, point, out Vector3[] corners)) return false;
+            BotOwner.MovementResume();
+            BotOwner.Mover.GoToByWay(corners, ReachDist);
             BotOwner.Sprint(sprint);
-            return status != UnityEngine.AI.NavMeshPathStatus.PathInvalid;
+            return true;
         }
 
         private void ResetProgress(SurrenderState s)

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Comfort.Common;
 using EFT;
+using EFT.InventoryLogic;
 using UnityEngine;
 
 namespace HandsAreHigh
@@ -14,6 +15,15 @@ namespace HandsAreHigh
         internal int SquadPeak;
         internal int SquadSeen;
         internal float SquadLossTime = -1000f;
+
+        // Incoming fire (Suppression.cs): shots at him, faded by half-life from FireAt.
+        internal float Fire;
+        internal float FireAt;
+
+        // Cached kit assessment (Arsenal.AssessKit), refreshed every KitRecheck seconds.
+        internal float KitAt = -1000f;
+        internal float KitValue = -1f;     // handbook roubles; -1 = no handbook, neutral
+        internal float Protection;         // best armour class worn / 6
     }
 
     // Who is surrendered, keyed by the bot's Player so the layer (BotOwner) and the arm
@@ -67,7 +77,10 @@ namespace HandsAreHigh
 
             if (States.TryGetValue(bot, out SurrenderState existing))
             {
-                // Found again while retreating or hiding: hands go back up.
+                // Found again while retreating or hiding: hands go back up. Stopped mid-scramble,
+                // he won't try that again straight away (no flip-flopping).
+                if (existing.Scrambling)
+                    existing.ScrambleCooldownUntil = Time.time + Settings.ScrambleCooldown.Value;
                 existing.Captor = captor;
                 existing.RaiseArms();
                 existing.Order = Order.None;
@@ -111,18 +124,37 @@ namespace HandsAreHigh
             Voice.Say(s, EPhraseTrigger.HoldFire);
         }
 
-        // Empties his hands: a gun goes on the ground, a knife goes back in its sheath.
-        // The arms only rise once nothing is left in his hands (Tick).
+        // Empties his hands at once: a gun goes on the ground, a knife goes back in its sheath.
+        // The game's callback (hands empty) is what lets the arms rise, the same frame; no
+        // polling in between. Timeline logged when the arms are fully up (Tick).
         internal static void StartDrop(SurrenderState s)
         {
+            s.TStart = Time.realtimeSinceStartup;
+            s.TDropRequested = s.THandsEmpty = s.TThrown = -1f;
+            s.TimingLogged = false;
             s.DropAttempts = 1;
             s.DropSince = Time.time;
             s.DropPending = !Arsenal.HandsFree(s.Bot);
-            if (!s.DropPending) return;
+            if (!s.DropPending) { s.THandsEmpty = s.TStart; return; }
+            RequestDrop(s);
+        }
 
+        internal static void RequestDrop(SurrenderState s)
+        {
             HandsAreHighPlugin.Try("drop weapon in hands", () =>
             {
-                var dropped = Arsenal.EmptyHands(s.Bot);
+                if (s.TDropRequested < 0f) s.TDropRequested = Time.realtimeSinceStartup;
+                Item dropped = Arsenal.EmptyHands(s.Bot,
+                    onEmpty: () =>
+                    {
+                        if (s.THandsEmpty < 0f) s.THandsEmpty = Time.realtimeSinceStartup;
+                        s.DropPending = false;
+                    },
+                    onThrown: ok =>
+                    {
+                        if (ok) s.TThrown = Time.realtimeSinceStartup;
+                        else HandsAreHighPlugin.Log.LogWarning($"{s.Name}: the game refused to throw his gun; it went back on his body");
+                    });
                 if (dropped != null)
                 {
                     s.DroppedWeapon = dropped;
@@ -132,18 +164,23 @@ namespace HandsAreHigh
             });
         }
 
-        // Debug: act as if every captor just walked away.
-        internal static void ForceCaptorLeft()
+        // Debug keys: one bot only, resolved by the caller from the crosshair.
+        internal static string DebugLeave(SurrenderState s)
         {
-            foreach (SurrenderState s in States.Values)
-                if (s.Phase == Phase.HandsUp) s.ForcedLeave = true;
+            if (s.Phase != Phase.HandsUp) return $"not holding his hands up ({s.Phase}), nothing to leave";
+            s.ForcedLeave = true;
+            return "acts as if you left";
         }
 
-        // Debug: give every surrendered bot an opening right now.
-        internal static void ForceOpening()
+        internal static string DebugOpening(SurrenderState s)
         {
-            foreach (SurrenderState s in States.Values)
-                if (s.Phase == Phase.HandsUp) s.ForcedOpening = true;
+            if (s.Phase != Phase.HandsUp) return $"not holding his hands up ({s.Phase}), no opening to give";
+            float secs = Settings.DebugOpeningSeconds.Value;
+            s.DebugOpeningUntil = Time.time + secs;
+            // The opening has to last OpeningDelay like a real one; make the first roll due then.
+            s.UnwatchedSince = Time.time;
+            s.NextBreakRoll = 0f;
+            return $"not covered for {secs:0} s; his own rolls decide";
         }
 
         // A held bot was shot or killed: others with their hands up who can see it run.
@@ -207,6 +244,14 @@ namespace HandsAreHigh
                 s.Progress = Mathf.Clamp01(s.Progress);
                 s.Weight = Mathf.SmoothStep(0f, 1f, s.Progress);
 
+                if (s.ArmsUp && s.Progress >= 1f && !s.TimingLogged && s.TStart > 0f)
+                {
+                    s.TimingLogged = true;
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: hands up. Timeline from surrender: drop asked {Ms(s, s.TDropRequested)}, " +
+                        $"hands empty {Ms(s, s.THandsEmpty)} (game holster), gun on the ground {Ms(s, s.TThrown)}, arms up {Ms(s, Time.realtimeSinceStartup)} " +
+                        $"(raise {Settings.RaiseSeconds.Value:0.00} s), drop tries {s.DropAttempts}");
+                }
+
                 if (s.Phase == Phase.Rearmed && s.Progress <= 0f) Finished.Add(bot);
             }
 
@@ -237,6 +282,9 @@ namespace HandsAreHigh
         {
             foreach (SurrenderState s in States.Values) Unhook(s);
         }
+
+        private static string Ms(SurrenderState s, float t) =>
+            t < 0f ? "n/a" : $"+{(t - s.TStart) * 1000f:0} ms";
 
         // ORBIT's Ghost Mode (or anything else) can put a bot to sleep. While asleep he
         // can't fetch anything, so the claim on a gun goes; on waking he decides again.
