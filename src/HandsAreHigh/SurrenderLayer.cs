@@ -110,7 +110,7 @@ namespace HandsAreHigh
         private void Rearmed(SurrenderState s)
         {
             Hold(1f);
-            if (!s.DrawPending) return;
+            if (!s.DrawPending || Kneel.LegsLocked(s)) return;   // turns once his knees are off the ground
             Face(s, ThreatPos(s, s.Captor) + Vector3.up * 1.3f);
         }
 
@@ -123,12 +123,15 @@ namespace HandsAreHigh
 
             switch (s.Order)
             {
-                case Order.Kneel: Hold(0f); break;   // no kneel animation exists: lowest crouch, hands up
+                // Kneeling (Kneel.cs) owns the pose while it runs; its fallback (logged) is the
+                // crouch with hands up that 0.10.0 and earlier used for this order.
+                case Order.Kneel: Hold(Kneel.HoldPose(s)); break;
                 case Order.Follow when captorAlive: Follow(s, captor); break;
                 default: Hold(Settings.Stance.Value); break;
             }
-            // He faces the captor he sees; otherwise where he last knew him to be.
-            if (Settings.FaceCaptor.Value && captorAlive)
+            // He faces the captor he sees; otherwise where he last knew him to be. Not while any
+            // part of a kneel is on: turning the body would slide his knees over the ground.
+            if (Settings.FaceCaptor.Value && captorAlive && !Kneel.Active(s))
                 Face(s, ThreatPos(s, captor) + Vector3.up * 1.6f);
 
             ProcessDropQueue(s);
@@ -150,6 +153,17 @@ namespace HandsAreHigh
                 float q = ScrambleQuality(s, captor.Position, Perception.Eye(captor), out string qWhy, forced: true);
                 if (q > 0f) StartScramble(s, captor.Position, $"debug: forced, {qWhy}");
                 else HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced grab not possible: {qWhy}");
+                return;
+            }
+            if (s.ForceDraw)
+            {
+                // Debug (kneel interruption test): the draw an opening would make, without the roll.
+                s.ForceDraw = false;
+                EquipmentSlot? kept = Arsenal.GunOnBody(Me);
+                if (kept == null) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced draw: no gun on him");
+                else if (s.DrawPending) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced draw: already drawing");
+                else if (Arsenal.Draw(s, BotOwner, false)) Rearm(s, $"debug: forced draw of his {Arsenal.SlotName(kept)}");
+                else CommitDraw(s, Arsenal.SlotName(kept));
                 return;
             }
 
@@ -448,6 +462,7 @@ namespace HandsAreHigh
         // running. Hiding then crouches, watches and decides again (Regrouping).
         private void BeginHide(SurrenderState s, Vector3 threat, string why)
         {
+            Kneel.Urge(s, KneelRise.Escape);
             s.LowerArms(Settings.EmergencyLowerSeconds.Value);
             s.GraceUntil = Time.time + Settings.Grace.Value;
             s.Order = Order.None;
@@ -563,34 +578,38 @@ namespace HandsAreHigh
             float nerve = s.Nerve;
             EquipmentSlot? gun = Arsenal.GunOnBody(Me);
             float legs = s.LegsBad ? 0.35f : 1f;
+            // On his knees he has to get up first (Kneel quick stand) before he can move: anything
+            // on foot weighs less, a draw a little less (he can draw while rising).
+            bool kneeling = Kneel.Active(s) && s.KneelT > 0.5f;
+            float onFoot = kneeling ? 0.6f : 1f, drawK = kneeling ? 0.85f : 1f;
 
             var options = new List<Choice>(5);
             var log = new StringBuilder();
             log.Append($"{s.Name} takes an opening ({opening}) at {dist:0.0} m (nerve {nerve:0.00}" +
                        $"{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}, hurt {s.Injury:0.00}{(s.LegsBad ? ", legs hurt" : "")}, " +
-                       $"{allies} squadmate(s) near): ");
+                       $"{allies} squadmate(s) near{(kneeling ? $", kneeling: on foot x{onFoot:0.0}, draw x{drawK:0.00}" : "")}): ");
 
             if (gun == null) log.Append("draw: no gun on him; ");
             else if (dist > Settings.SidearmRange.Value) log.Append($"draw: you're beyond {Settings.SidearmRange.Value:0} m; ");
             else Add(options, log, "draw " + Arsenal.SlotName(gun),
-                Settings.DrawWeight.Value * (0.4f + nerve) * fight * (allies > 0 ? 1.2f : 1f) * (1f - 0.4f * s.Injury));
+                Settings.DrawWeight.Value * (0.4f + nerve) * fight * (allies > 0 ? 1.2f : 1f) * (1f - 0.4f * s.Injury) * drawK);
 
             if (gun != null) log.Append("knife: has a gun to draw; ");
             else if (!Arsenal.HasMelee(Me)) log.Append("knife: none; ");
             else if (dist > Settings.KnifeRange.Value) log.Append($"knife: you're beyond {Settings.KnifeRange.Value:0} m; ");
-            else Add(options, log, "knife", Settings.KnifeWeight.Value * (0.2f + nerve) * fight * (1f - 0.5f * s.Injury) * Mathf.Lerp(legs, 1f, 0.5f));
+            else Add(options, log, "knife", Settings.KnifeWeight.Value * (0.2f + nerve) * fight * (1f - 0.5f * s.Injury) * Mathf.Lerp(legs, 1f, 0.5f) * onFoot);
 
             if (scramble <= 0f) log.Append($"scramble: {scrambleWhy}; ");
-            else Add(options, log, "scramble", Settings.ScrambleWeight.Value * scramble * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f) * legs);
+            else Add(options, log, "scramble", Settings.ScrambleWeight.Value * scramble * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f) * legs * onFoot);
 
             if (dist < Settings.EscapeMinDistance.Value) log.Append($"run: you're within {Settings.EscapeMinDistance.Value:0} m; ");
             else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.RetreatDistance.Value, false, out _)) log.Append("run: no way out; ");
-            else Add(options, log, "run", Settings.EscapeWeight.Value * Mathf.Max(0.1f, 1.3f - nerve) * flee * legs);
+            else Add(options, log, "run", Settings.EscapeWeight.Value * Mathf.Max(0.1f, 1.3f - nerve) * flee * legs * onFoot);
 
             Vector3 hidePoint = Vector3.zero;
             if (dist < Settings.EscapeMinDistance.Value * 0.5f) log.Append("hide: you're right there; ");
             else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.CoverRadius.Value, true, out hidePoint)) log.Append("hide: no hidden spot near; ");
-            else Add(options, log, "hide", Settings.HideWeight.Value * (1.3f - nerve) * flee * (s.LegsBad ? 1.5f : 1f));
+            else Add(options, log, "hide", Settings.HideWeight.Value * (1.3f - nerve) * flee * (s.LegsBad ? 1.5f : 1f) * (kneeling ? 0.8f : 1f));
 
             if (options.Count == 0)
             {
@@ -655,6 +674,7 @@ namespace HandsAreHigh
         // Arms down at once and a sprint for his own gun; the pick-up is the real transaction.
         private void StartScramble(SurrenderState s, Vector3 captorPos, string why)
         {
+            Kneel.Urge(s, KneelRise.Escape);
             s.LowerArms(Settings.EmergencyLowerSeconds.Value);
             s.Order = Order.None;
             s.DropQueue.Clear();
@@ -688,6 +708,9 @@ namespace HandsAreHigh
         // DrawLowerSeconds while the game's draw animation starts underneath, in the same frame.
         private void Rearm(SurrenderState s, string reason)
         {
+            // A draw from the knees: the prompt, guarded rise (the draw itself starts now, on the
+            // hands controller; the legs are ours and the AI gets him only once he's up).
+            Kneel.Urge(s, KneelRise.Defensive);
             s.DrawCommitUntil = 0f;
             s.LowerArms(Settings.DrawLowerSeconds.Value);
             s.Order = Order.None;
@@ -821,7 +844,7 @@ namespace HandsAreHigh
         private void Regrouping(SurrenderState s, bool check)
         {
             Hold(0.6f);
-            BotOwner.Steering.LookToPoint(s.CaptorLastSeen + Vector3.up * 1.5f);
+            if (!Kneel.LegsLocked(s)) BotOwner.Steering.LookToPoint(s.CaptorLastSeen + Vector3.up * 1.5f);
             if (!check) return;
             if (SpottedAgain(s)) return;
             if (Time.time < s.RegroupUntil) return;
@@ -1016,7 +1039,7 @@ namespace HandsAreHigh
             else
             {
                 Hold(0f);
-                BotOwner.Steering.LookToPoint(s.CaptorLastSeen + Vector3.up * 1.5f);
+                if (!Kneel.LegsLocked(s)) BotOwner.Steering.LookToPoint(s.CaptorLastSeen + Vector3.up * 1.5f);
             }
             if (!check) return;
             if (SpottedAgain(s)) return;
@@ -1103,6 +1126,7 @@ namespace HandsAreHigh
 
         private void SetPose(float pose)
         {
+            pose = Kneel.Pose(_s, pose);   // the game's crouch stays on while he kneels or rises
             if (Mathf.Abs(pose - _pose) < 0.01f) return;
             _pose = pose;
             BotOwner.SetPose(pose);
@@ -1130,10 +1154,22 @@ namespace HandsAreHigh
         // False if there's no complete way there. Never BotOwner.GoToPoint (see Perception.PathTo).
         private bool MoveTo(SurrenderState s, Vector3 point, bool sprint)
         {
+            // Still on his knees (getting up, quickly if it's urgent): no step, no sprint until
+            // his legs are free. Progress timers wait with him; the path is made fresh after.
+            if (Kneel.LegsLocked(s))
+            {
+                if (s.Moving) { BotOwner.StopMove(); BotOwner.SetTargetMoveSpeed(0f); s.Moving = false; }
+                BotOwner.Sprint(false);
+                SetPose(0f);
+                ResetProgress(s);
+                s.NextMoveOrder = 0f;
+                return true;
+            }
             SetPose(1f);
             BotOwner.SetTargetMoveSpeed(1f);
             bool first = s.NextMoveOrder == 0f || !s.Moving;
             bool moved = (point - s.PathTarget).sqrMagnitude > 1f;
+            if (s.SprintHeld && Kneel.SprintAllowed(s)) { s.SprintHeld = false; if (sprint) BotOwner.Sprint(true); }
             if (!first && !moved && Time.time < s.NextMoveOrder) return true;
             // A moving destination (following you) re-paths at most twice a second.
             if (!first && moved && Time.time - (s.NextMoveOrder - RepathInterval) < 0.5f) return true;
@@ -1150,7 +1186,11 @@ namespace HandsAreHigh
             s.Moving = true;
             BotOwner.MovementResume();
             BotOwner.Mover.GoToByWay(corners, ReachDist);
-            BotOwner.Sprint(sprint);
+            // Straight out of a kneel he walks his first steps while our pose blends out
+            // (0.14 s), then sprints: never a sprint cycle under a kneeling body.
+            bool sprintNow = sprint && Kneel.SprintAllowed(s);
+            BotOwner.Sprint(sprintNow);
+            s.SprintHeld = sprint && !sprintNow;
             return true;
         }
 
@@ -1201,7 +1241,7 @@ namespace HandsAreHigh
         public override void BuildDebugText(StringBuilder sb)
         {
             if (SurrenderRegistry.TryGet(Me, out SurrenderState s))
-                sb.AppendLine($"HandsAreHigh: {s.Phase}, order {s.Order}, arms {s.Weight:0.00}, nerve {s.Nerve:0.00}");
+                sb.AppendLine($"HandsAreHigh: {s.Phase}, order {s.Order}, arms {s.Weight:0.00}, nerve {s.Nerve:0.00}{(Kneel.Describe(s) is string k ? ", " + k : "")}");
         }
     }
 }

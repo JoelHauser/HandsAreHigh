@@ -317,6 +317,7 @@ namespace HandsAreHigh
             if (s.Dead || !Perception.Alive(bot)) { why = "dead"; return false; }
             if (s.Phase != Phase.HandsUp) { why = $"now {s.Phase}"; return false; }
             if (s.Suspended) { why = "asleep"; return false; }
+            if (s.Kneel != KneelPhase.Standing) { why = "kneeling"; return false; }   // the kneel owns body and arms
             if (s.WasHit) { why = "hit"; return false; }
             if (!s.ArmsUp || s.Progress < 1f) { why = "arms not fully up"; return false; }
             if (s.Moving) { why = "moving"; return false; }

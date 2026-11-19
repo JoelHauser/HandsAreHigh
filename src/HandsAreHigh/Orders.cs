@@ -11,12 +11,14 @@ namespace HandsAreHigh
     // applied whether or not any audio plays.
     internal static class Orders
     {
-        internal static bool CanGive(SurrenderState s, Player by, bool human, out string why)
+        // debug: the kneel test keys give orders from any distance (same path otherwise).
+        internal static bool CanGive(SurrenderState s, Player by, bool human, out string why, bool debug = false)
         {
             why = null;
             if (s?.Bot == null || s.Dead || !Perception.Alive(s.Bot)) { why = "he's down"; return false; }
             if (s.Phase != Phase.HandsUp) { why = "he isn't holding his hands up"; return false; }
             if (!Perception.Alive(by)) { why = "the one giving it is down"; return false; }
+            if (debug) return true;
             float range = human ? Settings.InteractionRange.Value + 0.5f : Settings.AiOrderRange.Value;
             Vector3 from = Perception.Eye(by), to = Perception.Chest(s.Bot);
             if (Vector3.Distance(from, to) > range) { why = "out of range"; return false; }
@@ -25,9 +27,9 @@ namespace HandsAreHigh
             return true;
         }
 
-        internal static bool Give(SurrenderState s, OrderKind order, Player by, bool human, out string why)
+        internal static bool Give(SurrenderState s, OrderKind order, Player by, bool human, out string why, bool debug = false)
         {
-            if (!CanGive(s, by, human, out why))
+            if (!CanGive(s, by, human, out why, debug))
             {
                 if (human) OrderMenu.Notify($"Too late: {why}", NoteKind.Error);
                 else if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(by)}: order {order} to {s?.Name} not given ({why})");
@@ -42,7 +44,8 @@ namespace HandsAreHigh
             }
             s.Captor = by;
             s.OrderByHuman = human;
-            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: ordered {order} by {(human ? "you" : Restraint.Name(by))}");
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: ordered {order} by {(human ? "you" : Restraint.Name(by))}{(debug ? " (debug key)" : "")}");
+            if (!debug) { s.KneelTestLeft = 0; s.KneelTestArmed = false; }   // a real order ends a kneel test
 
             s.Accept(human ? "gave an order" : "his captor gives orders");
             if (human) HandsAreHighPlugin.Try("order speech", () => CommandVoice.Speak(by, order));
@@ -73,13 +76,29 @@ namespace HandsAreHigh
                     Answer(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Kneel:
+                {
+                    // Kneel.Update does the rest; asking again while he's going down or down
+                    // changes nothing, asking while he rises sends him back down from there.
                     s.Order = Order.Kneel;
-                    if (human) OrderMenu.Notify($"{s.Name} gets down", NoteKind.Success);
+                    string note = Kneel.Request(s, out bool ok);
+                    if (human) OrderMenu.Notify(note, ok ? NoteKind.Success : NoteKind.Error);
+                    Answer(s, VoiceEvent.Acknowledge);
+                    break;
+                }
+                case OrderKind.Stand:
+                    if (s.Order != Order.Kneel && !Kneel.Active(s))
+                    {
+                        if (human) OrderMenu.Notify($"{s.Name} is already on his feet", NoteKind.Error);
+                        break;
+                    }
+                    s.Order = Order.None;
+                    if (human) OrderMenu.Notify($"{s.Name} gets back on his feet, hands up", NoteKind.Success);
                     Answer(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Stay:
-                    s.Order = Order.None;
-                    if (human) OrderMenu.Notify($"{s.Name} stays put", NoteKind.Success);
+                    // Stops a follow; a man on his knees stays on his knees.
+                    if (s.Order != Order.Kneel) s.Order = Order.None;
+                    if (human) OrderMenu.Notify(s.Order == Order.Kneel ? $"{s.Name} stays down" : $"{s.Name} stays put", NoteKind.Success);
                     Answer(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Leave:

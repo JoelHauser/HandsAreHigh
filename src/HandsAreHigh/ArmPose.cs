@@ -18,9 +18,24 @@ namespace HandsAreHigh
         private static void Postfix(Player __instance)
         {
             if (!SurrenderRegistry.Any) return;
-            if (!SurrenderRegistry.TryGet(__instance, out SurrenderState s) || s.Weight <= 0f || s.Dead) return;
+            if (!SurrenderRegistry.TryGet(__instance, out SurrenderState s) || s.Dead) return;
+            bool kneel = Kneel.Posing(s);
+            if (s.Weight <= 0f && !kneel) return;
             long t0 = Perf.Begin();
-            ArmPose.Apply(__instance, s);
+            // One owner per bone, in order: the kneel's body (pelvis, torso, legs), then the
+            // hands-up arms in the corrected torso frame, then the hands-behind-head arms, then
+            // the knee brace (one arm). The standing pose never runs after the kneel's.
+            if (kneel)
+            {
+                try { Kneel.ApplyBody(__instance, s); }
+                catch (System.Exception e) { HandsAreHighPlugin.Report("kneel pose", e); }
+            }
+            if (s.Weight > 0f) ArmPose.Apply(__instance, s);
+            if (kneel)
+            {
+                try { Kneel.ApplyHands(__instance, s); Kneel.ApplyBrace(__instance, s); }
+                catch (System.Exception e) { HandsAreHighPlugin.Report("kneel hands", e); }
+            }
             Perf.End(Perf.Sec.Pose, t0);
         }
     }
@@ -102,7 +117,7 @@ namespace HandsAreHigh
         // right: along the shoulders (both upper arms), signed to match the body's right;
         // up: ribcage to head, made square to right; fwd: right x up. Falls back to the body's
         // yaw frame if the bones are missing or degenerate.
-        private static bool TorsoFrame(Player player, PlayerBones bones, out Vector3 right, out Vector3 up, out Vector3 fwd)
+        internal static bool TorsoFrame(Player player, PlayerBones bones, out Vector3 right, out Vector3 up, out Vector3 fwd)
         {
             Transform body = player.Transform.Original;
             Vector3 bodyRight = body.right;
@@ -135,7 +150,7 @@ namespace HandsAreHigh
         }
 
         // Turn `bone` so the direction to `child` matches `desired`, blended by w.
-        private static void Aim(Transform bone, Transform child, Vector3 desired, float w)
+        internal static void Aim(Transform bone, Transform child, Vector3 desired, float w)
         {
             Vector3 current = child.position - bone.position;
             if (current.sqrMagnitude < 1e-6f) return;

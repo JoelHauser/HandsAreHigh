@@ -6,15 +6,12 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
-**0.10.0 (debug scenarios), built against `C:\HUH` 2026-11-19 (dist/HandsAreHigh-0.10.0.zip),
-0 warnings; committed and pushed to `main` 2026-11-19; not installed, never run in game.**
-0.5.0-0.10.0 are all unverified in raid. No GitHub release.
+**0.12.0 (kneel styles, rise intents, knee brace, no crouch look), built against `C:\HUH` 2026-11-19
+(dist/HandsAreHigh-0.12.0.zip), 0 warnings; committed and pushed to `main` 2026-11-19 (0.11.0 in the same commit); not installed, never run in game.**
+0.5.0-0.12.0 are all unverified in raid. No GitHub release. Preview of the motion (same solver,
+stick figure): https://claude.ai/artifact/BmomFjtD7GVoPCYSgKN5Aj
 
-Next: Joel runs the 0.10.0 scenario test plan first (it makes the 0.5.0-0.9.0 plans quick to
-reproduce: most of their steps are presets now), then the older plans. Everything below 0.10.0 unchanged in behaviour
-except: every roll goes through `Dice` (UnityEngine.Random unless a scenario seed is set),
-scenario participants carry `Nickname#S1-Tag` in all log lines, and the restraint patches /
-threat loops also consult `ScenarioShield` (one bool when idle).
+Next: Joel runs the 0.12.0 kneel test plan (below), then 0.10.0 (scenarios), then the older plans.
 
 ### Notes after 0.10.0 (2026-11-19, nothing built)
 
@@ -27,19 +24,157 @@ threat loops also consult `ScenarioShield` (one bool when idle).
 - **Hot reload**: Joel declined (2026-11-19). Teardown supports it, but BigBrain layers attach at
   brain activation and can't be removed: bots spawned before a reload keep the old (inert)
   layers. No ScriptEngine on C:\HUH.
-- **Kneel + hands behind head (open idea, Joel asked; not built)**: no clip exists. Searched
-  player_anim_controller.bundle (UnityPy, clips matching kneel/knee/sit/squat/surrender/hands up/
-  behind/head/getup/stand up): only prone/aim/idle clips; civilian_anim_controller has no bundle;
-  kaban only idle_Offset_DownUnder. So it would be procedural like ArmPose (VisualPass postfix).
-  PlayerBones has Pelvis, LeftThigh1/RightThigh1 (thigh), LeftThigh2/RightThigh2 (calf; foot is
-  its child), Spine1/Spine3, Neck, Head. Plan: hands behind head = two-bone aim of each palm to
-  a point behind the skull, torso frame (easy, works standing too); kneel = start from the
-  game's crouch (today's Kneel order: SetPose(0), hands up), lower the pelvis, knees on ground
-  (raycast per knee), shins back; timed down (~1.5 s: one knee, other knee, hands to head) and
-  get-up (reverse; a quick version before breaking, which adds to his opening delay). Hitboxes
-  follow bones; the capsule stays crouch-sized. Risks: can't be judged without seeing it (config
-  angles/timings), simplified skeleton at range (fall back to crouch), foot/leg IK fighting the
-  override, slopes. Suggested order: hands behind head first, then kneel + get-up.
+- **Kneel + hands behind head**: built in 0.11.0 (below). The note that was here called
+  LeftThigh2 the calf: wrong, it is a mid-thigh twist bone (see 0.11.0).
+
+### 0.12.0 (kneel polish: Kneel.cs)
+
+- No crouch look: 0.11.0 solved the legs from the animated crouch, so he squatted first. Now his
+  standing pose is captured body-local at the first frame down (`CaptureRef`, `KneelRef*`) and
+  pelvis/torso/legs are solved from it at full weight for the whole kneel; the game's crouch
+  (capsule only) is requested at t >= 0.35 going down, the stand at t <= 0.50 rising. Hand-back
+  after a rise: `KneelFade` (0.2 s compliant, 0.14 s urgent) from our pose to the animator's.
+- Choreography: lead foot swings back, lead knee down; the other foot steps forward (lifted arc,
+  `KneelStepNow`) into a half-kneel; front knee down beside. Rising: front foot planted, push up
+  over it, foot steps back. Styles (`KneelStyle`, windows in t, chosen once, kept until the end
+  or an interruption; reversal/urgency change only retimes): descents Steady 2.3 s, Frightened
+  1.3 s (short step, knees nearly together, hands up early, hunched), One knee first 2.8 s (pause
+  in the half-kneel); rises Compliant 1.7 s, Defensive 0.9 s, Escape 0.7 s. Descent weights:
+  config x nerve x personality (Coward/Timmy frightened, Chad etc. steady, Rat one knee) x wounds
+  x heavy kit (backpack + armoured vest). Lead leg: per-bot side 80%, swapped/shortened when the
+  front step has no room (`StepRoom`). Small per-bot posture offsets (thigh angle, lean, spread)
+  from the seed.
+- Rise intent: `Kneel.Urge` from BeginRetreat (emergency -> Escape, let go -> Compliant),
+  StartScramble/BeginHide (Escape), Rearm (Defensive); unspecified urgency -> Defensive. Speed x
+  (1 + k x injury) x 1.5 bad leg x 1.08 heavy. Urgent rises hand the legs back at t = 0.15 (path
+  starts at once, walking); `SprintAllowed` holds the sprint until the 0.14 s blend ends
+  (`SprintHeld`).
+- Knee brace (`ApplyBrace`, after ApplyHands): front-side palm on the front thigh 0.10 m above
+  the knee (rides on the bone, no sliding), only while the front foot is planted and the hips
+  start up; +16 deg lean while braced; eases off past 1.04 of arm reach (logged once). Offline
+  reach at full contact 0.78-0.98. Hand on the GROUND not built: kneeling shoulder ~0.9-1.0 m up,
+  arm+hand ~0.65 m, only reachable folded almost flat. Chance 0.55 compliant, x1.3 escape,
+  x0.45 defensive, never while drawing. Bones only.
+- Bot captors: "hold" plans order Kneel instead of Stay at "Captors put prisoners on their
+  knees" (0.4); Leave later gets him up calmly.
+- Config 12. Kneeling: style times/weights, Stand up / Defensive / Quick stand times, Brace on
+  the knee when rising, Brace chance, Transition lean scale (replaces Lean while lowering or
+  rising; Torso upright removed). 14. Debug: Kneel test style / rise / brace (force a variant),
+  Ctrl+Alt+K urgent rise (Escape = forced run, Defensive = forced draw or SIMULATED hit). An
+  opening while kneeling: the existing `]` key.
+- Offline (scratchpad kneel_sim2.py): 3 descents x 3 rises x 60/20 fps: nothing under the ground,
+  knee 44-129 deg, largest move/frame 4.5-9 cm at 60 fps (escape fastest), reversals at t 0.2/
+  0.5/0.8 continuous.
+
+### In-game test plan (0.12.0)
+
+Debug keys, Overlay, Log kneeling, Kneel gizmos on. Grep `kneel:`.
+1. Kneel test style = each style, Ctrl+K: no squat before the knees go down; front foot steps
+   forward, back knee down, front knee beside; watch side and front, 60 fps and capped 30.
+2. Shift+K with Kneel test rise = Compliant / brace Always, Never: hand lands on the front thigh
+   (H mark at the K mark) and stays on it while he pushes up; ends in hands-up, no pop at the end.
+3. Ctrl+Alt+K Escape and Defensive: rise in ~0.7 / ~0.9 s, first step without a pause, sprint
+   ~0.14 s later, no sprint cycle on the knees; draw finishes, AI hand-off after the blend.
+4. `]` while kneeling: decision log shows kneeling weights; if he bolts: `Escape rise`.
+5. A wounded bot (thorax, bleeding): slower rises; a heavy PMC (backpack + plates): style log.
+6. Bot captor with a Scav: `holds ... plan`, some `ordered Kneel by <PMC>`; on release he rises.
+7. Interrupt tests (Ctrl+Shift+K) at 0.2/0.5/0.9 both ways; Kill mid-rise: ragdoll, no stand.
+
+### 0.11.0 (kneel, hands behind the head; src/HandsAreHigh/Kneel.cs)
+
+Engine facts checked first (decompile of C:\HUH Assembly-CSharp + skeleton.bundle via UnityPy):
+- No kneel/sit/get-up clip in player_anim_controller (0.10.0 search). So procedural, on top of the
+  game's own crouch: `BotOwner.SetPose(0)` -> BotMover eases PoseLevel (0.2 of the gap per frame);
+  `MovementContext.SetPoseLevel` sizes the capsule `Lerp(1.2, 1.6, pose)`, so the kneeling bot has
+  the game's 1.2 m crouch capsule (head ~1.3 m kneeling). No collider, capsule or position is ours.
+- `Player.Grounder` (FinalIK GrounderFBBIK) is disabled in `InitVisuals`; FBBIK/LimbIK only work
+  the hands. Nothing re-poses the legs after the animator, so the VisualPass postfix is the last
+  writer; the animator rewrites every bone next frame (nothing accumulates). `_bodyupdated`
+  (protected, FieldRefAccess) is false on frames the body animator didn't run: the body pass is
+  skipped then (re-posing our own output would creep). `UsedSimplifiedSkeleton` is set at creation
+  (infected), not a distance LOD.
+- Skeleton: `Base HumanPelvis` (0.928 m bind) -> `HumanLThigh1` (hip) -> `HumanLThigh2` (mid-thigh
+  twist, 0.228 m) -> `HumanLCalf` (knee, +0.228) -> `HumanLFoot` (ankle, +0.46) -> `HumanLToe`
+  (+0.155). PlayerBones.LeftThigh2 is NOT the calf. Rig found per surrender by these names under
+  PlayerBones.LeftThigh1/RightThigh1; lengths measured live; any missing bone -> fallback, logged.
+- `MovementContext.CanStandAt(1f)` checked when he starts rising (logged if a ceiling will keep
+  him crouched; the game's own ChangePose refuses to stand there anyway).
+
+Pose (all in ArmPosePatch, one owner per bone, in order): `Kneel.ApplyBody` (pelvis turned upright
++ lean, pelvis to kneeling height, head keeps the game's gaze, each leg: FK slerp from the
+planted-foot two-bone solution to knee-on-ground / shin back / toes tucked, with knee/foot/toe
+never under the cached ground) -> `ArmPose.Apply` (hands up, torso frame) -> `Kneel.ApplyHands`
+(two-bone arm IK from the hands-up palm along a path pushed out around the skull + helmet, elbows
+out). One progress t: 0-0.12 take-over, 0.10-0.55 pelvis + lead knee (half-kneel), 0.45-0.82
+trailing knee, 0.15-0.80 lean bump, 0.70-1 hands. Rising = same path backwards (reversal is
+continuous). Toes tucked, not instep-down: instep-down turns the foot through straight down near
+the ground and the offline check showed it flipping 30 cm in one frame.
+
+State (SurrenderState.Kneel*, Kneel.Update from Registry.Tick): Standing / GoingDown / Down /
+GettingUp. The order sets only `Order`; Update moves t towards it, so repeats don't restart and a
+reversal continues from where he is. Begin waits for arms up, hands not busy, not moving, no
+interaction (6 s limit), then static checks: legs not destroyed, rig, ground (4 raycasts: knee and
+foot points, each within "Max ground step" and "Max slope"), room (shin capsules, elbow spheres,
+kneeling body capsule; static mask only). Fail -> `KneelFallback` (reason logged and on screen)
+-> crouch with hands up (or standing, config); cleared by a new order. Ground re-checked only if
+he is moved > 0.15 m or turned > 10 deg (max 2x/s); unsuitable -> gets up. Urgent (any phase
+but HandsUp: shot/bolt, run, scramble, draw, hide, let go, mod disabled): quick rise (0.6 s), no
+reversal; `LegsLocked` (t > 0.14) blocks MoveTo (no step, no sprint, progress timers reset),
+facing and Regroup/Hide turning; `Kneel.Pose` keeps the game crouch until t <= 0.28; Rearmed hands
+to the AI only once Standing. Draws may start while he rises (hands animator only; nothing new on
+the hands controller, so no new busy-hands path). Opening weights while kneeling: run/scramble/
+knife x0.6, hide x0.8, draw x0.85 (logged). Gestures refuse while kneeling (and are cancelled at
+its start). Death: the postfix checks Dead and the game stops VisualPass: no stand-up, no bone
+written, the ragdoll starts from whatever pose he died in. Despawn/teardown: state removed, bones
+are the animator's next frame (a snap only on hot reload).
+
+Orders: Kneel (Get down) -> Kneel.Request; new `OrderKind.Stand` (On your feet, menu row only
+available while down); Stay keeps a kneeling man down (before it stood him up). Bot captors
+never order Kneel. Facing is frozen while any part of the kneel is on (turning slides knees).
+
+Config 12. Kneeling: Kneel on order, Kneel down time 2 s, Stand up time 1.6 s, Quick stand time
+0.6 s, Leg pose strength, Torso upright, Torso lean, Lean while lowering or rising, Knee height,
+Thigh angle, Knee spread, Hips forward, Hands behind head strength / distance, Hands above neck,
+Elbows out, Helmet extra, Max ground step, Max slope, Crouch when kneeling is impossible.
+14. Debug: Log kneeling, Kneel gizmos (overlay marks K/F/H), keys (Debug keys on) Ctrl+K kneel,
+Shift+K stand, Alt+K loop (Kneel test cycles), Ctrl+Shift+K interrupt test (Kneel test
+interruption: Reverse / Hit (SIMULATED, no damage) / Run / Draw / Kill; Kneel test interrupts:
+GoingDown / GettingUp; Kneel test interrupt at 0-1). Debug keys go through `Orders.Give(...,
+debug: true)` (range/line check skipped, everything else the menu's path).
+
+Offline checks (scratchpad kneel_sim.py, a Python port of the solver with the bundle's lengths):
+crouch pelvis 0.40 / 0.55 / 0.70 m, 60 and 20 fps, uneven ground +-0.10/0.12 m, either lead knee:
+segment lengths exact, knee/foot/toe never under the ground, knee flex 78-153 deg, largest
+per-frame move 3 cm at 60 fps / 8 cm at 20 fps (no jumps); hands never inside the skull sphere
+(with and without helmet), final elbows ~0.31 m out at head height, elbow flex ~118 deg. Not
+checkable offline: the game's real crouch pose, how it looks, Unity-side state machine timing.
+
+Limits: procedural only (no animation asset), so the look depends on config values that can only
+be judged in game; feet are toes-tucked; facing is frozen while kneeling; a corpse or another
+player where his shins go is not checked (static geometry only); hand/wrist orientation follows
+the forearm (no finger interlock).
+
+### In-game test plan (0.11.0)
+
+Debug keys + Overlay on, Log kneeling on, Kneel gizmos on for 1-3. Grep `kneel:`, `kneel test`,
+`ordered Kneel`, `ordered Stand`, `can't kneel`, `Kneel rig`.
+1. `[` a Scav on flat ground, Ctrl+K: `kneel: gets down`, ~2 s, `on his knees ... (2.0x s, N
+   frames)`. Walk round him (front, sides, behind, close, 30 m+): knees on the ground (K marks at
+   the knees), no floating/sinking, toes tucked, hands behind the head, elbows out, no hand inside
+   the head; helmet and no helmet; Scav, PMC with plate carrier + backpack.
+2. Shift+K: `gets up ... (ordered up)`, foot planted, rises, ends in the normal hands-up pose.
+   Repeat Ctrl+K while going down / down: nothing restarts. Ctrl+K while rising: `back down from`.
+3. Alt+K (3 cycles): no snaps, no stuck pose, no busy hands; frame-time limit (or low settings):
+   timelines show more frames/longer dt, same seconds.
+4. Stairs, slope > 20 deg, against a wall (back to it), under a low table, a destroyed leg:
+   `can't kneel here (...)`, crouches (or stands with the fallback off), menu says why.
+5. Ctrl+Shift+K with Kneel test interruption = Hit / Run / Draw / Kill, during GoingDown and
+   GettingUp at 0.2 / 0.5 / 0.9: quick rise (<= 0.6 s) before any step; no sprint while knees are
+   down; draw goes out while rising, AI hand-off only after `back on his feet`; Kill: ragdoll from
+   the kneel, no stand-up, no later `kneel:` lines for him; Reverse: smooth turnaround.
+6. Real opening while kneeling (`]`): log shows `kneeling: on foot x0.6, draw x0.85`.
+7. Menu: Get down / On your feet / Stay (stays down) / Follow (rises, then walks).
+8. Profile on with 4 kneeling bots: no `Profile spike:`; Pose cost per frame a few us per bot.
 
 ### 0.10.0 (debug scenario sandbox, src/HandsAreHigh/Scenarios/)
 
@@ -549,6 +684,7 @@ Order (none / follow / kneel) is separate from the phase: a following bot is sti
 - **Caught again** (after grace): a human within 12 m aiming within 10 deg for 0.4 s. With a
   gun on him, 0.5 x nerve chance he draws instead.
 - **Orders** (OrderMenu.cs): look at a held bot within 3 m, `/` opens, `.`/`=` choose, `/` gives.
+  Get down = kneel with hands behind the head (Kneel.cs, 0.11.0); On your feet stands him up.
 - **Debug keys** (Runtime.cs): `[` surrender, `]` opening (6 s not covered, his own rolls),
   Backspace leave; each only the bot under the crosshair, logged as `Debug <cmd>: target ...`
   and shown on screen. No target: nothing happens.

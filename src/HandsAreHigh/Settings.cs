@@ -22,6 +22,7 @@ namespace HandsAreHigh
         private const string Demand = "10. Stop demand";
         private const string Feedback = "11. Reactions and voice";
         private const string Pose = "12. Arm pose";
+        private const string KneelSec = "12. Kneeling";
         private const string Compat = "13. Other mods";
         private const string Debug = "14. Debug";
         private const string BotCaptor = "15. Bots taking prisoners";
@@ -231,6 +232,49 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> DefiantDelayMax;
         internal static ConfigEntry<float> DefiantWindow;
         internal static ConfigEntry<float> GestureBlend;
+        // 12 Kneeling
+        internal static ConfigEntry<bool> KneelEnabled;
+        internal static ConfigEntry<float> KneelDownSeconds;
+        internal static ConfigEntry<float> KneelUpSeconds;
+        internal static ConfigEntry<float> KneelQuickSeconds;
+        internal static ConfigEntry<float> KneelStrength;
+        internal static ConfigEntry<float> KneelLean;
+        internal static ConfigEntry<float> KneelLeanScale;
+        internal static ConfigEntry<float> KneelFrightenedSeconds;
+        internal static ConfigEntry<float> KneelOneKneeSeconds;
+        internal static ConfigEntry<float> KneelDefensiveSeconds;
+        internal static ConfigEntry<float> KneelWeightSteady;
+        internal static ConfigEntry<float> KneelWeightFrightened;
+        internal static ConfigEntry<float> KneelWeightOneKnee;
+        internal static ConfigEntry<bool> KneelBrace;
+        internal static ConfigEntry<float> KneelBraceChance;
+        internal static ConfigEntry<float> CaptorKneelChance;
+        internal static ConfigEntry<KeyboardShortcut> KneelUrgentKey;
+        internal static ConfigEntry<KneelStyleChoice> KneelTestStyle;
+        internal static ConfigEntry<KneelRiseChoice> KneelTestRise;
+        internal static ConfigEntry<KneelBraceChoice> KneelTestBrace;
+        internal static ConfigEntry<float> KneeHeight;
+        internal static ConfigEntry<float> KneelThighAngle;
+        internal static ConfigEntry<float> KneeSpread;
+        internal static ConfigEntry<float> KneelHipsForward;
+        internal static ConfigEntry<float> HandsBehindHeadStrength;
+        internal static ConfigEntry<float> HandsBehindHead;
+        internal static ConfigEntry<float> HandsAboveNeck;
+        internal static ConfigEntry<float> ElbowsOut;
+        internal static ConfigEntry<float> HelmetExtra;
+        internal static ConfigEntry<float> KneelMaxStep;
+        internal static ConfigEntry<float> KneelMaxSlope;
+        internal static ConfigEntry<bool> KneelFallbackCrouch;
+        internal static ConfigEntry<bool> LogKneel;
+        internal static ConfigEntry<bool> KneelGizmos;
+        internal static ConfigEntry<KeyboardShortcut> KneelKey;
+        internal static ConfigEntry<KeyboardShortcut> StandKey;
+        internal static ConfigEntry<KeyboardShortcut> KneelLoopKey;
+        internal static ConfigEntry<KeyboardShortcut> KneelInterruptKey;
+        internal static ConfigEntry<int> KneelTestCycles;
+        internal static ConfigEntry<KneelInterrupt> KneelTestInterrupt;
+        internal static ConfigEntry<KneelInterruptDuring> KneelTestDuring;
+        internal static ConfigEntry<float> KneelTestAt;
         // 14
         internal static ConfigEntry<bool> SainPersonality;
         internal static ConfigEntry<bool> SainSuppression;
@@ -654,6 +698,8 @@ namespace HandsAreHigh
             CaptorSpeech = c.Bind(BotCaptor, "Bots speak their orders", true,
                 "Captors talk: surrender demands, orders, warnings, new threats, hand-overs. Lines from the bot's own voice, queued, never blocking anything (the order is applied either way).");
             CaptorVoiceGap = c.Bind(BotCaptor, "Captor line gap (s)", 3.5f, Range("Least time between two non-urgent lines of one captor.", 0.5f, 30f));
+            CaptorKneelChance = c.Bind(BotCaptor, "Captors put prisoners on their knees", 0.4f,
+                Range("Chance a bot captor's plan orders his prisoner to kneel instead of just stay (needs Kneel on order). He is told to get up calmly when let go.", 0f, 1f));
             CaptorCover = c.Bind(BotCaptor, "Captors take cover", true,
                 "Under fire from a direction he can tell, a captor moves to a reachable spot hidden from it (keeping the prisoner in sight if he can) instead of standing exposed. A visible enemy always goes to the combat AI.");
             CaptorCoverRadius = c.Bind(BotCaptor, "Captor cover search (m)", 12f, Range("", 3f, 40f));
@@ -690,7 +736,63 @@ namespace HandsAreHigh
             Profile = c.Bind(Debug, "Profile", false,
                 "Off by default; costs nothing when off. On: logs frame times (avg, p50, p99, worst, 1% low), GC activity, our own cost per hook, tracked object counts, and any frame where our code took over 1 ms. For comparing runs with Enabled on and off.");
             ProfileSeconds = c.Bind(Debug, "Profile report every (s)", 10f, Range("", 2f, 120f));
+            LogKneel = c.Bind(Debug, "Log kneeling", true, "Kneel starts, finishes (with a timeline: seconds, frames, frame times), reversals, fallbacks with the reason, interruptions.");
+            KneelGizmos = c.Bind(Debug, "Kneel gizmos", false, "With the overlay on: marks the solved knees (K), feet (F) and hands (H) of kneeling bots on screen.");
+            KneelKey = c.Bind(Debug, "Kneel test: kneel", new KeyboardShortcut(KeyCode.K, KeyCode.LeftControl),
+                "Debug keys on: the held bot under your crosshair gets the Get down order (the menu's own path, from any distance).");
+            StandKey = c.Bind(Debug, "Kneel test: stand", new KeyboardShortcut(KeyCode.K, KeyCode.LeftShift), "The On your feet order, same way.");
+            KneelLoopKey = c.Bind(Debug, "Kneel test: loop", new KeyboardShortcut(KeyCode.K, KeyCode.LeftAlt),
+                "Kneel, hold, stand, hold, repeated the number of times below. Any real order stops it.");
+            KneelInterruptKey = c.Bind(Debug, "Kneel test: interrupt", new KeyboardShortcut(KeyCode.K, KeyCode.LeftControl, KeyCode.LeftShift),
+                "Starts the transition chosen below and interrupts it at the chosen point with the chosen event.");
+            KneelTestCycles = c.Bind(Debug, "Kneel test cycles", 3, IntRange("", 1, 10));
+            KneelTestInterrupt = c.Bind(Debug, "Kneel test interruption", KneelInterrupt.Reverse,
+                "Reverse: the opposite order. Hit: a SIMULATED hit (no damage). Run: forced run. Draw: forced draw of a gun he carries. Kill: kills him (checks the corpse is left alone).");
+            KneelTestDuring = c.Bind(Debug, "Kneel test interrupts", KneelInterruptDuring.GoingDown, "Which transition the interruption test runs.");
+            KneelTestAt = c.Bind(Debug, "Kneel test interrupt at", 0.5f, Range("How far into that transition (0 start .. 1 end).", 0.02f, 0.98f));
+            KneelUrgentKey = c.Bind(Debug, "Kneel test: urgent rise", new KeyboardShortcut(KeyCode.K, KeyCode.LeftControl, KeyCode.LeftAlt),
+                "A kneeling bot under the crosshair gets up for real: Escape (Kneel test rise) = forced run; Defensive = forced draw, or a SIMULATED hit with no gun. For an opening he decides on himself, use Give them an opening.");
+            KneelTestStyle = c.Bind(Debug, "Kneel test style", KneelStyleChoice.Auto, "Forces the descent style for every kneel (preview each one). Auto: chosen by the bot.");
+            KneelTestRise = c.Bind(Debug, "Kneel test rise", KneelRiseChoice.Auto, "Forces the rise for an ordered stand-up (and picks the urgent rise key's kind). Auto: compliant for orders.");
+            KneelTestBrace = c.Bind(Debug, "Kneel test brace", KneelBraceChoice.Auto, "Always / Never forces the knee brace on rises.");
+            BindKneel(c);
             BindScenarios(c);
+        }
+
+        private static void BindKneel(ConfigFile c)
+        {
+            KneelEnabled = c.Bind(KneelSec, "Kneel on order", true,
+                "On: the Get down order puts him on both knees with his hands behind his head, and On your feet brings him back up. Off (or where the ground or space doesn't allow it): the crouch with hands up of earlier versions.");
+            KneelDownSeconds = c.Bind(KneelSec, "Kneel down time (s)", 2.3f, Range("Steady descent: one foot back, a knee down, the other beside it, hands behind his head.", 0.8f, 5f));
+            KneelFrightenedSeconds = c.Bind(KneelSec, "Frightened kneel time (s)", 1.3f, Range("Frightened descent: short step, both knees down nearly together, hands up to his head early, hunched.", 0.6f, 4f));
+            KneelOneKneeSeconds = c.Bind(KneelSec, "One knee first time (s)", 2.8f, Range("Down on one knee, a pause there, then the other.", 1f, 6f));
+            KneelWeightSteady = c.Bind(KneelSec, "Style weight steady", 1f, Range("Relative chance of each descent before personality, nerve, wounds and kit adjust it. 0 turns a style off.", 0f, 5f));
+            KneelWeightFrightened = c.Bind(KneelSec, "Style weight frightened", 1f, Range("", 0f, 5f));
+            KneelWeightOneKnee = c.Bind(KneelSec, "Style weight one knee first", 0.8f, Range("", 0f, 5f));
+            KneelUpSeconds = c.Bind(KneelSec, "Stand up time (s)", 1.7f, Range("Compliant rise (ordered up, let go): hands off the head, front foot planted, a push up over it, feet together, hands up.", 0.6f, 5f));
+            KneelDefensiveSeconds = c.Bind(KneelSec, "Defensive stand time (s)", 0.9f, Range("Prompt, guarded rise when he draws or reacts to danger (the draw runs at the same time).", 0.4f, 3f));
+            KneelQuickSeconds = c.Bind(KneelSec, "Quick stand time (s)", 0.7f,
+                Range("Escape rise (bolting, scrambling, slipping away, shot): his fastest. His legs are handed back as soon as they're under him, so his first step follows at once; sprinting starts 0.14 s later. Wounds, a bad leg and heavy kit slow every rise.", 0.4f, 2f));
+            KneelBrace = c.Bind(KneelSec, "Brace on the knee when rising", true,
+                "The hand on the front side pushes on the front thigh while he rises over that leg. Bones only: no item, no inventory action, nothing on the hands controller. A hand planted on the ground is not offered: from a kneel the ground is out of an arm's reach unless he folds almost flat.");
+            KneelBraceChance = c.Bind(KneelSec, "Brace chance", 0.55f, Range("For a compliant rise; more for an escape and for the wounded, less when he's drawing.", 0f, 1f));
+            KneelStrength = c.Bind(KneelSec, "Leg pose strength", 1f, Range("1: full kneel. Lower blends towards the game's crouch (for comparison while tuning).", 0f, 1f));
+            KneelLean = c.Bind(KneelSec, "Torso lean (deg)", 4f, Range("Forward lean of the straightened back while kneeling.", -10f, 20f));
+            KneelLeanScale = c.Bind(KneelSec, "Transition lean scale", 1f, Range("Scales each style's forward lean in the middle of a transition (balance over the planted foot).", 0f, 2f));
+            KneeHeight = c.Bind(KneelSec, "Knee height (m)", 0.09f, Range("Knee joint above the ground when kneeling. Raise if knees sink, lower if they float.", 0.03f, 0.2f));
+            KneelThighAngle = c.Bind(KneelSec, "Thigh angle (deg)", 8f, Range("Thighs forward of vertical; more puts the knees further ahead of the hips.", 0f, 30f));
+            KneeSpread = c.Bind(KneelSec, "Knee spread (m)", 0.04f, Range("Knees this much wider than the hips, each side.", 0f, 0.2f));
+            KneelHipsForward = c.Bind(KneelSec, "Hips forward (m)", 0f, Range("Hips ahead (+) or behind (-) of where he stands.", -0.2f, 0.2f));
+            HandsBehindHeadStrength = c.Bind(KneelSec, "Hands behind head strength", 1f, Range("0 keeps the hands-up arms while kneeling.", 0f, 1f));
+            HandsBehindHead = c.Bind(KneelSec, "Hands behind head (m)", 0.11f, Range("How far behind the head the palms rest.", 0.04f, 0.25f));
+            HandsAboveNeck = c.Bind(KneelSec, "Hands above neck (m)", 0.08f, Range("Palms this far above the head bone (which sits at the top of the neck).", 0f, 0.2f));
+            ElbowsOut = c.Bind(KneelSec, "Elbows out", 1f, Range("How far the elbows point out to the sides.", 0.3f, 1.5f));
+            HelmetExtra = c.Bind(KneelSec, "Helmet extra (m)", 0.035f, Range("Hands kept this much further from the head when he wears a helmet.", 0f, 0.1f));
+            KneelMaxStep = c.Bind(KneelSec, "Max ground step (m)", 0.12f,
+                Range("Ground under each knee and foot must be within this of where he stands, or he doesn't kneel (stairs, ledges, rubble).", 0.03f, 0.3f));
+            KneelMaxSlope = c.Bind(KneelSec, "Max slope (deg)", 20f, Range("Steeper ground under a knee or foot: he doesn't kneel.", 5f, 40f));
+            KneelFallbackCrouch = c.Bind(KneelSec, "Crouch when kneeling is impossible", true,
+                "Where kneeling isn't possible (ground, walls, a hurt leg): on, he crouches with his hands up; off, he stays standing with his hands up. Either way the reason is logged and shown.");
         }
 
         // 17 Debug Scenarios

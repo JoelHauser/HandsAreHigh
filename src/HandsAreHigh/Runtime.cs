@@ -78,6 +78,11 @@ namespace HandsAreHigh
             if (Settings.ForceRunKey.Value.IsDown()) DebugCommand("force run", me);
             if (Settings.ForceGrabKey.Value.IsDown()) DebugCommand("force grab", me);
             if (Settings.SurrenderToBotKey.Value.IsDown()) DebugCommand("surrender to his enemy", me);
+            if (Settings.KneelKey.Value.IsDown()) DebugCommand("kneel", me);
+            if (Settings.StandKey.Value.IsDown()) DebugCommand("stand", me);
+            if (Settings.KneelLoopKey.Value.IsDown()) DebugCommand("kneel loop", me);
+            if (Settings.KneelInterruptKey.Value.IsDown()) DebugCommand("kneel interrupt", me);
+            if (Settings.KneelUrgentKey.Value.IsDown()) DebugCommand("kneel urgent rise", me);
         }
 
         // Every debug key acts on exactly one bot: the one under the crosshair, resolved once
@@ -136,6 +141,11 @@ namespace HandsAreHigh
                     case "opening": outcome = SurrenderRegistry.DebugOpening(s); break;
                     case "force run": outcome = SurrenderRegistry.DebugForceRun(s); break;
                     case "force grab": outcome = SurrenderRegistry.DebugForceGrab(s); break;
+                    case "kneel": outcome = Kneel.DebugKneel(s, me); break;
+                    case "stand": outcome = Kneel.DebugStand(s, me); break;
+                    case "kneel loop": outcome = Kneel.DebugLoop(s, me); break;
+                    case "kneel interrupt": outcome = Kneel.DebugInterrupt(s, me); break;
+                    case "kneel urgent rise": outcome = Kneel.DebugUrgent(s, me); break;
                     default: outcome = SurrenderRegistry.DebugLeave(s); break;
                 }
             }
@@ -189,11 +199,13 @@ namespace HandsAreHigh
                     if (s.Gesture != GestureKind.None) _sb.Append($", {s.Gesture}");
                     else if (s.WigglePendingUntil >= 0f || s.DefiantPendingUntil >= 0f) _sb.Append(", gesture pending");
                 }
+                if (Kneel.Describe(s) is string kneel) _sb.Append($", {kneel}");
                 if (s.PendingVoice != null) _sb.Append($", to say {s.PendingVoice}");
                 _sb.Append('\n');
                 lines++;
             }
             GUI.Box(new Rect(10f, 120f, 640f, 24f + 18f * lines), _sb.ToString(), _overlay);
+            if (Settings.KneelGizmos.Value) Kneel.DrawGizmos();
         }
     }
 }

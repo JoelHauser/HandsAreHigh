@@ -190,6 +190,46 @@ namespace HandsAreHigh
         internal bool DefiantSampled;
         internal float DefiantPendingUntil = -1f;
 
+        // Kneeling (Kneel.cs). One progress value (0 standing .. 1 kneeling) and a phase; the
+        // order only says what is wanted, Kneel.Update moves towards it, so repeating an order or
+        // reversing half-way never restarts or stacks anything.
+        internal KneelPhase Kneel;
+        internal float KneelT;
+        internal bool KneelUrgent;          // getting up for a real reason (escape, draw, hit): no reversal
+        internal KneelStyle KneelStyle;     // timing in use (descent or rise), kept until the transition ends
+        internal KneelStyle KneelDescent;   // how he went down
+        internal float KneelSecs;           // duration of the current transition
+        internal float KneelStep, KneelStepNow;   // front-foot step: room found at the start / this transition
+        internal KneelRise KneelRise;       // the rise in progress
+        internal KneelRise KneelIntent;     // what the layer's decision needs (Kneel.Urge)
+        internal bool KneelIntentSet;
+        internal bool KneelBrace;           // front-side hand pushes on the front thigh this rise
+        internal bool KneelBraceWarned;
+        internal float KneelFade, KneelFadeTotal;   // hand-back blend to the animator after a rise
+        internal float KneelThighOff, KneelLeanOff, KneelSpreadOff;   // small per-bot posture differences
+        internal readonly Vector3[] KneelRef = new Vector3[8];   // standing pose at the start, body-local: hips, knees, feet, toes (L,R)
+        internal Vector3 KneelRefSpine;
+        internal bool KneelRefOk;
+        internal readonly Vector3[] KneelKneePos = new Vector3[2];
+        internal string KneelFallback;      // ordered down but kneeling isn't possible (reason); cleared by a new order
+        internal float KneelWaitSince;
+        internal float KneelCheckAt;
+        internal KneelRig Rig;
+        internal int KneelLead;             // 0 left knee first, 1 right
+        internal bool KneelHelmet;
+        internal float KneelHelmetAt;
+        internal Vector3 KneelAnchor, KneelAnchorFwd;           // where the ground was checked
+        internal readonly float[] KneelGround = new float[6];   // knee L/R, foot L/R, front-foot step L/R: ground height vs his feet
+        internal float KneelClock, KneelDtMin, KneelDtMax;      // transition timeline (log)
+        internal int KneelFrames;
+        internal int KneelTestLeft;         // debug loop: kneels still to do
+        internal float KneelTestNextAt;
+        internal bool KneelTestArmed;       // debug interruption pending
+        internal Player KneelTestBy;
+        internal bool ForceDraw;            // debug: deterministic draw (kneel interruption test)
+        internal bool SprintHeld;           // a sprint the layer wanted while the kneel still had his legs
+        internal readonly Vector3[] GizmoKnee = new Vector3[2], GizmoFoot = new Vector3[2], GizmoPalm = new Vector3[2];
+
         // Lifecycle: set by the game's death/unspawn event; nothing of ours acts on him after.
         internal bool Dead;
         internal OnPlayerDeadOrUnspawn DeathHandler;
@@ -246,6 +286,10 @@ namespace HandsAreHigh
             OfferRef = float.MaxValue;
             CoveredSince = -1f;
             FollowToCover = false;
+            KneelFallback = null;
+            KneelTestLeft = 0;
+            KneelTestArmed = false;
+            ForceDraw = false;
             OfferUntil = Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * Nerve);
             Gestures.Cancel(this, "new surrender");
         }
@@ -296,6 +340,8 @@ namespace HandsAreHigh
         // Runs: arms down (fast if hurt), grace before he can be caught, orders cancelled.
         internal void BeginRetreat(string reason, bool emergency)
         {
+            // On his knees: a bolt needs the fastest rise he can manage; being let go, a calm one.
+            HandsAreHigh.Kneel.Urge(this, emergency ? KneelRise.Escape : KneelRise.Compliant);
             LowerArms(emergency ? Settings.EmergencyLowerSeconds.Value : Settings.LowerSeconds.Value);
             GraceUntil = Time.time + Settings.Grace.Value;
             Order = Order.None;

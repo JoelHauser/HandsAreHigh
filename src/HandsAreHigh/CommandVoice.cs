@@ -35,6 +35,7 @@ namespace HandsAreHigh
             { OrderKind.Follow, new[] { EPhraseTrigger.FollowMe, EPhraseTrigger.Regroup } },
             { OrderKind.Kneel, new[] { EPhraseTrigger.GetInCover } },
             { OrderKind.Stay, new[] { EPhraseTrigger.HoldPosition, EPhraseTrigger.Stop } },
+            { OrderKind.Stand, new[] { EPhraseTrigger.GoForward, EPhraseTrigger.Gogogo } },   // BEAR/USEC only
             { OrderKind.Leave, new[] { EPhraseTrigger.GetBack, EPhraseTrigger.OnYourOwn, EPhraseTrigger.Gogogo } },
         };
 

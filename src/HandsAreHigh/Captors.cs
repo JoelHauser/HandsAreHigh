@@ -316,8 +316,9 @@ namespace HandsAreHigh
             float pick = Dice.Value * (a + b + c);
             cs.Plan.Clear();
             if (pick < a) { cs.PlanName = "disarm and release"; cs.Plan.Add(OrderKind.Stay); cs.Plan.Add(OrderKind.DropWeapons); }
-            else if (pick < a + b) { cs.PlanName = "hold and release"; cs.Plan.Add(OrderKind.Stay); }
-            else { cs.PlanName = "disarm and hold"; cs.Plan.Add(OrderKind.DropWeapons); cs.Plan.Add(OrderKind.Stay); }
+            else if (pick < a + b) { cs.PlanName = "hold and release"; cs.Plan.Add(Dice.Value < Settings.CaptorKneelChance.Value ? OrderKind.Kneel : OrderKind.Stay); }
+            else { cs.PlanName = "disarm and hold"; cs.Plan.Add(OrderKind.DropWeapons); cs.Plan.Add(Dice.Value < Settings.CaptorKneelChance.Value ? OrderKind.Kneel : OrderKind.Stay); }
+            // Kneel (0.12.0): a held man is put on his knees; Leave later gets him up calmly.
             cs.Plan.Add(OrderKind.Leave);
             cs.Step = 0;
             if (cs.PlanName == "disarm and release") cs.HoldUntil = Mathf.Min(cs.HoldUntil, Time.time + Settings.HoldMin.Value);

@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace HandsAreHigh
 {
-    internal enum OrderKind { DropWeapons, DropKit, ArmourOff, Follow, Kneel, Stay, Leave }
+    internal enum OrderKind { DropWeapons, DropKit, ArmourOff, Follow, Kneel, Stay, Leave, Stand }
 
     internal enum NoteKind { Info, Success, Error }
 
@@ -182,6 +182,7 @@ namespace HandsAreHigh
             if (Settings.ArmourOrder.Value) Add(OrderKind.ArmourOff);
             if (Settings.FollowOrder.Value) Add(OrderKind.Follow);
             Add(OrderKind.Kneel);
+            Add(OrderKind.Stand);
             Add(OrderKind.Stay);
             Add(OrderKind.Leave);
         }
@@ -223,7 +224,10 @@ namespace HandsAreHigh
                         if (s.Order == Order.Follow) { current = true; reason = "Following"; }
                         break;
                     case OrderKind.Kneel:
-                        if (s.Order == Order.Kneel) { current = true; reason = "Down"; }
+                        if (s.Order == Order.Kneel) { current = true; reason = s.KneelFallback != null ? "Can't kneel here" : "Down"; }
+                        break;
+                    case OrderKind.Stand:
+                        if (s.Order != Order.Kneel && !Kneel.Active(s)) reason = "Standing";
                         break;
                 }
                 available = reason == null;
@@ -384,6 +388,7 @@ namespace HandsAreHigh
                 case OrderKind.Follow: return "Follow me";
                 case OrderKind.Kneel: return "Get down";
                 case OrderKind.Stay: return "Stay there";
+                case OrderKind.Stand: return "On your feet";
                 default: return "Get lost";
             }
         }
@@ -550,7 +555,10 @@ namespace HandsAreHigh
                 {
                     _titleC.text = s.Name;
                     _tagC.text = SideTag(s.Bot);
-                    _subC.text = s.Order == Order.Follow ? "Hands up, following you" : s.Order == Order.Kneel ? "Hands up, down on the ground" : "Hands up";
+                    _subC.text = s.Order == Order.Follow ? "Hands up, following you"
+                        : Kneel.Active(s) ? "On his knees, hands behind his head"
+                        : s.Order == Order.Kneel ? (s.KneelFallback != null ? "Hands up, crouched (can't kneel here)" : "Hands up, getting down")
+                        : "Hands up";
                 }
 
                 if (m._open == null)

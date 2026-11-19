@@ -292,6 +292,10 @@ namespace HandsAreHigh
             s.VerifyClip = null;
             s.TargetWeapon = null;
             s.DropQueue.Clear();
+            // The kneel stops here too: no stand-up on a corpse, no bone written after death
+            // (the pose patch checks Dead), the ragdoll starts from whatever pose he died in.
+            s.KneelTestLeft = 0;
+            s.KneelTestArmed = false;
         }
 
         // Empties his hands at once: a gun goes on the ground, a knife goes back in its sheath,
@@ -501,6 +505,7 @@ namespace HandsAreHigh
                 UpdateSuspension(bot, s);
                 // try/catch inline: a lambda here would allocate a closure per bot per frame.
                 try { Voice.Tick(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("voice", e); }
+                try { Kneel.Update(s, dt); } catch (System.Exception e) { HandsAreHighPlugin.Report("kneel", e); }
                 try { Gestures.Update(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("gestures", e); }
 
                 if (s.ArmsUp)
@@ -525,7 +530,8 @@ namespace HandsAreHigh
                         $"arms up {Ms(s, Time.realtimeSinceStartup)} (raise {Settings.RaiseSeconds.Value:0.00} s), requests {s.DropAttempts}");
                 }
 
-                if (s.Phase == Phase.Rearmed && s.Progress <= 0f)
+                // Handed back only once he is off his knees: the AI never gets a kneeling body.
+                if (s.Phase == Phase.Rearmed && s.Progress <= 0f && !Kneel.Posing(s))
                 {
                     if (s.TArmsDown < 0f && s.TDrawAsked >= 0f) s.TArmsDown = Time.realtimeSinceStartup;
                     if (DrawSettled(s)) Finished.Add(bot);
