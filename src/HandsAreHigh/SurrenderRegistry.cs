@@ -10,6 +10,8 @@ namespace HandsAreHigh
     internal sealed class BotHistory
     {
         internal float Nerve;
+        internal float Reaction;                // s, his own reaction time, rolled once per raid
+        internal float WiggleCooldownUntil;     // kept across recaptures
         internal float CooldownUntil;
         internal float NextEval;
         internal int SquadPeak;
@@ -31,6 +33,15 @@ namespace HandsAreHigh
         internal float KitAt = -1000f;
         internal float KitValue = -1f;     // handbook roubles; -1 = no handbook, neutral
         internal float Protection;         // best armour class worn / 6
+
+        internal float DefiantCooldownUntil;    // middle finger, kept across recaptures
+
+        // Stable per raid, resolved once instead of on every check.
+        internal NaturalSurrender.RoleClass Role = (NaturalSurrender.RoleClass)(-1);
+        internal bool PersonalityRead;
+        internal string Personality;
+        internal object SainComponent;          // SAIN BotComponent (reflection), cached
+        internal float SainLookupAt = -1000f;
     }
 
     // Who is surrendered, keyed by the bot's Player so the layer (BotOwner) and the arm
@@ -41,11 +52,29 @@ namespace HandsAreHigh
         private static readonly Dictionary<Player, SurrenderState> States = new Dictionary<Player, SurrenderState>();
         private static readonly List<Player> Finished = new List<Player>();
         private static readonly Dictionary<string, BotHistory> History = new Dictionary<string, BotHistory>();
+        // Same entries keyed by the Player object: a reference hash instead of hashing the
+        // ProfileId string on every per-frame lookup. Both cleared per raid.
+        private static readonly Dictionary<Player, BotHistory> ByPlayer = new Dictionary<Player, BotHistory>();
         private static GameWorld _world;
 
         internal static bool Any => States.Count > 0;
+        internal static int Count => States.Count;
+        internal static int HistoryCount => History.Count;
 
-        internal static IEnumerable<SurrenderState> All => States.Values;
+        // The concrete collection: foreach over it uses a struct enumerator (no allocation),
+        // unlike IEnumerable<T>.
+        internal static Dictionary<Player, SurrenderState>.ValueCollection All => States.Values;
+
+        // Is there a raid at all? Menus have no GameWorld; the hideout has its own world type
+        // and no bots to surrender.
+        internal static bool InRaid
+        {
+            get
+            {
+                GameWorld w = Singleton<GameWorld>.Instance;
+                return w != null && !(w is HideoutGameWorld);
+            }
+        }
 
         internal static bool TryGet(Player bot, out SurrenderState state) => States.TryGetValue(bot, out state);
 
@@ -64,17 +93,56 @@ namespace HandsAreHigh
             States.Clear();
             Finished.Clear();
             History.Clear();
+            ByPlayer.Clear();
+            Arsenal.ClearCache();
+            // First-use costs (assembly scan for SAIN, Unity layer lookups) paid now, at raid
+            // start, not in the frame of the first surrender check.
+            if (world != null) HandsAreHighPlugin.Try("prewarm", SainAdapter.Prewarm);
         }
 
         internal static BotHistory HistoryOf(Player bot)
         {
+            if (ByPlayer.TryGetValue(bot, out BotHistory h)) return h;
             string id = bot.ProfileId;
-            if (!History.TryGetValue(id, out BotHistory h))
+            if (!History.TryGetValue(id, out h))
             {
-                h = new BotHistory { Nerve = Settings.RollNerve(), NextEval = Time.time + Random.value * Settings.EvalInterval.Value };
+                h = new BotHistory
+                {
+                    Nerve = Settings.RollNerve(),
+                    Reaction = Settings.Between(Settings.ReactionMin, Settings.ReactionMax),
+                    NextEval = Time.time + Random.value * Settings.EvalInterval.Value
+                };
                 History[id] = h;
             }
+            ByPlayer[bot] = h;
             return h;
+        }
+
+        // Every 30 s (NaturalSurrender.Tick): drop the Player keys of bots that died or
+        // despawned, so destroyed players aren't kept referenced for the rest of the raid.
+        private static readonly List<Player> Gone = new List<Player>();
+        internal static void PruneGone()
+        {
+            Gone.Clear();
+            foreach (KeyValuePair<Player, BotHistory> kv in ByPlayer)
+                if (kv.Key == null || !Perception.Alive(kv.Key)) Gone.Add(kv.Key);
+            for (int i = 0; i < Gone.Count; i++)
+            {
+                if (States.ContainsKey(Gone[i])) continue;   // Tick handles held bots
+                Forget(Gone[i]);
+            }
+            Gone.Clear();
+        }
+
+        // Dead or despawned bots: their history stays (bounded per raid, a few hundred small
+        // objects at most) but the Player key and the references it holds are dropped.
+        internal static void Forget(Player bot)
+        {
+            // Unity's == null is true for a destroyed Player, but the C# key is still there.
+            if ((object)bot == null || !ByPlayer.TryGetValue(bot, out BotHistory h)) return;
+            h.DemandBy = null;
+            h.SainComponent = null;
+            ByPlayer.Remove(bot);
         }
 
         internal static void Surrender(Player bot, Player captor, string reason)
@@ -92,17 +160,18 @@ namespace HandsAreHigh
                 existing.RaiseArms();
                 existing.Order = Order.None;
                 existing.TargetWeapon = null;
-                existing.UnwatchedSince = -1f;
                 existing.CaptorHiddenSince = -1f;
                 existing.CaptorLastSeen = captor.Position;
                 existing.WasHit = false;
                 existing.AimedBy = null;
                 existing.DebugOpeningUntil = 0f;
                 existing.FaceSet = false;
+                existing.ResetEncounter();
                 existing.SetPhase(Phase.HandsUp, reason);
                 if (existing.Moving) { bot.AIData?.BotOwner?.StopMove(); existing.Moving = false; }
                 StartDrop(existing);
                 Voice.Say(existing, VoiceEvent.Surrender);
+                Voice.ScheduleChatter(existing);
                 return;
             }
 
@@ -116,14 +185,22 @@ namespace HandsAreHigh
                 RolledNerve = h.Nerve,
                 CaptorLastSeen = captor.Position,
                 DropPosition = bot.Position,
-                LastPosition = bot.Position
+                LastPosition = bot.Position,
+                Reaction = h.Reaction
             };
+            s.Personality = PersonalityOf(bot, h);
+            SainAdapter.Leanings(s.Personality, out s.Fight, out s.Flee);
             // Hits only: bleeding lowers health too, and must not count as being shot.
             s.HitHandler = (info, part, absorbed) => s.WasHit = true;
             bot.BeingHitAction += s.HitHandler;
+            // Death or despawn (Player.OnDead / unspawn raise it): everything of ours on him
+            // stops that moment, before the ragdoll takes over; Tick removes the state.
+            s.DeathHandler = p => OnDeadOrGone(s);
+            bot.OnPlayerDeadOrUnspawn += s.DeathHandler;
             States[bot] = s;
             HandsAreHighPlugin.Log.LogInfo(
-                $"Surrender: {s.Name} ({bot.Profile?.Info?.Settings?.Role}), nerve {s.Nerve:0.00}, to {captor.Profile?.Nickname}: {reason}");
+                $"Surrender: {s.Name} ({bot.Profile?.Info?.Settings?.Role}), nerve {s.Nerve:0.00}, reaction {s.Reaction:0.00} s" +
+                $"{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}, voice {bot.Speaker?.PlayerVoice}, to {captor.Profile?.Nickname}: {reason}");
             s.SetPhase(Phase.HandsUp, reason);
 
             BotOwner owner = bot.AIData?.BotOwner;
@@ -131,6 +208,38 @@ namespace HandsAreHigh
             HandsAreHighPlugin.Try("stop sprinting", () => owner?.Sprint(false));
             StartDrop(s);
             Voice.Say(s, VoiceEvent.Surrender);
+            Voice.ScheduleChatter(s);
+        }
+
+        // Personality never changes in a raid: one reflection call per bot, not per check.
+        internal static string PersonalityOf(Player bot, BotHistory h)
+        {
+            if (!h.PersonalityRead)
+            {
+                h.PersonalityRead = true;
+                h.Personality = SainAdapter.Personality(bot.AIData?.BotOwner);
+            }
+            return h.Personality;
+        }
+
+        // The game's death/unspawn event for a held bot. No bone, collider, rigidbody or
+        // corpse is touched: the pose stops because the state is Dead (and because the game
+        // itself stops calling VisualPass for the dead), the lean and gestures are dropped
+        // without writing to him, speech and claims are cleared.
+        private static void OnDeadOrGone(SurrenderState s)
+        {
+            if (s.Dead) return;
+            s.Dead = true;
+            s.Weight = 0f;
+            s.Gesture = GestureKind.None;
+            s.GestureArm = 0f;
+            s.WigglePendingUntil = -1f;
+            s.DefiantPendingUntil = -1f;
+            s.PendingVoice = null;
+            s.VerifyAt = -1f;
+            s.VerifyClip = null;
+            s.TargetWeapon = null;
+            s.DropQueue.Clear();
         }
 
         // Empties his hands at once: a gun goes on the ground, a knife goes back in its sheath,
@@ -152,7 +261,7 @@ namespace HandsAreHigh
 
         // Is this callback still about the request that is current for this bot?
         private static bool Current(SurrenderState s, int token) =>
-            s.Bot != null && States.TryGetValue(s.Bot, out SurrenderState now) && now == s && s.HandsToken == token;
+            !s.Dead && s.Bot != null && States.TryGetValue(s.Bot, out SurrenderState now) && now == s && s.HandsToken == token;
 
         // One request at a time: never while the previous one is unresolved (CheckDrop decides
         // when an unanswered one is given up). A magazine reload in progress holds the hide
@@ -193,6 +302,7 @@ namespace HandsAreHigh
                 {
                     s.DroppedWeapon = dropped;
                     s.DropPosition = s.Bot.Position;
+                    s.GunGone = false;
                     HandsAreHighPlugin.Log.LogInfo($"{s.Name}: drops {dropped.ShortName.Localized()} (hands were: {s.HandsAtStart}, request {s.DropAttempts})");
                 }
                 CutReload(s);
@@ -229,9 +339,10 @@ namespace HandsAreHigh
             if (s.Phase != Phase.HandsUp) return $"not holding his hands up ({s.Phase}), no opening to give";
             float secs = Settings.DebugOpeningSeconds.Value;
             s.DebugOpeningUntil = Time.time + secs;
-            // The opening has to last OpeningDelay like a real one; make the first roll due then.
-            s.UnwatchedSince = Time.time;
-            s.NextBreakRoll = 0f;
+            // Noticed like a clear opening (his reaction time), then his own rolls.
+            s.LastCovered = true;
+            s.DecideAt = -1f;
+            s.ComplyUntil = 0f;
             return $"not covered for {secs:0} s (you can keep aiming, it doesn't count); his own rolls decide";
         }
 
@@ -271,6 +382,7 @@ namespace HandsAreHigh
         internal static void Tick(float dt)
         {
             EnsureRaid();
+            if (States.Count == 0) return;
             Finished.Clear();
             bool enabled = Settings.Enabled.Value;
 
@@ -278,7 +390,7 @@ namespace HandsAreHigh
             {
                 Player bot = kv.Key;
                 SurrenderState s = kv.Value;
-                if (bot == null || bot.HealthController == null || !bot.HealthController.IsAlive)
+                if (s.Dead || bot == null || bot.HealthController == null || !bot.HealthController.IsAlive)
                 {
                     if (s.Phase == Phase.HandsUp)
                     {
@@ -297,7 +409,9 @@ namespace HandsAreHigh
                 }
 
                 UpdateSuspension(bot, s);
-                Voice.Tick(s);
+                // try/catch inline: a lambda here would allocate a closure per bot per frame.
+                try { Voice.Tick(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("voice", e); }
+                try { Gestures.Update(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("gestures", e); }
 
                 if (s.ArmsUp)
                 {
@@ -326,13 +440,20 @@ namespace HandsAreHigh
 
             foreach (Player p in Finished)
             {
-                if (States.TryGetValue(p, out SurrenderState s) && p != null)
+                if (!States.TryGetValue(p, out SurrenderState s)) continue;
+                bool alive = !s.Dead && p != null && Perception.Alive(p);
+                if (alive)
                 {
                     if (s.Phase == Phase.Rearmed)
                         HandsAreHighPlugin.Log.LogInfo($"{s.Name}: back to normal AI");
                     HistoryOf(p).CooldownUntil = Time.time + Settings.SurrenderCooldown.Value;
+                    Release(s, "left surrender");
                 }
-                if (States.TryGetValue(p, out SurrenderState gone)) Unhook(gone);
+                else
+                {
+                    Forget(p);
+                }
+                Unhook(s);
                 States.Remove(p);
             }
         }
@@ -341,15 +462,34 @@ namespace HandsAreHigh
         // handler stays on the Player (and survives a hot reload).
         private static void Unhook(SurrenderState s)
         {
-            if (s.HitHandler == null) return;
-            object bot = s.Bot;   // a destroyed Player is still a live C# object; its event can be cleared
-            if (bot != null) HandsAreHighPlugin.Try("unhook hit event", () => s.Bot.BeingHitAction -= s.HitHandler);
-            s.HitHandler = null;
+            object bot = s.Bot;   // a destroyed Player is still a live C# object; its events can be cleared
+            if (bot == null) { s.HitHandler = null; s.DeathHandler = null; return; }
+            if (s.HitHandler != null)
+            {
+                try { s.Bot.BeingHitAction -= s.HitHandler; } catch (System.Exception e) { HandsAreHighPlugin.Report("unhook hit event", e); }
+                s.HitHandler = null;
+            }
+            if (s.DeathHandler != null)
+            {
+                try { s.Bot.OnPlayerDeadOrUnspawn -= s.DeathHandler; } catch (System.Exception e) { HandsAreHighPlugin.Report("unhook death event", e); }
+                s.DeathHandler = null;
+            }
         }
 
         private static void UnhookAll()
         {
             foreach (SurrenderState s in States.Values) Unhook(s);
+        }
+
+        // Pending speech and gestures go with the state; the lean is handed back upright.
+        // Nothing stored here can call back later: gestures run off time, speech off Tick,
+        // and both only for states still in the registry.
+        private static void Release(SurrenderState s, string why)
+        {
+            HandsAreHighPlugin.Try("release gesture", () => Gestures.Cancel(s, why));
+            s.PendingVoice = null;
+            s.VerifyAt = -1f;
+            s.VerifyClip = null;
         }
 
         private static string Ms(SurrenderState s, float t) =>
@@ -391,6 +531,7 @@ namespace HandsAreHigh
         {
             if (States.Count > 0)
                 HandsAreHighPlugin.Log?.LogInfo($"Teardown: releasing {States.Count} surrendered bot(s)");
+            foreach (SurrenderState s in States.Values) Release(s, "teardown");
             UnhookAll();
             States.Clear();
             Finished.Clear();

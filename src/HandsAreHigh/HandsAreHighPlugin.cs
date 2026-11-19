@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using BepInEx;
 using BepInEx.Logging;
@@ -17,7 +17,7 @@ namespace HandsAreHigh
     {
         public const string PluginGuid = "com.joelhauser.handsarehigh";
         public const string PluginName = "Hands Are High";
-        public const string PluginVersion = "0.4.0";
+        public const string PluginVersion = "0.6.0";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").
@@ -62,6 +62,8 @@ namespace HandsAreHigh
             _teardown.Add(SurrenderRegistry.Clear);
             _teardown.Add(SainAdapter.Reset);
             _teardown.Add(OrderMenu.ClearNotes);
+            _teardown.Add(Voice.Reset);
+            _teardown.Add(CommandVoice.Reset);
             _teardown.Add(ErrorLoggedAt.Clear);
 
             var harmony = new Harmony(PluginGuid);
@@ -69,25 +71,53 @@ namespace HandsAreHigh
             _teardown.Add(harmony.UnpatchSelf);
 
             _teardown.Own(gameObject.AddComponent<Runtime>());
+            _teardown.Own(gameObject.AddComponent<RuntimeGui>());
+            _teardown.Add(Perf.Reset);
 
+            PrepareMethods();
             Log.LogInfo($"{PluginName} {PluginVersion} loaded; surrender layer at priority {Settings.LayerPriority.Value}");
         }
 
         private void OnDestroy() => _teardown.Run(Logger);
 
+        // JIT-compile our own methods at startup (the loading screen), not in the frame of the
+        // first surrender, first gesture or first pick-up. Mono implements PrepareMethod as a
+        // compile; generic and abstract methods are skipped. Failures only cost the warm-up.
+        private static void PrepareMethods()
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int n = 0;
+            const System.Reflection.BindingFlags all = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly;
+            foreach (Type t in typeof(HandsAreHighPlugin).Assembly.GetTypes())
+            {
+                if (t.IsGenericTypeDefinition || t.IsInterface) continue;
+                foreach (System.Reflection.MethodInfo m in t.GetMethods(all))
+                {
+                    if (m.IsAbstract || m.ContainsGenericParameters) continue;
+                    try { System.Runtime.CompilerServices.RuntimeHelpers.PrepareMethod(m.MethodHandle); n++; }
+                    catch { }
+                }
+            }
+            Log.LogInfo($"Pre-compiled {n} methods in {sw.ElapsedMilliseconds} ms");
+        }
+
         // One failure never breaks a bot's brain or the frame. The same error is logged at
-        // most every ErrorLogCooldown seconds.
+        // most every ErrorLogCooldown seconds. Hot paths use try/catch + Report directly:
+        // a lambda passed to Try allocates a closure every call.
         internal static void Try(string what, Action action)
         {
             try { action(); }
-            catch (Exception e)
-            {
-                string key = what + e.GetType().Name;
-                float now = Time.realtimeSinceStartup;
-                if (ErrorLoggedAt.TryGetValue(key, out float at) && now - at < Settings.ErrorLogCooldown.Value) return;
-                ErrorLoggedAt[key] = now;
-                Log.LogError($"{what}: {e}");
-            }
+            catch (Exception e) { Report(what, e); }
+        }
+
+        internal static void Report(string what, Exception e)
+        {
+            string key = what + e.GetType().Name;
+            float now = Time.realtimeSinceStartup;
+            if (ErrorLoggedAt.TryGetValue(key, out float at) && now - at < Settings.ErrorLogCooldown.Value) return;
+            ErrorLoggedAt[key] = now;
+            Log.LogError($"{what}: {e}");
         }
     }
 }

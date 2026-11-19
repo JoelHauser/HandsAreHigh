@@ -25,10 +25,15 @@ namespace HandsAreHigh
     [HarmonyPatch(typeof(Player.FirearmController), nameof(Player.FirearmController.InitiateShot))]
     internal static class ShotPatch
     {
+        // Every shot by anyone: no closure (a lambda here allocated per shot), nothing at all
+        // outside a raid or with the mod off.
         private static void Postfix(Player ____player, Vector3 shotPosition, Vector3 shotDirection)
         {
-            if (____player == null) return;
-            HandsAreHighPlugin.Try("near miss", () => Suppression.OnShot(____player, shotPosition, shotDirection));
+            if (____player == null || !Settings.Enabled.Value) return;
+            long t0 = Perf.Begin();
+            try { Suppression.OnShot(____player, shotPosition, shotDirection); }
+            catch (System.Exception e) { HandsAreHighPlugin.Report("near miss", e); }
+            Perf.End(Perf.Sec.Shot, t0);
         }
     }
 
@@ -37,8 +42,13 @@ namespace HandsAreHigh
     {
         private static void Postfix(BotMemory __instance)
         {
+            if (!Settings.Enabled.Value || !Settings.NaturalSurrender.Value) return;
             Player bot = __instance?._owner?.GetPlayer;
-            if (bot != null) HandsAreHighPlugin.Try("under fire", () => Suppression.OnUnderFire(bot));
+            if (bot == null) return;
+            long t0 = Perf.Begin();
+            try { Suppression.OnUnderFire(bot); }
+            catch (System.Exception e) { HandsAreHighPlugin.Report("under fire", e); }
+            Perf.End(Perf.Sec.Hit, t0);
         }
     }
 
@@ -51,42 +61,72 @@ namespace HandsAreHigh
 
         internal static void OnShot(Player shooter, Vector3 from, Vector3 dir)
         {
-            if (!Settings.Enabled.Value || !Settings.NaturalSurrender.Value) return;
-            GameWorld world = Singleton<GameWorld>.Instance;
-            if (world?.AllAlivePlayersList == null) return;
+            if (!Settings.Enabled.Value) return;
             dir.Normalize();
             float radius = Settings.NearMissRadius.Value;
             float range = Settings.NearMissRange.Value;
+            if (!shooter.IsAI && SurrenderRegistry.Any) WarningShots(shooter, from, dir, radius, range);
+            if (!Settings.NaturalSurrender.Value) return;
+            GameWorld world = Singleton<GameWorld>.Instance;
+            if (world?.AllAlivePlayersList == null) return;
 
+            // Cheapest tests first: geometry (a few multiplies), then eligibility, then
+            // hostility, and only then one Linecast for the rare shot that passes close.
             Candidates.Clear();
-            foreach (Player p in world.AllAlivePlayersList)
-                if (p != null && p != shooter && p.IsAI) Candidates.Add(p);
-
-            foreach (Player bot in Candidates)
+            List<Player> all = world.AllAlivePlayersList;
+            for (int i = 0; i < all.Count; i++)
             {
+                Player p = all[i];
+                if (p != null && p != shooter && p.IsAI) Candidates.Add(p);
+            }
+            float r2 = radius * radius;
+            for (int i = 0; i < Candidates.Count; i++)
+            {
+                Player bot = Candidates[i];
                 Vector3 chest = Perception.Chest(bot);
                 Vector3 v = chest - from;
                 float along = Vector3.Dot(v, dir);
                 if (along <= 0f || along > range) continue;
                 Vector3 closest = from + dir * along;
-                float miss = (chest - closest).magnitude;
-                if (miss > radius) continue;
+                float miss2 = (chest - closest).sqrMagnitude;
+                if (miss2 > r2) continue;
                 if (!NaturalSurrender.Eligible(bot)) continue;
                 BotOwner owner = bot.AIData?.BotOwner;
                 if (owner == null || !IsHostile(owner, shooter)) continue;
                 if (Physics.Linecast(from, closest, LayersMaskController.HighPolyWithTerrainMask)) continue;
 
+                float miss = Mathf.Sqrt(miss2);
                 float weight = 1f - 0.5f * (miss / radius);   // 1 at the body, 0.5 at the edge
-                Record(bot, weight, $"shot from {shooter.Profile?.Nickname} passed {miss:0.0} m away");
+                Record(bot, weight, nearMiss: true, shooter, miss);
+            }
+            Candidates.Clear();
+        }
+
+        // A player's shot passing close to a bot holding his hands up, without hitting him (a
+        // hit is Player.BeingHitAction: he runs). He freezes for a while and may plead.
+        private static void WarningShots(Player shooter, Vector3 from, Vector3 dir, float radius, float range)
+        {
+            foreach (SurrenderState s in SurrenderRegistry.All)
+            {
+                if (s.Bot == null || s.Phase != Phase.HandsUp || s.Suspended) continue;
+                Vector3 chest = Perception.Chest(s.Bot);
+                float along = Vector3.Dot(chest - from, dir);
+                if (along <= 0f || along > range) continue;
+                Vector3 closest = from + dir * along;
+                float miss = (chest - closest).magnitude;
+                if (miss > radius) continue;
+                if (Physics.Linecast(from, closest, LayersMaskController.HighPolyWithTerrainMask)) continue;
+                Reactions.WarningShot(s, shooter, miss);
             }
         }
 
         internal static void OnUnderFire(Player bot)
         {
             if (!Settings.Enabled.Value || !Settings.NaturalSurrender.Value) return;
+            if (!NaturalSurrender.Eligible(bot)) return;
             BotHistory h = SurrenderRegistry.HistoryOf(bot);
             if (Time.time - h.NearMissAt < SameBulletWindow) return;   // the near miss already counted it
-            Record(bot, 1f, "under fire (hit or heard)");
+            Record(bot, 1f, nearMiss: false, null, 0f);
         }
 
         internal static bool IsHostile(BotOwner owner, Player shooter)
@@ -99,17 +139,20 @@ namespace HandsAreHigh
             catch { return false; }
         }
 
-        private static void Record(Player bot, float weight, string what)
+        // The log message is only built with Verbose logs on.
+        private static void Record(Player bot, float weight, bool nearMiss, Player shooter, float miss)
         {
             BotHistory h = SurrenderRegistry.HistoryOf(bot);
             float now = Time.time;
-            if (what.StartsWith("shot")) h.NearMissAt = now;
+            if (nearMiss) h.NearMissAt = now;
             if (now - h.FireAt < MinEventGap) return;
             h.Fire = Mathf.Min(Cap, Decayed(h, now) + weight);
             h.FireAt = now;
             NaturalSurrender.CheckSoon(h);
             if (Settings.VerboseLogs.Value)
-                HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname}: fire +{weight:0.00} ({what}), now {h.Fire:0.00} shots' worth");
+                HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname}: fire +{weight:0.00} (" +
+                    (nearMiss ? $"shot from {shooter?.Profile?.Nickname} passed {miss:0.0} m away" : "under fire (hit or heard)") +
+                    $"), now {h.Fire:0.00} shots' worth");
         }
 
         // Shots at him, faded by the half-life.
@@ -125,7 +168,7 @@ namespace HandsAreHigh
         {
             shots = Decayed(h, Time.time);
             own = Mathf.Clamp01(shots / Mathf.Max(1f, Settings.SustainedFireEvents.Value));
-            sain = SainAdapter.SuppressionLevel(owner);
+            sain = SainAdapter.SuppressionLevel(owner, h);
             return Mathf.Max(own, sain);
         }
     }

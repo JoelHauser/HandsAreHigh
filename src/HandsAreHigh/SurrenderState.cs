@@ -84,8 +84,6 @@ namespace HandsAreHigh
         // What he knows about the captor. After losing sight he only uses the last sighting.
         internal Vector3 CaptorLastSeen;
         internal float CaptorHiddenSince = -1f;
-        internal float UnwatchedSince = -1f;
-        internal float NextBreakRoll;
 
         // Set by Player.BeingHitAction (bullets, melee, explosions; never bleeding).
         internal bool WasHit;
@@ -120,12 +118,104 @@ namespace HandsAreHigh
         internal bool ForceGrab;            // debug key: deterministic scramble
         internal float NextVoice;
 
+        // Who he is (read once per surrender: SAIN personality is a reflection call).
+        internal float Reaction;            // his own reaction time, s (BotHistory, rolled once per raid)
+        internal string Personality;
+        internal float Fight = 1f, Flee = 1f;
+
+        // What he has noticed. Changes in what the captor does reach his decisions only after
+        // his reaction delay; periodic reassessment while an opening lasts.
+        internal bool LastCovered = true;
+        internal string OpeningKind;
+        internal float OpeningStrength;
+        internal float OpenSince = -1f;
+        internal float DecideAt = -1f;      // next decision about an opening (-1: none pending)
+        internal float ComplyUntil;         // warning shot or fresh order: he stays still until then
+        internal float LeaveAt = -1f;       // captor gone: he reacts at this time
+        internal string LeaveWhy;
+        internal float ApproachRef = -1f;   // captor distance the next "coming closer" is measured from
+        internal bool GunGone;              // noticed his dropped gun is no longer there
+        internal float NextSlowCheck;
+        internal float Injury;              // 0..1, NaturalSurrender's injury model, refreshed every second
+        internal bool LegsBad;
+
+        // Body gestures (Gestures.cs). Only one at a time; per-encounter sampling.
+        internal GestureKind Gesture;
+        internal float GestureStart;
+        internal float GestureSign = 1f;
+        internal float WigglePendingUntil = -1f;
+        internal string GestureBlock;       // why a pending gesture hasn't started yet (for the skip log)
+        internal float GestureCheckAt;      // start conditions (casts) are checked at most 5x a second
+        internal float GestureArm;          // 0..1: how far the left arm is handed to the game's gesture
+        internal bool GestureConfirmed;     // the game reported the middle finger playing
+        internal float DefiantAt = -1f;     // when the one middle-finger roll of this surrender happens
+        internal bool DefiantSampled;
+        internal float DefiantPendingUntil = -1f;
+
+        // Lifecycle: set by the game's death/unspawn event; nothing of ours acts on him after.
+        internal bool Dead;
+        internal OnPlayerDeadOrUnspawn DeathHandler;
+
+        // Cheap repeats: cached results with a short life.
+        internal bool DropReachable;
+        internal float DropReachableAt = -1000f;
+        internal Vector3 DropReachableFrom;
+        internal float NextScavengeScan;    // after an empty weapon search, don't search again before
+        internal bool HideSearchPending;    // GoHide deferred its cover search to a frame with budget
+        internal object SainComponent;      // SAIN BotComponent, cached for ReleaseLayer
+        internal float SettledAt = -1f;
+        internal bool SettledSampled;
+        internal float NextWiggleSample;
+
+        // Speech (Voice.cs).
+        internal VoicePriority PendingPriority;
+        internal float PendingVoiceAt;
+        internal float NextChatter;
+        internal float SpokeAt = -1000f;
+        internal EPhraseTrigger LastLine = EPhraseTrigger.None;
+        internal float VerifyAt = -1f;
+        internal TaggedClip VerifyClip;
+        internal string VerifyWhat;
+
+        // Reaction delay for one noticed change: his own reaction time, quicker with nerve,
+        // slower when hurt, varied each time.
+        internal float NoticeDelay()
+        {
+            float r = Reaction * (1.15f - 0.3f * Nerve) * (1f + 0.5f * Injury);
+            return r * Random.Range(0.8f, 1.25f);
+        }
+
+        // A new surrender (first or recapture): what he noticed last time no longer applies.
+        internal void ResetEncounter()
+        {
+            LastCovered = true;
+            OpeningKind = null;
+            OpenSince = -1f;
+            DecideAt = -1f;
+            ComplyUntil = 0f;
+            LeaveAt = -1f;
+            ApproachRef = -1f;
+            SettledAt = -1f;
+            SettledSampled = false;
+            WigglePendingUntil = -1f;
+            DefiantAt = -1f;
+            DefiantSampled = false;
+            DefiantPendingUntil = -1f;
+            Gestures.Cancel(this, "new surrender");
+        }
+
         // quiet: routine repeats (hiding and looking again every few seconds) only go to the
         // log with Verbose logs on.
         internal void SetPhase(Phase p, string reason, bool quiet = false)
         {
             Phase old = Phase;
             Phase = p;
+            if (p != Phase.HandsUp)
+            {
+                Gestures.Cancel(this, $"now {p}");
+                DecideAt = -1f;
+                LeaveAt = -1f;
+            }
             PhaseSince = Time.time;
             NextMoveOrder = 0f;
             Retries = 0;
@@ -152,6 +242,7 @@ namespace HandsAreHigh
 
         internal void LowerArms(float seconds)
         {
+            Gestures.Cancel(this, "arms coming down");
             ArmsUp = false;
             LowerSeconds = seconds;
         }

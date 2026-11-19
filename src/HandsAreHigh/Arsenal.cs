@@ -16,7 +16,9 @@ namespace HandsAreHigh
     {
         // Same layers Looting Bots scans for loose items and bodies.
         private static readonly int LootMask = LayerMask.GetMask("Interactive", "Loot", "Deadbody");
-        private static readonly Collider[] Hits = new Collider[256];
+        // Big enough for a 60 m sphere over a few bodies (a dozen-plus colliders each) without
+        // silently dropping guns; cleared after use so it holds no references between calls.
+        private static readonly Collider[] Hits = new Collider[1024];
 
         internal static readonly EquipmentSlot[] GunSlots =
         {
@@ -281,64 +283,112 @@ namespace HandsAreHigh
 
         // ---- guns in the world ----------------------------------------------------------
 
+        // ---- loot lookups (allocation-free) --------------------------------------------
+        //
+        // A body is many colliders (one per ragdoll bone) on the Deadbody layer, so a sphere
+        // over a few bodies returns dozens of colliders. Each collider's InteractableObject is
+        // found once (GetComponentInParent walks the hierarchy) and cached for the raid, keyed
+        // by the collider's instance id; a destroyed object (picked up, despawned) is looked up
+        // again. Nothing here reads or changes a body's physics: only its inventory.
+        private static readonly Dictionary<int, InteractableObject> OwnerOf = new Dictionary<int, InteractableObject>(512);
+        private static readonly HashSet<InteractableObject> Seen = new HashSet<InteractableObject>();
+        private static readonly HashSet<Item> Claimed = new HashSet<Item>();
+        private const int MaxCache = 8192;
+
+        internal static int CacheCount => OwnerOf.Count;
+
+        internal static void ClearCache()
+        {
+            OwnerOf.Clear();
+            Seen.Clear();
+            Claimed.Clear();
+        }
+
+        private static InteractableObject OwnerOfCollider(Collider c)
+        {
+            int id = c.GetInstanceID();
+            if (OwnerOf.TryGetValue(id, out InteractableObject io) && io != null) return io;
+            io = c.GetComponentInParent<InteractableObject>();
+            if (OwnerOf.Count >= MaxCache) OwnerOf.Clear();   // bounded; rebuilt as needed
+            OwnerOf[id] = io;
+            return io;
+        }
+
         // Is this gun still lying loose (or on a body) near where we expect it?
-        internal static bool StillThere(Item weapon, Vector3 near, float radius = 3f) =>
-            weapon != null && FindLying(near, radius, item => item == weapon, null, out _) != null;
+        internal static bool StillThere(Item weapon, Vector3 near, float radius = 3f)
+        {
+            if (weapon == null) return false;
+            int n = Physics.OverlapSphereNonAlloc(near, radius, Hits, LootMask, QueryTriggerInteraction.Ignore);
+            Seen.Clear();
+            try
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    Collider c = Hits[i];
+                    if (c == null) continue;
+                    InteractableObject io = OwnerOfCollider(c);
+                    if (io == null || !Seen.Add(io)) continue;
+                    if (io is LootItem loot) { if (loot.Item == weapon) return true; }
+                    else if (io is Corpse corpse && corpse.ItemOwner?.RootItem is InventoryEquipment eq)
+                    {
+                        foreach (EquipmentSlot slot in GunSlots)
+                            if (eq.GetSlot(slot)?.ContainedItem == weapon) return true;
+                    }
+                }
+                return false;
+            }
+            finally { Seen.Clear(); Array.Clear(Hits, 0, n); }
+        }
 
         // Nearest gun on the ground or on a body, not too close to the threat and not
         // already claimed by another surrendered bot or in the skip list.
         internal static Item FindWeapon(Player bot, Vector3 threat, float avoidRadius, float radius,
             ICollection<Item> skip, out Vector3 at)
         {
-            var claimed = new HashSet<Item>();
-            foreach (SurrenderState s in SurrenderRegistry.All)
-                if (s.Bot != bot && s.TargetWeapon != null) claimed.Add(s.TargetWeapon);
-
-            return FindLying(bot.Position, radius,
-                item => !claimed.Contains(item) && (skip == null || !skip.Contains(item)),
-                pos => (pos - threat).sqrMagnitude > avoidRadius * avoidRadius,
-                out at);
-        }
-
-        private static Item FindLying(Vector3 centre, float radius, Func<Item, bool> wantItem,
-            Func<Vector3, bool> wantPlace, out Vector3 at)
-        {
             at = Vector3.zero;
+            Claimed.Clear();
+            foreach (SurrenderState s in SurrenderRegistry.All)
+                if (s.Bot != bot && s.TargetWeapon != null) Claimed.Add(s.TargetWeapon);
+
+            Vector3 centre = bot.Position;
+            float avoid2 = avoidRadius * avoidRadius;
             int n = Physics.OverlapSphereNonAlloc(centre, radius, Hits, LootMask, QueryTriggerInteraction.Ignore);
             Item best = null;
             float bestSq = float.MaxValue;
-            var seen = new HashSet<InteractableObject>();
-
-            for (int i = 0; i < n; i++)
+            Seen.Clear();
+            try
             {
-                InteractableObject io = Hits[i] != null ? Hits[i].GetComponentInParent<InteractableObject>() : null;
-                if (io == null || !seen.Add(io)) continue;
-
-                Item weapon = null;
-                if (io is Corpse corpse)
+                for (int i = 0; i < n; i++)
                 {
-                    if (corpse.ItemOwner?.RootItem is InventoryEquipment eq)
+                    Collider c = Hits[i];
+                    if (c == null) continue;
+                    InteractableObject io = OwnerOfCollider(c);
+                    if (io == null || !Seen.Add(io)) continue;
+
+                    Vector3 pos = io.transform.position;
+                    float sq = (pos - centre).sqrMagnitude;
+                    if (sq >= bestSq || (pos - threat).sqrMagnitude <= avoid2) continue;
+
+                    Item weapon = null;
+                    if (io is LootItem loot)
+                    {
+                        if (loot.Item is Weapon w && Wanted(w, skip)) weapon = w;
+                    }
+                    else if (io is Corpse corpse && corpse.ItemOwner?.RootItem is InventoryEquipment eq)
                     {
                         foreach (EquipmentSlot slot in GunSlots)
-                        {
-                            if (eq.GetSlot(slot)?.ContainedItem is Weapon w && wantItem(w)) { weapon = w; break; }
-                        }
+                            if (eq.GetSlot(slot)?.ContainedItem is Weapon w && Wanted(w, skip)) { weapon = w; break; }
                     }
+                    if (weapon == null) continue;
+                    bestSq = sq; best = weapon; at = pos;
                 }
-                else if (io is LootItem loot && loot.Item is Weapon w && wantItem(w))
-                {
-                    weapon = w;
-                }
-                if (weapon == null) continue;
-
-                Vector3 pos = io.transform.position;
-                if (wantPlace != null && !wantPlace(pos)) continue;
-
-                float sq = (pos - centre).sqrMagnitude;
-                if (sq < bestSq) { bestSq = sq; best = weapon; at = pos; }
+                return best;
             }
-            return best;
+            finally { Seen.Clear(); Claimed.Clear(); Array.Clear(Hits, 0, n); }
         }
+
+        private static bool Wanted(Item w, ICollection<Item> skip) =>
+            !Claimed.Contains(w) && (skip == null || !skip.Contains(w));
 
         // Equip a gun from the ground or a body into an empty weapon slot, the way
         // Looting Bots does: FindSlotToPickUp, Move, then a network transaction.

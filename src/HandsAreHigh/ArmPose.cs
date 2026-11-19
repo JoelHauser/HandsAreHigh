@@ -11,11 +11,17 @@ namespace HandsAreHigh
     [HarmonyPatch(typeof(Player), nameof(Player.VisualPass))]
     internal static class ArmPosePatch
     {
+        // Runs for every player every frame, so the common case (nobody held) is one static
+        // count test. The game only calls VisualPass for the living (Player.LateUpdate checks
+        // HealthController.IsAlive), and a held bot that died is flagged Dead by the game's
+        // death event: no bone is ever written after death, the ragdoll is the game's alone.
         private static void Postfix(Player __instance)
         {
             if (!SurrenderRegistry.Any) return;
-            if (!SurrenderRegistry.TryGet(__instance, out SurrenderState s) || s.Weight <= 0f) return;
+            if (!SurrenderRegistry.TryGet(__instance, out SurrenderState s) || s.Weight <= 0f || s.Dead) return;
+            long t0 = Perf.Begin();
             ArmPose.Apply(__instance, s);
+            Perf.End(Perf.Sec.Pose, t0);
         }
     }
 
@@ -57,6 +63,9 @@ namespace HandsAreHigh
                     float side = Vector3.Dot(upper.position - ribcage, right) >= 0f ? 1f : -1f;
                     Transform palm = side > 0f ? bones.RightPalm : bones.LeftPalm;
                     if (palm == null) continue;
+                    // The left arm is handed to the game's middle-finger animation while it plays.
+                    float armW = side < 0f ? w * (1f - s.GestureArm) : w;
+                    if (armW <= 0.001f) continue;
 
                     Vector2 shake = Tremble(s, i);
 
@@ -72,10 +81,10 @@ namespace HandsAreHigh
                         Quaternion.AngleAxis((Settings.ForearmInward.Value + shake.y) * side, fwd) *
                         Quaternion.AngleAxis(Settings.ForearmForward.Value + shake.y * 0.5f, right) * up;
 
-                    Aim(upper, fore, upperDir, w);
-                    Aim(fore, palm, foreDir, w);
+                    Aim(upper, fore, upperDir, armW);
+                    Aim(fore, palm, foreDir, armW);
 
-                    float twist = Settings.ForearmTwist.Value * side * w;
+                    float twist = Settings.ForearmTwist.Value * side * armW;
                     if (twist != 0f)
                         fore.rotation = Quaternion.AngleAxis(twist, palm.position - fore.position) * fore.rotation;
                 }

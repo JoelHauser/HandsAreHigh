@@ -1,7 +1,6 @@
-using System;
-using System.Linq;
-using System.Reflection;
+using System.Collections.Generic;
 using EFT;
+using HarmonyLib;
 using UnityEngine;
 
 namespace HandsAreHigh
@@ -9,66 +8,276 @@ namespace HandsAreHigh
     // The game's own voice lines, played straight through the bot's speaker
     // (Player.Speaker.Play), the call SAIN itself uses (PlayerComponent.PlayVoiceLine).
     // BotTalk.Say and Player.Say don't work for SAIN bots: SAIN's BotTalkPatch and
-    // PlayerTalkPatch swallow every phrase but hurt/agony/death/breath, which is why
-    // surrenders were silent. Speaker.Play returns the TagBank it played, or null when this
-    // voice has no bank for the phrase, so each line falls back to the next one and the log
-    // says what really played. A busy speaker (mid-sentence) is retried for a moment.
-    internal enum VoiceEvent { Surrender, Acknowledge, Refuse, Break, Hurt }
+    // PlayerTalkPatch swallow every phrase but hurt/agony/death/breath. Speaker.Play is audio
+    // only: it never touches the hands, the pose or the AI.
+    //
+    // Which lines exist (read from the 0.16.9 phrase bundles, 2026-11-19): every Scav, BEAR
+    // and USEC voice has Stop, Negative, Roger, Going, DontKnow, NeedHelp, OnMutter,
+    // OnBeingHurt, HurtHeavy, HurtNearDeath, OnFight, Fire. Only BEAR/USEC voices have
+    // HoldFire, Cooperation, Gogogo; only Scav voices have Toxic. Speaker.PhrasesBanks says
+    // per voice what it has, so a missing line is skipped (silence), never replaced by an
+    // unrelated one.
+    //
+    // Playing is verified where the engine allows: Speaker.Play returns the bank only once
+    // it picked a clip and raised OnPhraseTold, whose handler (Player.PlaySpeechFromTime)
+    // starts the clip on the speech source unless the bot is out of the player's earshot.
+    // A moment later the speech source is checked for that clip actually playing.
+    internal enum VoiceEvent { Surrender, Acknowledge, Refuse, Break, Hurt, Plead, Threatened, Approached, Released, Idle, Defiant }
+
+    // Urgent lines (surrender, hurt, breaking) never wait for other bots and override any
+    // queued line; idle chatter never replaces anything.
+    internal enum VoicePriority { Idle, Normal, High, Urgent }
 
     internal static class Voice
     {
         private const float RetryWindow = 2f;
+        private const float RetryStep = 0.25f;
+        private const float HighGap = 2.5f;
+        private const float VerifyAfter = 0.15f;
 
-        private static EPhraseTrigger[] Lines(VoiceEvent e)
+        private static readonly AccessTools.FieldRef<Player, BetterSource> SpeechSourceRef =
+            AccessTools.FieldRefAccess<Player, BetterSource>("_speechSource");
+        private static readonly HashSet<string> MissingLogged = new HashSet<string>();
+        private static readonly List<EPhraseTrigger> Options = new List<EPhraseTrigger>(8);
+
+        internal static void Reset() => MissingLogged.Clear();
+
+        private static VoicePriority PriorityOf(VoiceEvent e)
         {
             switch (e)
             {
-                case VoiceEvent.Surrender: return new[] { EPhraseTrigger.HoldFire, EPhraseTrigger.Stop, EPhraseTrigger.Negative, EPhraseTrigger.OnBeingHurt };
-                case VoiceEvent.Acknowledge: return new[] { EPhraseTrigger.Roger, EPhraseTrigger.Going };
-                case VoiceEvent.Refuse: return new[] { EPhraseTrigger.Negative, EPhraseTrigger.DontKnow };
-                case VoiceEvent.Break: return new[] { EPhraseTrigger.OnFight, EPhraseTrigger.Fire, EPhraseTrigger.Gogogo };
-                default: return new[] { EPhraseTrigger.OnBeingHurt };
+                case VoiceEvent.Surrender:
+                case VoiceEvent.Hurt:
+                case VoiceEvent.Break: return VoicePriority.Urgent;
+                case VoiceEvent.Threatened: return VoicePriority.High;
+                case VoiceEvent.Idle:
+                case VoiceEvent.Defiant: return VoicePriority.Idle;
+                default: return VoicePriority.Normal;
             }
         }
 
-        // Queues one event (the newest wins); played from Tick when the speaker is free.
-        internal static void Say(SurrenderState s, VoiceEvent e)
+        // Lines that only make sense while he stands there with his hands up; dropped if he
+        // has started running or fighting by the time they would play.
+        private static bool NeedsHandsUp(VoiceEvent e) =>
+            e == VoiceEvent.Plead || e == VoiceEvent.Threatened || e == VoiceEvent.Approached ||
+            e == VoiceEvent.Idle || e == VoiceEvent.Defiant || e == VoiceEvent.Acknowledge || e == VoiceEvent.Refuse;
+
+        // Line tables, built once (they used to be new arrays on every line).
+        private static readonly EPhraseTrigger[] LSurrender = { EPhraseTrigger.HoldFire, EPhraseTrigger.Stop };
+        private static readonly EPhraseTrigger[] LNegative = { EPhraseTrigger.Negative };
+        private static readonly EPhraseTrigger[] LPleadHurt = { EPhraseTrigger.HurtNearDeath, EPhraseTrigger.HurtHeavy, EPhraseTrigger.NeedHelp };
+        private static readonly EPhraseTrigger[] LPlead = { EPhraseTrigger.NeedHelp, EPhraseTrigger.Cooperation, EPhraseTrigger.HoldFire };
+        private static readonly EPhraseTrigger[] LStop = { EPhraseTrigger.Stop };
+        private static readonly EPhraseTrigger[] LApproached = { EPhraseTrigger.Stop, EPhraseTrigger.HoldFire, EPhraseTrigger.Cooperation };
+        private static readonly EPhraseTrigger[] LAck = { EPhraseTrigger.Roger, EPhraseTrigger.Going };
+        private static readonly EPhraseTrigger[] LRefuse = { EPhraseTrigger.Negative, EPhraseTrigger.DontKnow };
+        private static readonly EPhraseTrigger[] LIdle = { EPhraseTrigger.OnMutter, EPhraseTrigger.OnMutter, EPhraseTrigger.NeedHelp };
+        private static readonly EPhraseTrigger[] LDefiant = { EPhraseTrigger.Toxic };
+        private static readonly EPhraseTrigger[] LBreak = { EPhraseTrigger.OnFight, EPhraseTrigger.Fire, EPhraseTrigger.Gogogo };
+        private static readonly EPhraseTrigger[] LHurt = { EPhraseTrigger.OnBeingHurt };
+
+        // Scavs just babble (Joel, 2026-11-19: "it doesn't matter what they say"): for every
+        // non-urgent line a Scav voice draws from its own lines plus this pool, so a Scav is
+        // never silent for lack of a fitting line. All of these exist in every scav_1-6 voice.
+        private static readonly EPhraseTrigger[] ScavBabble =
         {
-            if (!Settings.BotVoice.Value || s?.Bot == null) return;
-            if (e != VoiceEvent.Surrender && Time.time < s.NextVoice) return;
-            if (e == VoiceEvent.Surrender && Time.time < s.NextSurrenderVoice) return;
-            s.PendingVoice = e;
-            s.PendingVoiceUntil = Time.time + RetryWindow;
+            EPhraseTrigger.OnMutter, EPhraseTrigger.Toxic, EPhraseTrigger.NeedHelp, EPhraseTrigger.Negative,
+            EPhraseTrigger.Stop, EPhraseTrigger.DontKnow, EPhraseTrigger.Roger, EPhraseTrigger.Going,
+            EPhraseTrigger.Repeat, EPhraseTrigger.Look, EPhraseTrigger.Silence, EPhraseTrigger.Covering
+        };
+
+        // Preferred lines, then a fallback only when the voice has none of those.
+        private static void Lines(SurrenderState s, VoiceEvent e, out EPhraseTrigger[] first, out EPhraseTrigger[] fallback)
+        {
+            fallback = null;
+            switch (e)
+            {
+                case VoiceEvent.Surrender: first = LSurrender; fallback = LNegative; return;
+                case VoiceEvent.Plead: first = s.Injury >= 0.5f ? LPleadHurt : LPlead; fallback = LStop; return;
+                case VoiceEvent.Threatened: first = LSurrender; fallback = LNegative; return;
+                case VoiceEvent.Approached: first = LApproached; return;
+                case VoiceEvent.Acknowledge:
+                case VoiceEvent.Released: first = LAck; return;
+                case VoiceEvent.Refuse: first = LRefuse; return;
+                case VoiceEvent.Idle: first = LIdle; return;   // mostly nervous muttering
+                case VoiceEvent.Defiant: first = LDefiant; return;
+                case VoiceEvent.Break: first = LBreak; return;
+                default: first = LHurt; return;
+            }
         }
+
+        internal static bool Has(BaseSpeaker speaker, EPhraseTrigger line) =>
+            speaker?.PhrasesBanks != null && speaker.PhrasesBanks.TryGetValue(line, out TagBank bank) &&
+            bank != null && bank.Clips != null && bank.Clips.Length > 0;
+
+        // Queue a line (the more important one wins); played from Tick when the speaker,
+        // and for non-urgent lines the bots around him, are free. Never blocks anything.
+        internal static void Say(SurrenderState s, VoiceEvent e, float delay = 0f)
+        {
+            if (!Settings.BotVoice.Value || s?.Bot == null || s.Dead) return;
+            float now = Time.time;
+            VoicePriority pr = PriorityOf(e);
+            if (e == VoiceEvent.Surrender && now < s.NextSurrenderVoice) return;
+            if (pr <= VoicePriority.Normal && now < s.NextVoice)
+            {
+                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: voice {e}: holds his tongue (cooldown {s.NextVoice - now:0} s)");
+                return;
+            }
+            if (pr == VoicePriority.High && now - s.SpokeAt < HighGap) return;
+            if (s.PendingVoice != null && s.PendingPriority > pr) return;
+            s.PendingVoice = e;
+            s.PendingPriority = pr;
+            s.PendingVoiceAt = now + Mathf.Max(0f, delay);
+            s.PendingVoiceUntil = s.PendingVoiceAt + RetryWindow;
+        }
+
+        // A reaction to something the player did: only sometimes, after his reaction time.
+        internal static void Reply(SurrenderState s, VoiceEvent e)
+        {
+            if (!Settings.Chatter.Value || Random.value >= Settings.ReplyChance.Value) return;
+            Say(s, e, s.NoticeDelay());
+        }
+
+        internal static float AckDelay() => Settings.Between(Settings.AckDelayMin, Settings.AckDelayMax);
+
+        internal static void ScheduleChatter(SurrenderState s) =>
+            s.NextChatter = Time.time + Settings.Between(Settings.ChatterMin, Settings.ChatterMax);
 
         internal static void Tick(SurrenderState s)
         {
-            if (s.PendingVoice == null || s.Bot == null) return;
+            if (s.Bot == null || s.Dead) return;
+            float now = Time.time;
+            if (s.VerifyAt > 0f && now >= s.VerifyAt) Verify(s);
+
+            Unprompted(s, now);
+
+            if (s.PendingVoice == null) return;
             VoiceEvent e = s.PendingVoice.Value;
-            if (Time.time > s.PendingVoiceUntil)
+            if (NeedsHandsUp(e) && s.Phase != Phase.HandsUp)
             {
                 s.PendingVoice = null;
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: voice {e}: speaker stayed busy {RetryWindow:0} s, skipped");
+                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: voice {e}: dropped, he's {s.Phase} now");
+                return;
+            }
+            if (now < s.PendingVoiceAt) return;
+            if (now > s.PendingVoiceUntil)
+            {
+                s.PendingVoice = null;
+                if (Settings.LogVoice.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: voice {e}: no chance to speak within {RetryWindow:0} s (speaker or nearby bots busy), skipped");
                 return;
             }
             BaseSpeaker speaker = s.Bot.Speaker;
             if (speaker == null) { s.PendingVoice = null; return; }
             if (speaker.Speaking || speaker.Busy) return;
+            if (s.PendingPriority < VoicePriority.Urgent && FloorTaken(s, now)) return;
+            Play(s, e, speaker, now);
+        }
 
-            s.PendingVoice = null;
-            ETagStatus mask = MaskFor(s.Bot);
-            string voice = speaker.PlayerVoice;
-            foreach (EPhraseTrigger line in Lines(e))
+        // Now and then, unprompted, while he stands there with his hands up.
+        private static void Unprompted(SurrenderState s, float now)
+        {
+            if (!Settings.Chatter.Value || s.Phase != Phase.HandsUp || s.Suspended || s.Progress < 1f) return;
+            if (s.NextChatter <= 0f || now < s.NextChatter || s.PendingVoice != null) return;
+            ScheduleChatter(s);
+            if (Random.value >= Settings.ChatterChance.Value) return;
+
+            bool bold = s.Nerve >= 0.9f || (s.Nerve >= 0.7f && s.Fight >= 1.2f);
+            VoiceEvent e;
+            if (Settings.DefiantRemarks.Value && bold && Random.value < 0.5f) e = VoiceEvent.Defiant;
+            else if (s.Injury >= 0.5f || Random.value < 0.35f) e = VoiceEvent.Plead;
+            else e = VoiceEvent.Idle;
+            Say(s, e);
+        }
+
+        // Another held bot close by is talking or just finished: wait for a gap.
+        private static bool FloorTaken(SurrenderState s, float now)
+        {
+            float r = Settings.ChatterRadius.Value;
+            if (r <= 0f) return false;
+            Vector3 at = s.Bot.Position;
+            foreach (SurrenderState o in SurrenderRegistry.All)
             {
+                if (o == s || o.Bot == null) continue;
+                if ((o.Bot.Position - at).sqrMagnitude > r * r) continue;
+                if (o.Bot.Speaker != null && o.Bot.Speaker.Busy) return true;
+                if (now - o.SpokeAt < Settings.ChatterGap.Value) return true;
+            }
+            return false;
+        }
+
+        private static void Play(SurrenderState s, VoiceEvent e, BaseSpeaker speaker, float now)
+        {
+            Lines(s, e, out EPhraseTrigger[] first, out EPhraseTrigger[] fallback);
+            Options.Clear();
+            Collect(speaker, first);
+            if (Options.Count == 0 && fallback != null) Collect(speaker, fallback);
+            if (speaker.SideTag == ETagStatus.Scav && s.PendingPriority < VoicePriority.Urgent) Collect(speaker, ScavBabble);
+            string voice = speaker.PlayerVoice;
+            if (Options.Count == 0)
+            {
+                s.PendingVoice = null;
+                if (Settings.LogVoice.Value && MissingLogged.Add(voice + "/" + e))
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: voice {e}: voice {voice} has no suitable line, stays silent (logged once per voice)");
+                return;
+            }
+            // Not the line he said last, unless it's the only one.
+            if (Options.Count > 1)
+                for (int k = Options.Count - 1; k >= 0; k--)
+                    if (Options[k] == s.LastLine) Options.RemoveAt(k);
+
+            ETagStatus mask = MaskFor(s.Bot);
+            while (Options.Count > 0)
+            {
+                int i = Random.Range(0, Options.Count);
+                EPhraseTrigger line = Options[i];
+                Options.RemoveAt(i);
                 TagBank played = null;
                 HandsAreHighPlugin.Try("voice", () => played = speaker.Play(line, mask, true));
                 if (played == null) continue;
-                s.NextVoice = Time.time + Settings.VoiceCooldown.Value;
-                if (e == VoiceEvent.Surrender) s.NextSurrenderVoice = Time.time + Settings.VoiceCooldown.Value;
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: voice {e}: played {line} ({voice})");
+
+                s.PendingVoice = null;
+                s.SpokeAt = now;
+                s.LastLine = line;
+                s.NextVoice = now + Settings.VoiceCooldown.Value;
+                if (e == VoiceEvent.Surrender) s.NextSurrenderVoice = now + Settings.VoiceCooldown.Value;
+                s.NextChatter = Mathf.Max(s.NextChatter, now + Settings.ChatterMin.Value);
+                s.VerifyAt = now + VerifyAfter;
+                s.VerifyClip = speaker.Clip;
+                s.VerifyWhat = $"{e}: {line} ({voice})";
                 return;
             }
-            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: voice {e}: voice {voice} has none of {string.Join(", ", Lines(e))}");
+            // The game declined each line (higher-importance line playing, a group blocker,
+            // no clip for his current tags). Try again shortly, within the retry window.
+            s.PendingVoiceAt = now + RetryStep;
+        }
+
+        private static void Collect(BaseSpeaker speaker, EPhraseTrigger[] lines)
+        {
+            foreach (EPhraseTrigger l in lines)
+                if (Has(speaker, l) && !Options.Contains(l)) Options.Add(l);
+        }
+
+        // Did audio start? The clip must be the one Speaker.Play picked and be playing on his
+        // speech source; otherwise say why not, as far as the engine tells.
+        private static void Verify(SurrenderState s)
+        {
+            Player bot = s.Bot;
+            TaggedClip clip = s.VerifyClip;
+            string what = s.VerifyWhat;
+            s.VerifyAt = -1f;
+            s.VerifyClip = null;
+            if (!Settings.LogVoice.Value || bot == null) return;
+
+            BetterSource src = SpeechSourceRef(bot);
+            AudioSource audio = src != null ? src.source1 : null;
+            string result;
+            if (clip?.Clip != null && audio != null && audio.isPlaying && audio.clip == clip.Clip)
+                result = $"audible ({clip.Clip.name}, {clip.Length:0.0} s)";
+            else if (src != null && bot.IsOutOfProtagonistsRange(src.MaxDistance))
+                result = "line chosen, but he is out of your earshot so the game played no audio";
+            else
+                result = "line chosen, but no audio started on his speech source";
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: says {what}: {result}");
         }
 
         // The bot's own tag mask (faction, combat state, injury), as BotTalk builds it.
@@ -81,146 +290,6 @@ namespace HandsAreHigh
             }
             catch { }
             return ETagStatus.Combat;
-        }
-    }
-
-    // SAIN, found by reflection so it stays optional (verified against the installed SAIN.dll):
-    //   SAIN.Interop.SAINExternal.GetPersonality(BotOwner) -> string of EPersonality
-    //   SAIN.Interop.SAINExternal.GetBotComponent(BotOwner) (private static) -> BotComponent
-    //   BotComponent.Suppression (SAINBotSuppressClass).CurrentState -> ESuppressionState
-    //     None, Light, Medium, Heavy, Extreme (built from SAIN's own near-miss tracking, decays)
-    internal static class SainAdapter
-    {
-        private static bool _resolved;
-        private static MethodInfo _getPersonality;
-        private static MethodInfo _getBotComponent;
-        private static PropertyInfo _suppression;
-        private static PropertyInfo _suppressionState;
-        private static PropertyInfo _activeLayer;
-        private static object _noLayer;
-
-        internal static void Reset()
-        {
-            _resolved = false;
-            _getPersonality = null;
-            _getBotComponent = null;
-            _suppression = null;
-            _suppressionState = null;
-            _activeLayer = null;
-            _noLayer = null;
-        }
-
-        // SAIN only clears BotComponent.ActiveLayer from its own layer's IsActive(); once our
-        // higher-priority layer wins, BigBrain stops asking SAIN's layers, so the flag stays
-        // set. While it is set SAIN's BotMoverManualUpdate/FixedUpdate prefixes skip the game's
-        // mover (our path is never walked: the "stuck" retreats) and SmoothTurnPatch keeps
-        // turning the bot itself (fighting our facing: jitter). Setting it to None is exactly
-        // what SAINLayer.SetLayer(false) does. Returns true when it had to be cleared.
-        internal static bool ReleaseLayer(BotOwner owner)
-        {
-            if (!Settings.ReleaseSainControl.Value || owner == null) return false;
-            Resolve();
-            if (_activeLayer == null || _noLayer == null) return false;
-            try
-            {
-                object component = _getBotComponent.Invoke(null, new object[] { owner });
-                if (component == null) return false;
-                object current = _activeLayer.GetValue(component, null);
-                if (Equals(current, _noLayer)) return false;
-                _activeLayer.SetValue(component, _noLayer, null);
-                return true;
-            }
-            catch { return false; }
-        }
-
-        private static void Resolve()
-        {
-            if (_resolved) return;
-            _resolved = true;
-            try
-            {
-                Assembly sain = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "SAIN");
-                Type external = sain?.GetType("SAIN.Interop.SAINExternal");
-                if (external == null)
-                {
-                    HandsAreHighPlugin.Log.LogInfo("SAIN not installed: neutral personality, the game's own incoming-fire signal only");
-                    return;
-                }
-                Type[] arg = { typeof(BotOwner) };
-                _getPersonality = external.GetMethod("GetPersonality", BindingFlags.Public | BindingFlags.Static, null, arg, null);
-                _getBotComponent = external.GetMethod("GetBotComponent", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static, null, arg, null);
-                _suppression = _getBotComponent?.ReturnType.GetProperty("Suppression", BindingFlags.Public | BindingFlags.Instance);
-                _suppressionState = _suppression?.PropertyType.GetProperty("CurrentState", BindingFlags.Public | BindingFlags.Instance);
-                _activeLayer = _getBotComponent?.ReturnType.GetProperty("ActiveLayer", BindingFlags.Public | BindingFlags.Instance);
-                if (_activeLayer != null && _activeLayer.CanWrite && _activeLayer.PropertyType.IsEnum)
-                    _noLayer = Enum.Parse(_activeLayer.PropertyType, "None");
-                HandsAreHighPlugin.Log.LogInfo(
-                    $"SAIN found: personality {(_getPersonality != null ? "yes" : "no")}, suppression {(_suppressionState != null ? "yes" : "no")}, " +
-                    $"layer release {(_noLayer != null ? "yes" : "no")}");
-            }
-            catch (Exception e)
-            {
-                HandsAreHighPlugin.Log.LogWarning($"SAIN lookup failed, using neutral fallbacks: {e.Message}");
-            }
-        }
-
-        internal static string Personality(BotOwner owner)
-        {
-            if (!Settings.SainPersonality.Value || owner == null) return null;
-            Resolve();
-            if (_getPersonality == null) return null;
-            try { return _getPersonality.Invoke(null, new object[] { owner }) as string; }
-            catch { return null; }
-        }
-
-        // 0 (None) .. 1 (Extreme); 0 without SAIN.
-        internal static float SuppressionLevel(BotOwner owner)
-        {
-            if (!Settings.SainSuppression.Value || owner == null) return 0f;
-            Resolve();
-            if (_suppressionState == null) return 0f;
-            try
-            {
-                object component = _getBotComponent.Invoke(null, new object[] { owner });
-                object suppression = component != null ? _suppression.GetValue(component, null) : null;
-                if (suppression == null) return 0f;
-                int state = Convert.ToInt32(_suppressionState.GetValue(suppression, null));
-                return Mathf.Clamp01(state / 4f);
-            }
-            catch { return 0f; }
-        }
-
-        // How a personality leans when he gets an opening: fight (draw, knife, scramble) or run.
-        internal static void Leanings(string personality, out float fight, out float flee)
-        {
-            switch (personality)
-            {
-                case "Wreckless": fight = 1.5f; flee = 0.5f; return;
-                case "GigaChad": fight = 1.4f; flee = 0.6f; return;
-                case "SnappingTurtle": fight = 1.2f; flee = 0.7f; return;
-                case "Chad": fight = 1.2f; flee = 0.8f; return;
-                case "Rat": fight = 0.8f; flee = 1.3f; return;
-                case "Timmy": fight = 0.7f; flee = 1.4f; return;
-                case "Coward": fight = 0.6f; flee = 1.6f; return;
-                default: fight = 1f; flee = 1f; return;
-            }
-        }
-
-        // Bolder personalities resist giving up; cautious ones give up sooner.
-        internal static float Multiplier(string personality)
-        {
-            float lo = Settings.PersonalityMin.Value, hi = Settings.PersonalityMax.Value;
-            switch (personality)
-            {
-                case "Wreckless":
-                case "GigaChad": return lo;
-                case "SnappingTurtle": return Mathf.Lerp(lo, 1f, 0.25f);
-                case "Chad": return Mathf.Lerp(lo, 1f, 0.5f);
-                case "Rat": return Mathf.Lerp(1f, hi, 0.5f);
-                case "Timmy": return Mathf.Lerp(1f, hi, 0.75f);
-                case "Coward": return hi;
-                default: return 1f;
-            }
         }
     }
 }

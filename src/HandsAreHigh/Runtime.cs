@@ -1,45 +1,72 @@
+using System;
 using Comfort.Common;
 using EFT;
 using UnityEngine;
 
 namespace HandsAreHigh
 {
-    // The mod's per-frame driver: registry upkeep, the surrender checks, the order menu,
-    // debug keys and the debug overlay. One instance, owned by the plugin (torn down with it).
+    // The mod's per-frame driver: registry upkeep, the surrender checks, the order menu and
+    // debug keys. One instance, owned by the plugin (torn down with it). Outside a raid (menus,
+    // hideout) it does nothing but the profiler's frame count.
     internal sealed class Runtime : MonoBehaviour
     {
-        private readonly OrderMenu _menu = new OrderMenu();
-        private GUIStyle _overlay;
+        internal static readonly OrderMenu Menu = new OrderMenu();
+        private RuntimeGui _gui;
+
+        private void Awake() => _gui = GetComponent<RuntimeGui>();
+
+        // The GUI component only runs while there's something to draw. (A disabled component
+        // gets no Update/LateUpdate, so this always-on one decides.)
+        private void ToggleGui(bool inRaid)
+        {
+            if (_gui == null) _gui = GetComponent<RuntimeGui>();
+            if (_gui == null) return;
+            bool need = inRaid && (SurrenderRegistry.Any || OrderMenu.HasNote);
+            if (_gui.enabled != need) _gui.enabled = need;
+        }
 
         private void Update()
         {
-            float dt = Time.deltaTime;
-            HandsAreHighPlugin.Try("registry", () => SurrenderRegistry.Tick(dt));
-            HandsAreHighPlugin.Try("surrender checks", NaturalSurrender.Tick);
+            Perf.Frame();
+            bool inRaid = SurrenderRegistry.InRaid;
+            ToggleGui(inRaid);
+            if (!inRaid) { SurrenderRegistry.EnsureRaid(); return; }
 
-            Player me = Singleton<GameWorld>.Instance?.MainPlayer;
-            HandsAreHighPlugin.Try("order menu", () => _menu.Update(me));
+            float dt = Time.deltaTime;
+            long t0 = Perf.Begin();
+            try { SurrenderRegistry.Tick(dt); } catch (Exception e) { HandsAreHighPlugin.Report("registry", e); }
+            Perf.End(Perf.Sec.Registry, t0);
+
+            t0 = Perf.Begin();
+            try { NaturalSurrender.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("surrender checks", e); }
+            Perf.End(Perf.Sec.Natural, t0);
+
+            Player me = Singleton<GameWorld>.Instance.MainPlayer;
+            t0 = Perf.Begin();
+            try { Menu.Update(me); } catch (Exception e) { HandsAreHighPlugin.Report("order menu", e); }
+            Perf.End(Perf.Sec.Menu, t0);
 
             // Gameplay, not debug: the optional Shout Stop key (unbound by default).
             if (Settings.DemandEnabled.Value && Settings.DemandKey.Value.IsDown())
                 HandsAreHighPlugin.Try("stop key", () => StopDemand.Shout(me));
 
             if (!Settings.DebugKeys.Value) return;
-            if (Settings.SurrenderKey.Value.IsDown())
-                HandsAreHighPlugin.Try("surrender key", () => DebugCommand("surrender", me));
-            if (Settings.OpeningKey.Value.IsDown())
-                HandsAreHighPlugin.Try("opening key", () => DebugCommand("opening", me));
-            if (Settings.LeaveKey.Value.IsDown())
-                HandsAreHighPlugin.Try("leave key", () => DebugCommand("leave", me));
-            if (Settings.ForceRunKey.Value.IsDown())
-                HandsAreHighPlugin.Try("force run key", () => DebugCommand("force run", me));
-            if (Settings.ForceGrabKey.Value.IsDown())
-                HandsAreHighPlugin.Try("force grab key", () => DebugCommand("force grab", me));
+            if (Settings.SurrenderKey.Value.IsDown()) DebugCommand("surrender", me);
+            if (Settings.OpeningKey.Value.IsDown()) DebugCommand("opening", me);
+            if (Settings.LeaveKey.Value.IsDown()) DebugCommand("leave", me);
+            if (Settings.ForceRunKey.Value.IsDown()) DebugCommand("force run", me);
+            if (Settings.ForceGrabKey.Value.IsDown()) DebugCommand("force grab", me);
         }
 
         // Every debug key acts on exactly one bot: the one under the crosshair, resolved once
         // here and passed on by reference. No bot under it: nothing happens, and it says so.
         private static void DebugCommand(string command, Player me)
+        {
+            try { DebugCommandInner(command, me); }
+            catch (Exception e) { HandsAreHighPlugin.Report(command + " key", e); }
+        }
+
+        private static void DebugCommandInner(string command, Player me)
         {
             if (me == null || Singleton<GameWorld>.Instance == null) return;
             Player target = Targeting.BotUnderCrosshair(me, Settings.DebugKeyDistance.Value);
@@ -80,33 +107,55 @@ namespace HandsAreHigh
             HandsAreHighPlugin.Log.LogInfo($"Debug {command}: target {Targeting.Describe(target)}: {outcome}");
             OrderMenu.Notify(who == null ? $"Debug {command}: {outcome}" : $"Debug {command}: {who} {outcome}");
         }
+    }
+
+    // IMGUI drawing (order menu, hints, notes, debug overlay). Unity calls OnGUI on every
+    // enabled MonoBehaviour that has one, several times a frame, whether it draws or not; so
+    // this component is only enabled while there is something to draw (Runtime turns it on
+    // and off from LateUpdate below). useGUILayout off: we only use GUI.*, no layout pass.
+    internal sealed class RuntimeGui : MonoBehaviour
+    {
+        private GUIStyle _overlay;
+        private readonly System.Text.StringBuilder _sb = new System.Text.StringBuilder(512);
+
+        private void Awake() => useGUILayout = false;
 
         private void OnGUI()
         {
-            if (Singleton<GameWorld>.Instance == null) return;
-            _menu.OnGUI();
+            long t0 = Perf.Begin();
+            try { Draw(); } catch (Exception e) { HandsAreHighPlugin.Report("gui", e); }
+            Perf.End(Perf.Sec.Gui, t0);
+        }
+
+        private void Draw()
+        {
+            Runtime.Menu.OnGUI();
             if (!Settings.Overlay.Value || !SurrenderRegistry.Any) return;
 
             if (_overlay == null) _overlay = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft, fontSize = 13 };
-            var sb = new System.Text.StringBuilder("Hands Are High\n");
-            Player me = Singleton<GameWorld>.Instance.MainPlayer;
+            if (Event.current.type != EventType.Repaint) return;
+            _sb.Length = 0;
+            _sb.Append("Hands Are High\n");
+            int lines = 1;
+            Player me = Singleton<GameWorld>.Instance?.MainPlayer;
             foreach (SurrenderState s in SurrenderRegistry.All)
             {
                 if (s.Bot == null) continue;
                 float d = me != null ? Vector3.Distance(me.Position, s.Bot.Position) : 0f;
-                sb.Append($"{s.Name}: {s.Phase}{(s.Suspended ? " (asleep)" : "")}, order {s.Order}, nerve {s.Nerve:0.00}, arms {s.Weight:0.00}, {d:0} m");
-                if (s.TargetWeapon != null) sb.Append($", going for {s.TargetWeapon.ShortName.Localized()}");
-                sb.Append('\n');
+                _sb.Append($"{s.Name}: {s.Phase}{(s.Suspended ? " (asleep)" : "")}, order {s.Order}, nerve {s.Nerve:0.00}, arms {s.Weight:0.00}, {d:0} m");
+                if (s.TargetWeapon != null) _sb.Append($", going for {s.TargetWeapon.ShortName.Localized()}");
+                if (s.Phase == Phase.HandsUp)
+                {
+                    if (!s.LastCovered) _sb.Append($", opening: {s.OpeningKind}");
+                    if (Time.time < s.ComplyUntil) _sb.Append($", complying {s.ComplyUntil - Time.time:0} s");
+                    if (s.Gesture != GestureKind.None) _sb.Append($", {s.Gesture}");
+                    else if (s.WigglePendingUntil >= 0f || s.DefiantPendingUntil >= 0f) _sb.Append(", gesture pending");
+                }
+                if (s.PendingVoice != null) _sb.Append($", to say {s.PendingVoice}");
+                _sb.Append('\n');
+                lines++;
             }
-            GUI.Box(new Rect(10f, 120f, 560f, 24f + 18f * CountLines(sb)), sb.ToString(), _overlay);
+            GUI.Box(new Rect(10f, 120f, 640f, 24f + 18f * lines), _sb.ToString(), _overlay);
         }
-
-        private static int CountLines(System.Text.StringBuilder sb)
-        {
-            int n = 0;
-            for (int i = 0; i < sb.Length; i++) if (sb[i] == '\n') n++;
-            return n;
-        }
-
     }
 }

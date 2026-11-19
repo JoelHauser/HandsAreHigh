@@ -36,36 +36,50 @@ namespace HandsAreHigh
         private const float ReasonFloor = 0.2f;    // a factor this small (one stray shot ~0.15) isn't a reason
         private const float PromptGap = 1.5f;
         private const float LogFloor = 0.15f;      // pressure below this is only logged with Verbose logs
-        private static readonly List<Player> Bots = new List<Player>();
+        private static readonly EBodyPart[] Vitals = { EBodyPart.Head, EBodyPart.Chest };
         private static readonly EBodyPart[] Limbs =
             { EBodyPart.LeftArm, EBodyPart.RightArm, EBodyPart.LeftLeg, EBodyPart.RightLeg, EBodyPart.Stomach };
         private static readonly EBodyPart[] Parts =
             { EBodyPart.Head, EBodyPart.Chest, EBodyPart.Stomach, EBodyPart.LeftArm, EBodyPart.RightArm, EBodyPart.LeftLeg, EBodyPart.RightLeg };
 
+        private const int MaxChecksPerFrame = 2;
+        private const float PruneEvery = 30f;
+        private static float _nextPrune;
+
+        // Per frame for every AI: one reference-keyed dictionary lookup and a time compare
+        // (role resolved once per bot). A full check runs every EvalInterval per bot, staggered,
+        // and at most MaxChecksPerFrame per frame: when many come due together (a fight
+        // starts, many hits), the rest wait a frame instead of piling into one.
         internal static void Tick()
         {
             if (!Settings.Enabled.Value || !Settings.NaturalSurrender.Value) return;
             GameWorld world = Singleton<GameWorld>.Instance;
-            if (world?.AllAlivePlayersList == null) return;
-
-            Bots.Clear();
-            foreach (Player p in world.AllAlivePlayersList)
-                if (p != null && p.IsAI) Bots.Add(p);
+            List<Player> all = world?.AllAlivePlayersList;
+            if (all == null) return;
 
             float now = Time.time;
-            foreach (Player bot in Bots)
-            {
-                if (SurrenderRegistry.HoldsBot(bot) || !Eligible(bot)) continue;
-                BotOwner owner = bot.AIData?.BotOwner;
-                if (owner == null || owner.BotState != EBotState.Active || owner.IsDead) continue;
+            if (now >= _nextPrune) { _nextPrune = now + PruneEvery; SurrenderRegistry.PruneGone(); }
 
+            int budget = MaxChecksPerFrame;
+            for (int i = 0; i < all.Count; i++)
+            {
+                Player bot = all[i];
+                if (bot == null || !bot.IsAI) continue;
                 BotHistory h = SurrenderRegistry.HistoryOf(bot);
                 if (now < h.NextEval) continue;
-                h.NextEval = now + Settings.EvalInterval.Value * Random.Range(0.8f, 1.2f);
+                if (budget <= 0) break;
 
+                if ((int)h.Role < 0) h.Role = ClassOf(bot);
+                if (!EligibleRole(h.Role) || SurrenderRegistry.HoldsBot(bot)) { h.NextEval = now + Settings.EvalInterval.Value; continue; }
+                BotOwner owner = bot.AIData?.BotOwner;
+                if (owner == null || owner.BotState != EBotState.Active || owner.IsDead) { h.NextEval = now + Settings.EvalInterval.Value; continue; }
+
+                budget--;
+                h.NextEval = now + Settings.EvalInterval.Value * Random.Range(0.8f, 1.2f);
                 TrackSquad(owner, h);
                 if (now < h.CooldownUntil) continue;
-                HandsAreHighPlugin.Try("surrender check", () => Evaluate(bot, owner, h));
+                try { Evaluate(bot, owner, h); }
+                catch (System.Exception e) { HandsAreHighPlugin.Report("surrender check", e); }
             }
         }
 
@@ -91,9 +105,11 @@ namespace HandsAreHigh
             return RoleClass.None;
         }
 
-        internal static bool Eligible(Player p)
+        internal static bool Eligible(Player p) => EligibleRole(ClassOf(p));
+
+        internal static bool EligibleRole(RoleClass c)
         {
-            switch (ClassOf(p))
+            switch (c)
             {
                 case RoleClass.Scav: return true;
                 case RoleClass.Pmc: return Settings.IncludePmcs.Value;
@@ -137,16 +153,22 @@ namespace HandsAreHigh
             }
             else
             {
+                // The usual exits (no human target, far away): no message is built unless
+                // Verbose logs are on.
                 EnemyInfo goal = owner.Memory?.GoalEnemy;
-                if (goal == null) { Blocked(bot, h, "no enemy targeted"); return; }
-                if (!(goal.Person is Player human) || human.IsAI || !Perception.Alive(human)) { Blocked(bot, h, "his target isn't a human player"); return; }
+                if (goal == null) { if (Settings.VerboseLogs.Value) Blocked(bot, "no enemy targeted"); return; }
+                if (!(goal.Person is Player human) || human.IsAI || !Perception.Alive(human)) { if (Settings.VerboseLogs.Value) Blocked(bot, "his target isn't a human player"); return; }
                 enemy = human;
                 seenNow = goal.IsVisible;
-                if (!seenNow && now - goal.PersonalLastSeenTime > Settings.SeenWithin.Value) { Blocked(bot, h, $"hasn't seen you for {now - goal.PersonalLastSeenTime:0} s"); return; }
+                if (!seenNow && now - goal.PersonalLastSeenTime > Settings.SeenWithin.Value)
+                {
+                    if (Settings.VerboseLogs.Value) Blocked(bot, $"hasn't seen you for {now - goal.PersonalLastSeenTime:0} s");
+                    return;
+                }
             }
             float dist = Vector3.Distance(enemy.Position, bot.Position);
             float maxDist = demanded ? Mathf.Max(Settings.SurrenderDistance.Value, Settings.DemandRange.Value) : Settings.SurrenderDistance.Value;
-            if (dist > maxDist) { Blocked(bot, h, $"you're {dist:0} m away (max {maxDist:0})"); return; }
+            if (dist > maxDist) { if (Settings.VerboseLogs.Value) Blocked(bot, $"you're {dist:0} m away (max {maxDist:0})"); return; }
 
             // Mid weapon change: wait for the next check. (Mid-reload is fine: the surrender
             // cuts the reload short and drops the gun.)
@@ -222,10 +244,12 @@ namespace HandsAreHigh
                 gate = $"{reasons} reasons";
             }
 
-            if (!eligible && pressure < LogFloor && !Settings.VerboseLogs.Value) return;
+            // Checks that can't lead to a roll are only logged with Verbose logs (they repeat
+            // every few seconds for every bot in a fight); a roll is always logged.
+            if (!eligible && !(Settings.VerboseLogs.Value && pressure >= LogFloor)) return;
 
             WildSpawnType role = bot.Profile.Info.Settings.Role;
-            string personality = SainAdapter.Personality(owner);
+            string personality = SurrenderRegistry.PersonalityOf(bot, h);
             float persMult = SainAdapter.Multiplier(personality);
             float kitMult = h.KitValue < 0f ? 1f : 1f + Settings.KitValueWeight.Value * Mathf.Clamp01(h.KitValue / Settings.KitValueFull.Value);
             float experience = Experience(bot, owner);
@@ -263,16 +287,13 @@ namespace HandsAreHigh
                 : $"{bot.Profile?.Nickname}: surrender activation FAILED (mod disabled or registry refused)");
         }
 
-        // Why a bot under pressure isn't even considered: logged for any bot carrying pressure
-        // (fire or injury), so a quiet log means nothing was pressing on anyone.
-        private static void Blocked(Player bot, BotHistory h, string why)
-        {
-            if (!Settings.VerboseLogs.Value && Suppression.Decayed(h, Time.time) < 2f && Arsenal.HealthFraction(bot) > Settings.InjuryThreshold.Value) return;
+        // Why a bot isn't even considered (Verbose logs only: in a long fight between bots
+        // this fired every few seconds per bot).
+        private static void Blocked(Player bot, string why) =>
             HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname} ({bot.Profile?.Info?.Settings?.Role}): no surrender check: {why}");
-        }
 
         // The worst of several views of the same wounds (never a sum).
-        private static float Injury(Player bot, out string why)
+        internal static float Injury(Player bot, out string why)
         {
             why = "none";
             IHealthController hc = bot.HealthController;
@@ -285,7 +306,7 @@ namespace HandsAreHigh
                 Worst(ref worst, ref why, 0.3f + 0.7f * (thr - health) / thr, $"health {health:P0}");
 
             float vital = Settings.VitalThreshold.Value;
-            foreach (EBodyPart part in new[] { EBodyPart.Head, EBodyPart.Chest })
+            foreach (EBodyPart part in Vitals)
             {
                 var p = hc.GetBodyPartHealth(part);
                 float f = p.Maximum > 0f ? p.Current / p.Maximum : 1f;

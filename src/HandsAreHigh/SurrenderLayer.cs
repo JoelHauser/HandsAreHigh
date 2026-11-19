@@ -46,10 +46,18 @@ namespace HandsAreHigh
 
         public override void Update(CustomLayer.ActionData data)
         {
-            if (!SurrenderRegistry.TryGet(Me, out SurrenderState s) || s.Suspended) return;
+            if (!SurrenderRegistry.TryGet(Me, out SurrenderState s) || s.Suspended || s.Dead) return;
             _s = s;
-            HandsAreHighPlugin.Try($"phase {s.Phase}", () => Run(s));
+            // Inline: the old Try($"phase {s.Phase}", () => Run(s)) built a string and a closure
+            // per held bot per frame. The label is only made when something throws.
+            long t0 = Perf.Begin();
+            try { Run(s); }
+            catch (System.Exception e) { HandsAreHighPlugin.Report(PhaseLabels[(int)s.Phase], e); }
+            Perf.End(Perf.Sec.Layer, t0);
         }
+
+        private static readonly string[] PhaseLabels = System.Array.ConvertAll(
+            (Phase[])System.Enum.GetValues(typeof(Phase)), p => "phase " + p);
 
         public override void Stop()
         {
@@ -65,7 +73,7 @@ namespace HandsAreHigh
             {
                 s.NextCheck = Time.time + CheckInterval;
                 // While we hold him, nothing else moves or turns him (see SainAdapter.ReleaseLayer).
-                if (SainAdapter.ReleaseLayer(BotOwner) && !s.SainReleased)
+                if (SainAdapter.ReleaseLayer(BotOwner, s) && !s.SainReleased)
                 {
                     s.SainReleased = true;
                     HandsAreHighPlugin.Log.LogInfo($"{s.Name}: SAIN still had its layer marked active; released so it stops steering him and blocking his movement");
@@ -116,8 +124,8 @@ namespace HandsAreHigh
             {
                 s.ForceGrab = false;
                 if (!captorAlive) { HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced grab: no captor"); return; }
-                float q = ScrambleQuality(s, captor, out string qWhy, forced: true);
-                if (q > 0f) StartScramble(s, captor, $"debug: forced, {qWhy}");
+                float q = ScrambleQuality(s, captor.Position, Perception.Eye(captor), out string qWhy, forced: true);
+                if (q > 0f) StartScramble(s, captor.Position, $"debug: forced, {qWhy}");
                 else HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced grab not possible: {qWhy}");
                 return;
             }
@@ -126,6 +134,7 @@ namespace HandsAreHigh
             // man loses health every second without anyone firing.)
             bool hit = s.WasHit;
             s.WasHit = false;
+            if (hit) Gestures.Cancel(s, "hit");
             if (hit && Settings.BoltWhenShot.Value)
             {
                 Voice.Say(s, VoiceEvent.Hurt);
@@ -134,14 +143,6 @@ namespace HandsAreHigh
                 return;
             }
 
-            if (!captorAlive)
-            {
-                s.BeginRetreat("captor is dead", emergency: false);
-                return;
-            }
-
-            float dist = Vector3.Distance(captor.Position, Me.Position);
-
             if (s.ForcedLeave)
             {
                 s.ForcedLeave = false;
@@ -149,53 +150,238 @@ namespace HandsAreHigh
                 return;
             }
 
+            float now = Time.time;
+            if (now >= s.NextSlowCheck)
+            {
+                s.NextSlowCheck = now + 1f;
+                Reactions.RefreshBody(s);
+                NoticeGunGone(s, captorAlive ? captor : null);
+            }
+
             // What he can see of the captor. Out of sight, he only knows where he last saw him.
-            bool seen = Perception.LineClear(Perception.Eye(Me), Perception.Eye(captor));
-            if (seen)
+            float dist = captorAlive ? Vector3.Distance(captor.Position, Me.Position) : float.MaxValue;
+            bool seen = captorAlive && Perception.LineClear(Perception.Eye(Me), Perception.Eye(captor));
+            string gone = null;
+            if (!captorAlive) gone = "captor is dead";
+            else if (seen)
             {
                 s.CaptorLastSeen = captor.Position;
                 s.CaptorHiddenSince = -1f;
-                if (dist > Settings.LeaveDistance.Value)
-                {
-                    s.BeginRetreat($"captor {dist:0} m away", emergency: false);
-                    return;
-                }
+                if (dist > Settings.LeaveDistance.Value) gone = $"captor {dist:0} m away";
             }
             else
             {
-                if (s.CaptorHiddenSince < 0f) s.CaptorHiddenSince = Time.time;
-                if (Time.time - s.CaptorHiddenSince > Settings.LeaveSeconds.Value)
-                {
-                    s.BeginRetreat($"captor out of sight {Settings.LeaveSeconds.Value:0} s", emergency: false);
-                    return;
-                }
+                if (s.CaptorHiddenSince < 0f) s.CaptorHiddenSince = now;
+                if (now - s.CaptorHiddenSince > Settings.LeaveSeconds.Value) gone = $"captor out of sight {Settings.LeaveSeconds.Value:0} s";
             }
 
-            // Captor not covering him (no line of sight counts too, and so does the debug
-            // opening for this one bot): an opening.
-            bool debugOpening = Time.time < s.DebugOpeningUntil;
-            if (!debugOpening && seen && Perception.Covering(captor, Me, Settings.WatchAngle.Value))
+            // Captor gone: he reacts after his own reaction time, and only if it still holds.
+            if (gone != null)
             {
-                s.UnwatchedSince = -1f;
+                if (s.LeaveAt < 0f) { s.LeaveAt = now + s.NoticeDelay(); s.LeaveWhy = gone; }
+                else if (now >= s.LeaveAt) { s.LeaveAt = -1f; DecideOnLeave(s, captorAlive ? captor : null, dist, s.LeaveWhy); }
                 return;
             }
-            if (s.UnwatchedSince < 0f) s.UnwatchedSince = Time.time;
-            if (Time.time - s.UnwatchedSince < Settings.OpeningDelay.Value) return;
-            if (Time.time < s.NextBreakRoll) return;
-            s.NextBreakRoll = Time.time + Settings.BreakInterval.Value;
+            if (s.LeaveAt >= 0f)
+            {
+                s.LeaveAt = -1f;
+                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: you came back before he reacted ({s.LeaveWhy})");
+            }
 
-            // His own gun close, reachable and away from you makes an opening much more tempting.
-            float scramble = ScrambleQuality(s, captor, out string scrambleWhy);
+            // Is he covered? A change reaches his decisions after his reaction time.
+            bool debugOpening = now < s.DebugOpeningUntil;
+            string kind; float strength; bool clear;
+            bool covered = Reactions.Covered(captor, Me, seen, Settings.WatchAngle.Value, out kind, out strength, out clear);
+            if (debugOpening) { covered = false; kind = "debug opening"; strength = 1f; clear = true; }
+
+            NoticeApproach(s, dist);
+
+            if (covered)
+            {
+                if (!s.LastCovered)
+                {
+                    float openFor = s.OpenSince >= 0f ? now - s.OpenSince : 0f;
+                    s.LastCovered = true;
+                    s.OpenSince = -1f;
+                    s.DecideAt = -1f;
+                    if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: covered again after {openFor:0.0} s");
+                    // You look back at him after a real opening: a moment for a wiggle or a plea.
+                    if (openFor >= 1f)
+                    {
+                        Gestures.Opportunity(s, "you look back at him");
+                        Voice.Reply(s, VoiceEvent.Plead);
+                    }
+                }
+                return;
+            }
+
+            if (s.LastCovered)
+            {
+                s.LastCovered = false;
+                s.OpenSince = now;
+                s.OpeningKind = kind;
+                float delay = s.NoticeDelay() + (clear ? 0f : Settings.OpeningDelay.Value);
+                s.DecideAt = now + delay;
+                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening ({kind}), he takes it in after {delay:0.0} s");
+            }
+            else if (kind != s.OpeningKind)
+            {
+                // It got clearer (you started reloading while looking away): noticed quickly.
+                if (clear && strength > s.OpeningStrength)
+                {
+                    float soon = now + s.NoticeDelay();
+                    s.DecideAt = s.DecideAt < 0f ? soon : Mathf.Min(s.DecideAt, soon);
+                }
+                s.OpeningKind = kind;
+            }
+            s.OpeningStrength = strength;
+            if (s.DecideAt < 0f || now < s.DecideAt) return;
+            s.DecideAt = now + Settings.BreakInterval.Value * Random.Range(0.7f, 1.3f);
+            DecideOnOpening(s, captor, dist, debugOpening);
+        }
+
+        // He has noticed the opening: does he move now? Most of the time not. More likely
+        // with nerve, a clear opening, his own gun close and away from you, squadmates near;
+        // less when hurt; never while a warning shot or a fresh order still holds him.
+        private void DecideOnOpening(SurrenderState s, Player captor, float dist, bool debug)
+        {
+            float now = Time.time;
+            if (now < s.ComplyUntil)
+            {
+                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening, but still complying for {s.ComplyUntil - now:0.0} s");
+                return;
+            }
+            float scramble = ScrambleQuality(s, captor.Position, Perception.Eye(captor), out string scrambleWhy);
+            int allies = Reactions.FreeAlliesNear(BotOwner, Me);
             float nerveScale = Mathf.Lerp(0.3f, 1f, s.Nerve);
-            float chance = Mathf.Clamp01(Settings.BreakChance.Value * nerveScale * (1f + Settings.OpportunityBoost.Value * scramble));
+            float squad = 1f + Settings.SquadBoost.Value * Mathf.Clamp01(allies / 2f);
+            float hurt = 1f - 0.5f * s.Injury;
+            float chance = Mathf.Clamp01(Settings.BreakChance.Value * nerveScale * s.OpeningStrength *
+                                         (1f + Settings.OpportunityBoost.Value * scramble) * squad * hurt);
             float roll = Random.value;
-            if (Settings.VerboseLogs.Value || debugOpening)
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening{(debugOpening ? " (debug)" : "")}, nerve {s.Nerve:0.00}, " +
-                    $"gun nearby {scramble:0.00} ({scrambleWhy}), chance {chance:0.00}, roll {roll:0.00} " +
-                    (roll < chance ? "-> takes it" : "-> waits this second"));
-            if (roll >= chance) return;
+            bool acts = roll < chance;
+            string why = $"{s.OpeningKind} for {now - s.OpenSince:0.0} s";
+            if (Settings.VerboseLogs.Value || debug || (acts && Settings.LogDecisions.Value))
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening ({why}, {dist:0} m{(debug ? ", debug" : "")}): nerve {s.Nerve:0.00}, " +
+                    $"opening x{s.OpeningStrength:0.00}, own gun {scramble:0.00} ({scrambleWhy}), squad x{squad:0.00} ({allies} near), hurt x{hurt:0.00}; " +
+                    $"chance {chance:0.00}, roll {roll:0.00} -> {(acts ? "acts" : "keeps still")}");
+            if (!acts) return;
+            TakeOpening(s, captor, dist, scramble, scrambleWhy, allies, why);
+        }
 
-            TakeOpening(s, captor, dist, scramble, scrambleWhy);
+        // You can only take what you can see: his dropped gun is "gone" once he can see the
+        // spot and it isn't there. Until then he believes it is.
+        private void NoticeGunGone(SurrenderState s, Player captor)
+        {
+            if (s.GunGone || s.DroppedWeapon == null) return;
+            if (!Perception.LineClear(Perception.Eye(Me), s.DropPosition + Vector3.up * 0.3f)) return;
+            if (Arsenal.StillThere(s.DroppedWeapon, s.DropPosition)) return;
+            s.GunGone = true;
+            bool you = captor != null && Vector3.Distance(captor.Position, s.DropPosition) < 3f;
+            if (Settings.LogDecisions.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: sees his {s.DroppedWeapon.ShortName.Localized()} is gone{(you ? " (you took it)" : "")}");
+            if (you) Voice.Reply(s, VoiceEvent.Plead);
+            if (!s.LastCovered)
+            {
+                float soon = Time.time + s.NoticeDelay();
+                s.DecideAt = s.DecideAt < 0f ? soon : Mathf.Min(s.DecideAt, soon);
+            }
+        }
+
+        // You walking up to him: noticed per ApproachStep closed within 8 m; he may say
+        // something, and a pending opening is weighed again soon (knife range may change).
+        private void NoticeApproach(SurrenderState s, float dist)
+        {
+            if (s.ApproachRef < 0f || dist > s.ApproachRef) { s.ApproachRef = dist; return; }
+            if (dist >= 8f || s.ApproachRef - dist < Settings.ApproachStep.Value) return;
+            s.ApproachRef = dist;
+            if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: you come closer ({dist:0.0} m)");
+            Voice.Reply(s, VoiceEvent.Approached);
+            if (!s.LastCovered)
+            {
+                float soon = Time.time + s.NoticeDelay();
+                s.DecideAt = s.DecideAt < 0f ? soon : Mathf.Min(s.DecideAt, soon);
+            }
+        }
+
+        // The captor is gone (walked off, out of sight, dead). What he does depends on what he
+        // has and who he is: run, slip into cover, draw a gun he kept, or go for his own.
+        private void DecideOnLeave(SurrenderState s, Player captor, float dist, string gone)
+        {
+            Gestures.Cancel(s, "you left");
+            Vector3 threat = captor != null ? captor.Position : s.CaptorLastSeen;
+            Vector3 threatEye = captor != null ? Perception.Eye(captor) : s.CaptorLastSeen + Vector3.up * 1.5f;
+            bool seen = captor != null && Perception.LineClear(Perception.Eye(Me), threatEye);
+            EquipmentSlot? gun = Arsenal.GunOnBody(Me);
+            float nerve = s.Nerve;
+
+            var options = new List<Choice>(4);
+            var log = new StringBuilder($"{s.Name}: {gone}, reacts (nerve {nerve:0.00}{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}" +
+                                        $"{(s.LegsBad ? ", legs hurt" : "")}): ");
+
+            Add(options, log, "run", Settings.EscapeWeight.Value * 2f * s.Flee * (s.LegsBad ? 0.4f : 1f));
+
+            if (gun == null) log.Append("draw: no gun on him; ");
+            else Add(options, log, "draw " + Arsenal.SlotName(gun),
+                Settings.DrawWeight.Value * Mathf.Max(0f, nerve - 0.25f) * s.Fight * (seen ? 0.5f : 1f));
+
+            float scramble = ScrambleQuality(s, threat, threatEye, out string scrambleWhy);
+            if (scramble <= 0f) log.Append($"his gun: {scrambleWhy}; ");
+            else Add(options, log, "get his gun", Settings.ScrambleWeight.Value * scramble * (0.5f + nerve) * s.Fight);
+
+            Add(options, log, "hide", Settings.HideWeight.Value * (1.3f - nerve) * s.Flee * (s.LegsBad ? 2f : 1f));
+
+            Choice chosen = Pick(options, log);
+            if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo(log.ToString());
+
+            if (chosen.Name == "get his gun")
+            {
+                StartScramble(s, threat, $"you left, {scrambleWhy}");
+                return;
+            }
+            if (chosen.Name != null && chosen.Name.StartsWith("draw") && Arsenal.DrawGun(BotOwner))
+            {
+                Rearm(s, $"draws the {Arsenal.SlotName(gun)} he kept ({gone})");
+                return;
+            }
+            if (chosen.Name == "hide")
+            {
+                s.CaptorLastSeen = threat;
+                BeginHide(s, threat, $"lies low ({gone})");
+                return;
+            }
+            s.BeginRetreat(gone, emergency: false);
+        }
+
+        // Weighted random pick; logs the outcome. Name null if there were no options.
+        private static Choice Pick(List<Choice> options, StringBuilder log)
+        {
+            if (options.Count == 0) { log.Append("-> nothing"); return default; }
+            float total = 0f;
+            foreach (Choice c in options) total += c.Score;
+            float pick = Random.value * total;
+            Choice chosen = options[options.Count - 1];
+            float acc = 0f;
+            foreach (Choice c in options)
+            {
+                acc += c.Score;
+                if (pick <= acc) { chosen = c; break; }
+            }
+            log.Append($"-> {chosen.Name} (roll {pick:0.00} of {total:0.00})");
+            return chosen;
+        }
+
+        // Arms down and into cover nearby, out of the captor's sight: a quieter way out than
+        // running. Hiding then crouches, watches and decides again (Regrouping).
+        private void BeginHide(SurrenderState s, Vector3 threat, string why)
+        {
+            s.LowerArms(Settings.EmergencyLowerSeconds.Value);
+            s.GraceUntil = Time.time + Settings.Grace.Value;
+            s.Order = Order.None;
+            s.DropQueue.Clear();
+            s.ReportAt = -1f;
+            s.CaptorLastSeen = threat;
+            GoHide(s, why);
         }
 
         // The game's callback normally clears DropPending within the hide animation. One
@@ -243,25 +429,40 @@ namespace HandsAreHigh
 
         // 0..1: how good a grab for his own dropped gun would be right now. Closer, reachable,
         // and the further you are from it (and the less you can see it), the better.
-        private float ScrambleQuality(SurrenderState s, Player captor, out string why, bool forced = false)
+        // "Gone" is what he has seen (NoticeGunGone), not what is true: if he can't see the
+        // spot he still believes it's there, and finds out when he gets there.
+        private float ScrambleQuality(SurrenderState s, Vector3 captorPos, Vector3 captorEye, out string why, bool forced = false)
         {
             Item gun = s.DroppedWeapon;
             if (gun == null) { why = "he didn't drop a gun"; return 0f; }
             if (!forced && Time.time < s.ScrambleCooldownUntil) { why = "stopped once, not again yet"; return 0f; }
             if (!forced && s.Skip.Contains(gun)) { why = "failed to get it before"; return 0f; }
+            if (s.GunGone && !forced) { why = "he saw it's gone"; return 0f; }
             float d = Vector3.Distance(Me.Position, s.DropPosition);
             float range = Settings.ScrambleRange.Value;
             if (d > range) { why = $"{d:0} m away, over {range:0} m"; return 0f; }
             if (ClaimedByOther(s, gun)) { why = "another held bot is going for it"; return 0f; }
-            if (!Arsenal.StillThere(gun, s.DropPosition)) { why = "it's gone"; return 0f; }
-            if (!Perception.Reachable(Me.Position, s.DropPosition)) { why = "no path to it"; return 0f; }
+            if (forced && !Arsenal.StillThere(gun, s.DropPosition)) { why = "it's gone"; return 0f; }
+            if (!DropReachable(s)) { why = "no path to it"; return 0f; }
 
-            float fromCaptor = Vector3.Distance(captor.Position, s.DropPosition);
+            float fromCaptor = Vector3.Distance(captorPos, s.DropPosition);
             float exposure = 1f - Mathf.Clamp01(fromCaptor / Settings.ExposureDistance.Value);
-            if (!Perception.LineClear(Perception.Eye(captor), s.DropPosition + Vector3.up * 0.3f)) exposure *= 0.5f;
+            if (!Perception.LineClear(captorEye, s.DropPosition + Vector3.up * 0.3f)) exposure *= 0.5f;
             float proximity = 1f - d / range;
             why = $"{d:0.0} m from him, you {fromCaptor:0.0} m from it";
             return Mathf.Clamp01(Mathf.Sqrt(proximity) * (1f - 0.7f * exposure));
+        }
+
+        // A path solve to his dropped gun, reused for 3 s while he stays within 0.5 m of where
+        // it was solved from (he stands still with his hands up, so it nearly always is).
+        private bool DropReachable(SurrenderState s)
+        {
+            Vector3 here = Me.Position;
+            if (Time.time - s.DropReachableAt < 3f && (here - s.DropReachableFrom).sqrMagnitude < 0.25f) return s.DropReachable;
+            s.DropReachable = Perception.Reachable(here, s.DropPosition);
+            s.DropReachableAt = Time.time;
+            s.DropReachableFrom = here;
+            return s.DropReachable;
         }
 
         private static bool ClaimedByOther(SurrenderState s, Item gun)
@@ -280,49 +481,51 @@ namespace HandsAreHigh
         // He takes his chance: every option he has is weighed, logged, and one is picked at
         // random in proportion to its weight. A gun he still carries beats a knife (slung gun
         // first, then sidearm); the knife is only for a man with no gun on him.
-        private void TakeOpening(SurrenderState s, Player captor, float dist, float scramble, string scrambleWhy)
+        // Situation decides which options exist and how they weigh: weapons on him, range,
+        // his legs, wounds and squadmates, a reachable way out or a hidden spot near.
+        private void TakeOpening(SurrenderState s, Player captor, float dist, float scramble, string scrambleWhy, int allies, string opening)
         {
-            string personality = SainAdapter.Personality(BotOwner);
-            SainAdapter.Leanings(personality, out float fight, out float flee);
+            Gestures.Cancel(s, "takes his chance");   // a gesture never holds up a real action
+            float fight = s.Fight, flee = s.Flee;
             float nerve = s.Nerve;
             EquipmentSlot? gun = Arsenal.GunOnBody(Me);
+            float legs = s.LegsBad ? 0.35f : 1f;
 
-            var options = new List<Choice>(4);
+            var options = new List<Choice>(5);
             var log = new StringBuilder();
-            log.Append($"{s.Name} takes an opening at {dist:0.0} m (nerve {nerve:0.00}{(string.IsNullOrEmpty(personality) ? "" : ", " + personality)}): ");
+            log.Append($"{s.Name} takes an opening ({opening}) at {dist:0.0} m (nerve {nerve:0.00}" +
+                       $"{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}, hurt {s.Injury:0.00}{(s.LegsBad ? ", legs hurt" : "")}, " +
+                       $"{allies} squadmate(s) near): ");
 
             if (gun == null) log.Append("draw: no gun on him; ");
             else if (dist > Settings.SidearmRange.Value) log.Append($"draw: you're beyond {Settings.SidearmRange.Value:0} m; ");
-            else Add(options, log, "draw " + Arsenal.SlotName(gun), Settings.DrawWeight.Value * (0.4f + nerve) * fight);
+            else Add(options, log, "draw " + Arsenal.SlotName(gun),
+                Settings.DrawWeight.Value * (0.4f + nerve) * fight * (allies > 0 ? 1.2f : 1f) * (1f - 0.4f * s.Injury));
 
             if (gun != null) log.Append("knife: has a gun to draw; ");
             else if (!Arsenal.HasMelee(Me)) log.Append("knife: none; ");
             else if (dist > Settings.KnifeRange.Value) log.Append($"knife: you're beyond {Settings.KnifeRange.Value:0} m; ");
-            else Add(options, log, "knife", Settings.KnifeWeight.Value * (0.2f + nerve) * fight);
+            else Add(options, log, "knife", Settings.KnifeWeight.Value * (0.2f + nerve) * fight * (1f - 0.5f * s.Injury) * Mathf.Lerp(legs, 1f, 0.5f));
 
             if (scramble <= 0f) log.Append($"scramble: {scrambleWhy}; ");
-            else Add(options, log, "scramble", Settings.ScrambleWeight.Value * scramble * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f));
+            else Add(options, log, "scramble", Settings.ScrambleWeight.Value * scramble * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f) * legs);
 
             if (dist < Settings.EscapeMinDistance.Value) log.Append($"run: you're within {Settings.EscapeMinDistance.Value:0} m; ");
-            else Add(options, log, "run", Settings.EscapeWeight.Value * Mathf.Max(0.1f, 1.3f - nerve) * flee);
+            else if (!Perception.RetreatPoint(Me, captor.Position, Settings.RetreatDistance.Value, false, out _)) log.Append("run: no way out; ");
+            else Add(options, log, "run", Settings.EscapeWeight.Value * Mathf.Max(0.1f, 1.3f - nerve) * flee * legs);
+
+            Vector3 hidePoint = Vector3.zero;
+            if (dist < Settings.EscapeMinDistance.Value * 0.5f) log.Append("hide: you're right there; ");
+            else if (!Perception.RetreatPoint(Me, captor.Position, Settings.CoverRadius.Value, true, out hidePoint)) log.Append("hide: no hidden spot near; ");
+            else Add(options, log, "hide", Settings.HideWeight.Value * (1.3f - nerve) * flee * (s.LegsBad ? 1.5f : 1f));
 
             if (options.Count == 0)
             {
                 HandsAreHighPlugin.Log.LogInfo(log.Append("-> nothing he can do, keeps his hands up").ToString());
                 return;
             }
-
-            float total = 0f;
-            foreach (Choice c in options) total += c.Score;
-            float pick = Random.value * total;
-            Choice chosen = options[options.Count - 1];
-            float acc = 0f;
-            foreach (Choice c in options)
-            {
-                acc += c.Score;
-                if (pick <= acc) { chosen = c; break; }
-            }
-            HandsAreHighPlugin.Log.LogInfo(log.Append($"-> {chosen.Name} (roll {pick:0.00} of {total:0.00})").ToString());
+            Choice chosen = Pick(options, log);
+            HandsAreHighPlugin.Log.LogInfo(log.ToString());
 
             if (chosen.Name == "knife")
             {
@@ -330,11 +533,18 @@ namespace HandsAreHigh
             }
             else if (chosen.Name == "scramble")
             {
-                StartScramble(s, captor, scrambleWhy);
+                StartScramble(s, captor.Position, scrambleWhy);
             }
             else if (chosen.Name == "run")
             {
                 s.BeginRetreat("bolts during an opening", emergency: true);
+            }
+            else if (chosen.Name == "hide")
+            {
+                BeginHide(s, captor.Position, "slips into cover during an opening");
+                s.HideSearchPending = false;   // already found one
+                s.TargetPoint = hidePoint;
+                s.HideMoving = true;
             }
             else if (Arsenal.DrawGun(BotOwner))
             {
@@ -354,7 +564,7 @@ namespace HandsAreHigh
         }
 
         // Arms down at once and a sprint for his own gun; the pick-up is the real transaction.
-        private void StartScramble(SurrenderState s, Player captor, string why)
+        private void StartScramble(SurrenderState s, Vector3 captorPos, string why)
         {
             s.LowerArms(Settings.EmergencyLowerSeconds.Value);
             s.Order = Order.None;
@@ -362,7 +572,7 @@ namespace HandsAreHigh
             s.TargetWeapon = s.DroppedWeapon;
             s.TargetPoint = s.DropPosition;
             s.GraceUntil = Time.time + ScrambleGrace;
-            s.CaptorLastSeen = captor.Position;
+            s.CaptorLastSeen = captorPos;
             Voice.Say(s, VoiceEvent.Break);
             s.SetPhase(Phase.Recovering, $"scrambles for his {s.DroppedWeapon.ShortName.Localized()} ({why})");
             s.Scrambling = true;
@@ -442,7 +652,13 @@ namespace HandsAreHigh
 
         private void Retreating(SurrenderState s, bool check)
         {
-            if (s.NextMoveOrder == 0f && !PickRetreat(s)) return;
+            if (s.NextMoveOrder == 0f)
+            {
+                // A route search is heavy: when other bots already used this frame's budget
+                // he picks his route next frame (a frame's delay, no spike).
+                if (!Perception.TakeHeavy()) return;
+                if (!PickRetreat(s)) return;
+            }
 
             if (!MoveTo(s, s.TargetPoint, sprint: true))
             {
@@ -492,7 +708,8 @@ namespace HandsAreHigh
         private void Regroup(SurrenderState s, string why)
         {
             StopMoving();
-            s.RegroupUntil = Time.time + Settings.RegroupSeconds();
+            // Bold men catch their breath faster.
+            s.RegroupUntil = Time.time + Settings.RegroupSeconds() * (1.3f - 0.6f * s.Nerve);
             s.SetPhase(Phase.Regrouping, why);
         }
 
@@ -517,9 +734,10 @@ namespace HandsAreHigh
                 return;
             }
 
+            // What he believes: unless he saw it gone, his gun is where he dropped it.
             if (Settings.RecoverOwnWeapon.Value && s.DroppedWeapon != null && !s.Skip.Contains(s.DroppedWeapon) &&
                 Vector3.Distance(s.DropPosition, s.CaptorLastSeen) > Settings.AvoidRadius.Value &&
-                Arsenal.StillThere(s.DroppedWeapon, s.DropPosition) &&
+                !s.GunGone &&
                 Perception.Reachable(Me.Position, s.DropPosition))
             {
                 s.TargetWeapon = s.DroppedWeapon;
@@ -528,10 +746,15 @@ namespace HandsAreHigh
                 return;
             }
 
-            if (Settings.ScavengeWeapons.Value)
+            // A 60 m sweep of loose guns and bodies is the heaviest thing he does: it waits for
+            // a frame with budget, and after finding nothing he doesn't sweep again for 20 s
+            // (a hiding bot looks around every 8 s; it used to sweep every time).
+            if (Settings.ScavengeWeapons.Value && Time.time >= s.NextScavengeScan)
             {
+                if (!Perception.TakeHeavy()) return;   // decides next check (0.25 s)
                 Item found = Arsenal.FindWeapon(Me, s.CaptorLastSeen, Settings.ScavengeAvoid.Value,
                     Settings.ScavengeRadius.Value, s.Skip, out Vector3 at);
+                if (found == null) s.NextScavengeScan = Time.time + 20f;
                 if (found != null)
                 {
                     if (Perception.Reachable(Me.Position, at))
@@ -571,6 +794,14 @@ namespace HandsAreHigh
             {
                 if (s.Scrambling) FailScramble(s, "it's gone");
                 else GiveUpOn(s, "it's gone");
+                return;
+            }
+
+            // Walking back for a gun (not a scramble): a player he can see standing by it
+            // changes the plan.
+            if (!s.Scrambling && PlayerNear(s.TargetPoint, Settings.AvoidRadius.Value * 0.5f, out float near))
+            {
+                GiveUpOn(s, $"a player he can see is {near:0} m from it");
                 return;
             }
 
@@ -618,6 +849,23 @@ namespace HandsAreHigh
                 GiveUpOn(s, "has the gun but couldn't draw it");
         }
 
+        private bool PlayerNear(Vector3 point, float radius, out float distance)
+        {
+            distance = 0f;
+            GameWorld world = Singleton<GameWorld>.Instance;
+            if (world?.AllAlivePlayersList == null) return false;
+            Vector3 eye = Perception.Eye(Me);
+            foreach (Player p in world.AllAlivePlayersList)
+            {
+                if (p == null || p.IsAI) continue;
+                float d = Vector3.Distance(p.Position, point);
+                if (d > radius || !Perception.LineClear(eye, Perception.Eye(p))) continue;
+                distance = d;
+                return true;
+            }
+            return false;
+        }
+
         private void PickingUp(SurrenderState s)
         {
             Hold(Settings.Stance.Value);
@@ -643,15 +891,19 @@ namespace HandsAreHigh
         {
             StopMoving();
             s.SetPhase(Phase.Hiding, why, quiet);
-            if (Perception.CanSee(Me, s.CaptorLastSeen) &&
-                Perception.RetreatPoint(Me, s.CaptorLastSeen, Settings.CoverRadius.Value, true, out s.TargetPoint))
-            {
-                s.HideMoving = true;
-            }
+            // The cover search (up to PathCandidates path solves) runs from Hiding on a frame
+            // with heavy-search budget, usually this one or the next.
+            s.HideSearchPending = Perception.CanSee(Me, s.CaptorLastSeen);
         }
 
         private void Hiding(SurrenderState s, bool check)
         {
+            if (s.HideSearchPending && Perception.TakeHeavy())
+            {
+                s.HideSearchPending = false;
+                if (Perception.RetreatPoint(Me, s.CaptorLastSeen, Settings.CoverRadius.Value, true, out s.TargetPoint))
+                    s.HideMoving = true;
+            }
             if (s.HideMoving)
             {
                 if (!MoveTo(s, s.TargetPoint, sprint: false)) s.HideMoving = false;
@@ -702,6 +954,7 @@ namespace HandsAreHigh
             if (s.AimedBy != aiming) { s.AimedBy = aiming; s.AimedSince = Time.time; }
             // Mid-scramble he's committed: it takes a steadier aim (hysteresis) to stop him.
             float confirm = s.Scrambling ? Mathf.Max(0.8f, Settings.AimConfirm.Value * 2f) : Settings.AimConfirm.Value;
+            confirm *= Mathf.Clamp(s.Reaction / 0.6f, 0.6f, 1.5f);   // his own reaction time
             if (Time.time - s.AimedSince < confirm) return false;
 
             s.AimedBy = null;
@@ -777,6 +1030,8 @@ namespace HandsAreHigh
             bool first = s.NextMoveOrder == 0f || !s.Moving;
             bool moved = (point - s.PathTarget).sqrMagnitude > 1f;
             if (!first && !moved && Time.time < s.NextMoveOrder) return true;
+            // A moving destination (following you) re-paths at most twice a second.
+            if (!first && moved && Time.time - (s.NextMoveOrder - RepathInterval) < 0.5f) return true;
             s.NextMoveOrder = Time.time + RepathInterval;
             if (first) ResetProgress(s);
 

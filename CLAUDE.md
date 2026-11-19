@@ -6,6 +6,119 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.6.0 (0.5.0 + 0.6.0 in one commit), built on the work laptop against `C:\HUH` and pushed
+to `main` 2026-11-19; not installed, never run in game.** Everything in 0.5.0 and 0.6.0 is
+unverified in raid. No GitHub release.
+
+Next: Joel runs the 0.5.0 + 0.6.0 test plans with Profile on. Open idea (not built): a
+"converted" bot that stays friendly for the raid (would need enemy/group changes; today
+Follow is only an order: he stays HandsUp, hostile to the game's AI, and can still take an
+opening; it ends on escape, recapture, another order, you getting 25 m / 6 s out of sight,
+death or disable).
+
+### 0.6.0 (middle finger, Scav babble, performance audit)
+
+- Middle finger: **exists** (an earlier note said it didn't). `EInteraction.GetOffGesture`; the
+  game calls it that itself (BotGesture: GESTUS_FUCK_TO_SHOOT, EBotEnemyCause.fuckGestus). TP
+  clip `tp_gesture_04_getoff` (player_anim_controller.bundle, 1.23 s), decoded with UnityPy:
+  left upper arm 44 deg, left palm 86 deg, left fingers 60-125 deg; no right finger moves,
+  right arm <= 20 deg. Played via `MovementContext.SetInteractInHands` (the bot path:
+  body animator `AnimatedInteractions`; no GlobalEventDispatcher.ShowGesture, so no bot
+  receives it; LocalPlayer.OnAnimatedInteraction is empty). Game preconditions checked first:
+  FirearmsAnimator.IsIdling, not sprinting, not UsedSimplifiedSkeleton (that branch plays a
+  door push). ArmPose hands the left arm over (`GestureArm`, 0.15 s blend); end on
+  `IsInteractionPlaying` false; interrupt with `ForceStopInteractions`. One roll per surrender
+  3-10 s after settling, 5% x (1 + influence x (personality x (0.5 + nerve) - 1)), max 15%,
+  cooldown 600 s in BotHistory, 8 s window, needs you watching him.
+- Scav babble: non-urgent Scav lines draw from category + a babble pool (Joel: "the scavs can
+  just babble").
+- Performance (no profiling possible here; all from code reading):
+  - Per-frame / per-shot allocations removed: closures in Runtime.Update, Registry.Tick
+    (voice/gestures), SurrenderLogic.Update (also a `$"phase ..."` string per bot per frame),
+    ShotPatch (per shot by anyone), UnderFirePatch; Suppression.Record built its message per
+    near miss; `SurrenderRegistry.All` was IEnumerable (boxed enumerator per foreach);
+    Voice line arrays and RemoveAll lambda; Gestures sphere-cast height array; Injury vitals
+    array; NavMeshPath.corners read for reachability-only checks; FindLying two HashSets and
+    lambdas per call.
+  - NaturalSurrender.Tick: per frame per AI was a ProfileId-string dictionary lookup + role
+    chain; now a Player-keyed lookup first, role cached, at most 2 full checks per frame.
+    Non-roll check logs and "no surrender check" logs only with Verbose (they repeated every
+    few seconds per bot in bot-vs-bot fights).
+  - Reflection: SAIN component cached per bot (ReleaseLayer every 0.25 s per held bot,
+    suppression per check), shared args array, personality read once per bot per raid,
+    assembly scan at raid start (Prewarm), not at the first check.
+  - Heavy searches (retreat/cover point = up to 12 path solves, 60 m weapon sweep) limited to
+    2 per frame across bots (`Perception.TakeHeavy`): a witnessed shooting makes every held
+    bot flee at once. Empty weapon sweep not repeated for 20 s (hiding bots swept every 8 s).
+    Drop-gun reachability cached 3 s. Following re-paths at most 2x/s.
+  - Loot: collider -> InteractableObject cached per raid (GetComponentInParent per collider
+    per sweep before), buffer 256 -> 1024 (bodies have a dozen-plus colliders each; 256 could
+    silently drop guns).
+  - IMGUI: OnGUI moved to `RuntimeGui`, enabled only while a bot is held or a note shows;
+    useGUILayout off. Nothing runs outside a raid (no GameWorld, or HideoutGameWorld).
+  - JIT: all our methods pre-compiled in Awake (RuntimeHelpers.PrepareMethod; log line
+    `Pre-compiled N methods`), so the first surrender/gesture/pick-up doesn't compile.
+  - Death: `Player.LateUpdate` only calls VisualPass for the living, so the pose never ran on
+    corpses; OnDead disables the animators then CreateCorpse makes the ragdoll. We now hook
+    `Player.OnPlayerDeadOrUnspawn` per held bot (unhooked on leave) and flag the state Dead:
+    pose, lean, gestures, speech, callbacks (`Current()`), claims stop that moment. No ragdoll
+    code existed to remove; nothing touches colliders, rigidbodies or corpse bones. Dead bots'
+    Player keys pruned every 30 s.
+  - Profiler: F12 14. Debug > Profile (off; one bool when off). Logs every 10 s frame-time
+    stats (avg/p50/p99/p99.9/worst/1% low), GC gen0 count, heap, per-hook cost, tracked counts;
+    `Profile spike:` when our code takes > 1 ms in a frame.
+
+### Measurement plan (Profile on, same map/time/settings; Enabled off = baseline)
+
+Compare `Profile` lines with Enabled on vs off: (1) no held bots, 5 min; (2) one held;
+(3) four held; (4) debug openings + scrambles/pick-ups; (5) wiggle/finger chance 1 + chatter;
+(6) kill a held bot; (7) kill 3-4 close together; (8) stand by 10+ corpses with a hiding bot
+nearby; (9) ORBIT ghost sleep/wake (walk > 260 m away and back); (10) three raids in a row and
+a hot reload. Watch `Profile spike:` at first surrender, first gesture, first pick-up, deaths;
+`history` / `loot cache` counts must stay bounded; GC gen0 rate should match the baseline.
+
+### 0.5.0
+
+### 0.5.0 (decisions, wiggle, speech, spoken orders)
+
+- Decisions react to events after a per-bot reaction time (BotHistory.Reaction, 0.35-0.9 s,
+  x nerve/injury, varied): opening appears (clear: gun down/reload/inventory = reaction only;
+  gradual: look away/no line = + OpeningDelay), gets clearer, you come closer (ApproachStep),
+  his dropped gun seen gone (only if he can see the spot), warning shot (near miss by a
+  player: freezes IntimidationSeconds x nerve), order (complies OrderCompliance), you leave or
+  die (DecideOnLeave: run / draw kept gun / get his gun / hide). While an opening lasts he
+  reassesses every BreakInterval +-30%. Act chance per decision = BreakChance x nerve scale x
+  opening strength x (1 + boost x own-gun quality) x squad (free allies near) x (1 - 0.5
+  injury). Options weigh legs (destroyed leg), injury, allies, a reachable way out
+  (RetreatPoint) and a hidden spot (new "hide" option). Logs: `takes an opening (...)`,
+  `reacts`, `warning shot`, `sees his ... is gone`.
+- Wiggle (Gestures.cs): game lean via MovementContext; a prefix on `MovementContext.SmoothTilt`
+  sets `_tilt` for HandsUp bots (0, or the wiggle), because SAIN's LeanClass calls SetTilt
+  every tick for bots with an enemy, layer or not. Sampled at two opportunities only
+  (settled after surrender; you look back after an opening), max one roll per 20 s, cooldown
+  90 s in BotHistory. Shoulder/head sphere casts both sides before starting.
+- Middle finger: wrongly reported missing here; see 0.6.0 (it is GetOffGesture).
+- Speech (Voice.cs): categories Surrender/Plead/Threatened/Approached/Acknowledge/Refuse/
+  Released/Idle/Defiant/Break/Hurt, priorities, per-bot cooldowns, unprompted chatter every
+  18-45 s (50%), nearby held bots take turns (25 m, 1.5 s gap). Availability per voice from
+  `Speaker.PhrasesBanks`. After a line, the speech source is checked for the clip playing
+  (`says ...: audible` / out of earshot / no audio).
+- Spoken orders (CommandVoice.cs, off by default): `Player.Speaker.Play` (never Player.Say,
+  so no SayPatch Stop demand and no GlobalEventDispatcher.SayPhrase to friendly bots).
+- SainAdapter moved to its own file. Reference UnityEngine.AudioModule added.
+
+### Voice lines (read from the phrase bundles with UnityPy, 2026-11-19)
+
+All 19 scav_1-6 / bear_1-3, bear_1_eng, bear_2_eng, bear_vitaly / usec_1-6, usec_rob voices
+have Stop, Negative, Roger, Going, DontKnow, NeedHelp, OnMutter, OnBeingHurt, HurtHeavy,
+HurtNearDeath, OnFight, Fire, FollowMe, Look, Silence, Repeat. BEAR/USEC only: HoldFire,
+Cooperation, Gogogo, HoldPosition, GetBack, OnYourOwn, Regroup, GoForward. Scav only: Toxic.
+GetInCover: all but scav_6. None have Provocation, Greetings, Warning, MumblePhrase. A clip
+mask 0 matches any tags (TagBank.Compare). The old Surrender line relied on its fallback for
+Scavs (no HoldFire).
+
+### 0.4.0
+
 **0.4.0, built, installed in `H:\SPT4.1.X` and pushed to `main` 2026-11-18; not yet run in game.**
 0.3.0 was never committed on its own; its changes are in the 0.4.0 commit.
 0.3.0 was run by Joel 2026-11-18 (voice, reload cut, SAIN release, near misses all worked in
@@ -99,6 +212,11 @@ voice lines, unit tests. No Fika.
 scripts\pack.ps1 -SPTPath H:\SPT4.1.X [-Install]
 ```
 
+On the work laptop (no H:): `-SPTPath C:\HUH -BigBrainDll <scratchpad>\bigbrain\DrakiaXYZ-BigBrain.dll`
+(1.5.0, copied from an earlier session's scratchpad). Decompile with
+`ilspycmd -p -o <dir> -r C:\HUH\EscapeFromTarkov_Data\Managed ...\Assembly-CSharp.dll` (~2 min);
+an older obfuscated decompile (`_E180` names) in other scratchpads is a different build.
+
 Run it from PowerShell. H:\SPT4.1.X has BigBrain; on an install without it pass
 `-BigBrainDll <path>\DrakiaXYZ-BigBrain.dll` (BigBrain 1.5.0, never packed in our zip).
 `C:\HUH` is the work-laptop install. Zip = `BepInEx/plugins/HandsAreHigh.dll` only.
@@ -125,8 +243,9 @@ Order (none / follow / kneel) is separate from the phase: a following bot is sti
   (game holster), gun on the ground, arms up`.
   - Hit by anyone (`Player.BeingHitAction`; never bleeding) -> Retreating; witnesses run too.
   - Captor dead, seen beyond 25 m, or out of sight 6 s -> Retreating.
-  - Not covered for 1.5 s: a roll every 1 s at 0.15 x (0.3..1 by nerve) x (1 + 2 x how good a
-    grab for his own gun would be). Success: **TakeOpening** weighs and logs every option:
+  - Not covered: noticed after his reaction time (+1.5 s if gradual), then a decision every
+    ~1 s while it lasts (0.5.0 formula above). Success: **TakeOpening** weighs and logs every option
+    (0.5.0 adds hide, legs, injury, allies, way-out check):
     draw (slung gun first, then sidearm, within 30 m), knife (only with no gun, within 4 m),
     scramble for his own dropped gun (within 10 m, reachable, unclaimed, worse the closer you
     are to it; halved if he has a gun to draw), run (not within 6 m); scaled by nerve and
@@ -151,6 +270,24 @@ Order (none / follow / kneel) is separate from the phase: a following bot is sti
   Backspace leave; each only the bot under the crosshair, logged as `Debug <cmd>: target ...`
   and shown on screen. No target: nothing happens.
 - **Asleep** (ORBIT Ghost Mode): claim on a gun dropped, decides again on waking.
+
+## In-game test plan (0.5.0)
+
+Debug keys + Overlay on; Log decisions/gestures/voice on (default). Grep `takes an opening`,
+`reacts`, `warning shot`, `wiggle`, `says`, `order `.
+
+1. Two or three held bots (Override nerve off): reload, open inventory, look away, walk up,
+   walk off. Choices differ by nerve/personality/kit; reactions come ~0.3-1 s after the change.
+2. Fire past a held bot (miss): `warning shot ... freezes`; no opening taken until it ends.
+3. Take his rifle while he watches: `sees his ... is gone`; scramble no longer offered.
+4. Wiggle: Wiggle chance 1, cooldown 0 for the test: smooth lean L/R with hands up, back
+   upright; never next to a wall (`skipped: ... wall`); shoot him mid-wiggle: `interrupted (hit)`.
+   Then defaults: rare. Recapture straight away: no second wiggle (cooldown).
+5. Speech: `says X: audible` lines; Scav and PMC; two held bots side by side take turns.
+6. Speak your orders on: each order gives one `ordered X` line and one `order X: you say ...`
+   (or silent); nearby friendly bots don't react; Stop demand not triggered by Drop/Stay.
+7. SAIN: held bot stands upright (no SAIN lean); after rearm SAIN leans again.
+8. F12 disable / hot reload while a bot wiggles: lean returns upright.
 
 ## In-game test plan (0.4.0)
 
@@ -218,7 +355,13 @@ Assembly-CSharp in the session scratchpad; regenerate with `ilspycmd -p`).
 - **Targeting**: `Physics.RaycastNonAlloc` from the eye along `LookDirection`, mask
   HighPolyWithTerrain | HitCollider | Player, sorted, own colliders skipped; world first = no
   target; 0.25 m sphere cast fallback only with a clear line.
-- **Voice**: `BotOwner.BotTalk.Say(EPhraseTrigger, sayImmediately)`.
+- **Voice**: `Player.Speaker.Play(trigger, BotTalk.GetMask(null), true)` (BaseSpeaker: returns the
+  TagBank only once a clip was matched; OnPhraseTold -> Player.PlaySpeechFromTime plays it on
+  `_speechSource` unless IsOutOfProtagonistsRange). `SpeechSource` getter creates a source, so
+  the check reads `_speechSource` via FieldRefAccess. SpeakerManager.FreeToSpeak: group blockers.
+- **Lean**: MovementContext.SetTilt stores `_tilt` (+-5); SmoothTilt (from ManualUpdate) eases
+  SmoothedTilt -> animator. Animation only, no position or capsule change. Vanilla BotTilt +-5.
+- **Suppression gap**: one event per 0.1 s per bot (not 0.05).
 - **Finding guns / pick-up**: OverlapSphere on Interactive/Loot/Deadbody; `FindSlotToPickUp`,
   `ItemManipulator.Move`, `TryRunNetworkTransaction`.
 - **Arm pose**: postfix on `Player.VisualPass`.
@@ -234,4 +377,8 @@ Assembly-CSharp in the session scratchpad; regenerate with `ilspycmd -p`).
 - Whether `BotTalk.Say` plays while our layer owns the bot, and which lines Scav voices have.
 - Whether ORBIT's sleep shows as `BotState != Active` or an inactive GameObject (both handled).
 - Forearm twist bones untouched; wrists may look twisted (`Forearm twist`).
+- Whether the bot animator shows a lean at +-3 in the standing hands-up pose (BotTilt uses it).
+- Whether Mono inlines MovementContext.SmoothTilt (would bypass the prefix; then SAIN can
+  still lean held bots and the wiggle fights it).
+- Phrase choice is by trigger name; the clips were not listened to.
 - Fika: decisions must run on the host; the arm pose needs a synced flag.

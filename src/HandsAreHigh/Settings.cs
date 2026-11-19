@@ -116,6 +116,13 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> EscapeWeight;
         internal static ConfigEntry<float> ScrambleTimeout;
         internal static ConfigEntry<float> ScrambleCooldown;
+        internal static ConfigEntry<float> ReactionMin;
+        internal static ConfigEntry<float> ReactionMax;
+        internal static ConfigEntry<float> SquadBoost;
+        internal static ConfigEntry<float> HideWeight;
+        internal static ConfigEntry<float> IntimidationSeconds;
+        internal static ConfigEntry<float> OrderCompliance;
+        internal static ConfigEntry<float> ApproachStep;
         // 08
         internal static ConfigEntry<float> RetreatDistance;
         internal static ConfigEntry<float> Grace;
@@ -163,6 +170,18 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> BotVoice;
         internal static ConfigEntry<float> VoiceCooldown;
         internal static ConfigEntry<bool> Hints;
+        internal static ConfigEntry<bool> Chatter;
+        internal static ConfigEntry<float> ChatterMin;
+        internal static ConfigEntry<float> ChatterMax;
+        internal static ConfigEntry<float> ChatterChance;
+        internal static ConfigEntry<float> ReplyChance;
+        internal static ConfigEntry<bool> DefiantRemarks;
+        internal static ConfigEntry<float> ChatterRadius;
+        internal static ConfigEntry<float> ChatterGap;
+        internal static ConfigEntry<bool> Acknowledge;
+        internal static ConfigEntry<float> AckDelayMin;
+        internal static ConfigEntry<float> AckDelayMax;
+        internal static ConfigEntry<bool> CommandSpeech;
         // 13
         internal static ConfigEntry<float> UpperArmRaise;
         internal static ConfigEntry<float> UpperArmForward;
@@ -177,6 +196,27 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> TrembleSpeed;
         internal static ConfigEntry<float> Stance;
         internal static ConfigEntry<bool> FaceCaptor;
+        internal static ConfigEntry<bool> Wiggle;
+        internal static ConfigEntry<float> WiggleChance;
+        internal static ConfigEntry<float> WiggleMaxChance;
+        internal static ConfigEntry<float> WiggleCooldown;
+        internal static ConfigEntry<float> WiggleStrength;
+        internal static ConfigEntry<int> WiggleSwings;
+        internal static ConfigEntry<float> WiggleSwingSeconds;
+        internal static ConfigEntry<float> WiggleDelayMin;
+        internal static ConfigEntry<float> WiggleDelayMax;
+        internal static ConfigEntry<float> WiggleWindow;
+        internal static ConfigEntry<float> WiggleSampleGap;
+        internal static ConfigEntry<float> WiggleClearance;
+        internal static ConfigEntry<bool> Defiant;
+        internal static ConfigEntry<float> DefiantChance;
+        internal static ConfigEntry<float> DefiantInfluence;
+        internal static ConfigEntry<float> DefiantMaxChance;
+        internal static ConfigEntry<float> DefiantCooldown;
+        internal static ConfigEntry<float> DefiantDelayMin;
+        internal static ConfigEntry<float> DefiantDelayMax;
+        internal static ConfigEntry<float> DefiantWindow;
+        internal static ConfigEntry<float> GestureBlend;
         // 14
         internal static ConfigEntry<bool> SainPersonality;
         internal static ConfigEntry<bool> SainSuppression;
@@ -195,6 +235,11 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> NerveOverride;
         internal static ConfigEntry<float> NerveOverrideValue;
         internal static ConfigEntry<float> ErrorLogCooldown;
+        internal static ConfigEntry<bool> LogDecisions;
+        internal static ConfigEntry<bool> LogGestures;
+        internal static ConfigEntry<bool> LogVoice;
+        internal static ConfigEntry<bool> Profile;
+        internal static ConfigEntry<float> ProfileSeconds;
 
         private static ConfigDescription Range(string text, float min, float max) =>
             new ConfigDescription(text, new AcceptableValueRange<float>(min, max));
@@ -324,8 +369,9 @@ namespace HandsAreHigh
                 "SAIN keeps steering and blocks the game's movement for a bot whose SAIN layer was active when he surrendered. On: SAIN is told its layer is no longer active (its own BotComponent.ActiveLayer = None) while he is held. No effect without SAIN.");
 
             // 07 Taking an opening
-            OpeningDelay = c.Bind(Opening, "Opening must last (s)", 1.5f, Range("", 0f, 10f));
-            BreakInterval = c.Bind(Opening, "Roll every (s)", 1f, Range("While there's an opening.", 0.1f, 10f));
+            OpeningDelay = c.Bind(Opening, "Opening must last (s)", 1.5f,
+                Range("For gradual openings (you look away, he loses sight of you) he waits this long on top of his reaction time to be sure. Clear ones (you reload, open your inventory, put your gun away) only take his reaction time.", 0f, 10f));
+            BreakInterval = c.Bind(Opening, "Roll every (s)", 1f, Range("While an opening lasts he reassesses this often (varied +-30% each time).", 0.1f, 10f));
             BreakChance = c.Bind(Opening, "Break chance", 0.15f, Range("Per roll, scaled by nerve (30% at nerve 0, 100% at nerve 1).", 0f, 1f));
             OpportunityBoost = c.Bind(Opening, "Gun nearby boost", 2f,
                 Range("His own gun close, reachable and away from you multiplies the break chance by up to 1 + this.", 0f, 5f));
@@ -342,6 +388,19 @@ namespace HandsAreHigh
             EscapeWeight = c.Bind(Opening, "Weight: run", 0.5f, Range("", 0f, 5f));
             ScrambleTimeout = c.Bind(Opening, "Scramble time limit (s)", 8f, Range("", 2f, 30f));
             ScrambleCooldown = c.Bind(Opening, "No second scramble for (s)", 15f, Range("After a scramble is stopped, so he doesn't flip back and forth.", 0f, 120f));
+            ReactionMin = c.Bind(Opening, "Reaction time min (s)", 0.35f,
+                Range("Each bot rolls his own reaction time once per raid, between min and max. A change he can see (you reload, look away, come closer, leave) reaches his decisions only after it: quicker with high nerve, slower when hurt, varied every time.", 0.05f, 3f));
+            ReactionMax = c.Bind(Opening, "Reaction time max (s)", 0.9f, Range("", 0.05f, 3f));
+            SquadBoost = c.Bind(Opening, "Squad nearby boost", 0.5f,
+                Range("Free squadmates close by (Allies within, section 04) make him up to 1 + this more likely to act on an opening.", 0f, 2f));
+            HideWeight = c.Bind(Opening, "Weight: slip into cover", 0.6f,
+                Range("Ducking out of sight nearby instead of running far. Likelier for low nerve, cautious personalities and bad legs; needs a reachable hidden spot.", 0f, 5f));
+            IntimidationSeconds = c.Bind(Opening, "Warning shot holds him for (s)", 6f,
+                Range("A shot from you that passes close (not a hit: a hit makes him run) keeps him still this long, scaled by nerve.", 0f, 30f));
+            OrderCompliance = c.Bind(Opening, "After an order he complies for (s)", 3f,
+                Range("A fresh order holds him to it this long (varied) before he looks for an opening again.", 0f, 15f));
+            ApproachStep = c.Bind(Opening, "Coming closer counts after (m)", 2f,
+                Range("You closing this much distance (within 8 m) is noticed and may get a reaction.", 0.5f, 10f));
 
             // 08 Retreat and recapture
             RetreatDistance = c.Bind(Retreat, "Retreat distance (m)", 35f, Range("", 5f, 150f));
@@ -396,6 +455,21 @@ namespace HandsAreHigh
             BotVoice = c.Bind(Feedback, "Bot voice lines", true, "The game's own lines (hold fire, roger, negative...).");
             VoiceCooldown = c.Bind(Feedback, "Voice cooldown (s)", 12f, Range("", 1f, 120f));
             Hints = c.Bind(Feedback, "On-screen hints", true, "A small prompt when you can give orders, and debug confirmations.");
+            Chatter = c.Bind(Feedback, "Talk while held", true,
+                "A held bot sometimes speaks on his own (mutters, asks for help, a defiant remark) and replies to what you do (coming closer, a warning shot, looking back at him). Lines his voice lacks are skipped silently.");
+            ChatterMin = c.Bind(Feedback, "Unprompted line every min (s)", 18f, Range("How often he gets a chance to speak on his own, between min and max.", 5f, 300f));
+            ChatterMax = c.Bind(Feedback, "Unprompted line every max (s)", 45f, Range("", 5f, 300f));
+            ChatterChance = c.Bind(Feedback, "Unprompted line chance", 0.5f, Range("Chance he actually says something at each of those moments.", 0f, 1f));
+            ReplyChance = c.Bind(Feedback, "Reply chance", 0.6f, Range("Chance he reacts out loud to something you do (approach, warning shot, looking back at him).", 0f, 1f));
+            DefiantRemarks = c.Bind(Feedback, "Defiant remarks", true,
+                "Bold bots (high nerve, fighter personality) sometimes insult you instead. Only Scav voices have such lines (Toxic); PMCs stay silent.");
+            ChatterRadius = c.Bind(Feedback, "Take turns within (m)", 25f, Range("Held bots this close to each other don't talk over one another.", 0f, 100f));
+            ChatterGap = c.Bind(Feedback, "Gap between speakers (s)", 1.5f, Range("", 0f, 10f));
+            Acknowledge = c.Bind(Feedback, "Acknowledge orders", true, "He answers an order out loud (roger, going; negative if he can't) after a short, varied delay.");
+            AckDelayMin = c.Bind(Feedback, "Answer delay min (s)", 0.4f, Range("", 0f, 5f));
+            AckDelayMax = c.Bind(Feedback, "Answer delay max (s)", 1.2f, Range("", 0f, 5f));
+            CommandSpeech = c.Bind(Feedback, "Speak your orders", false,
+                "Off by default. On: your character says a matching line from your own voice when you give an order from the menu (the menu still gives the order once, spoken or not). Never counts as a Stop demand and isn't heard by other bots as a command.");
 
             // 13 Arm pose
             UpperArmRaise = c.Bind(Pose, "Upper arm raise (deg)", 12f,
@@ -416,6 +490,31 @@ namespace HandsAreHigh
             TrembleSpeed = c.Bind(Pose, "Tremble speed", 6f, Range("", 0f, 20f));
             Stance = c.Bind(Pose, "Stance with hands up", 1f, Range("1 = standing, 0 = full crouch.", 0f, 1f));
             FaceCaptor = c.Bind(Pose, "Face the player", true, "Turns to face whoever holds him.");
+            Wiggle = c.Bind(Pose, "Wiggle", true,
+                "Now and then a held bot leans left and right with his hands up (the friendly wiggle). Uses the game's own lean; never moves him.");
+            WiggleChance = c.Bind(Pose, "Wiggle chance", 0.15f,
+                Range("Per opportunity, before personality and nerve (cowards x1.6 .. Wreckless x0.3; nerve 0 x1.3 .. nerve 1 x0.7). Opportunities: once shortly after he settles with his hands up, and when you look back at him after an opening, at most one per Wiggle sample gap.", 0f, 1f));
+            WiggleMaxChance = c.Bind(Pose, "Wiggle max chance", 0.35f, Range("Cap on the final chance per opportunity.", 0f, 1f));
+            WiggleCooldown = c.Bind(Pose, "Wiggle cooldown (s)", 90f, Range("Per bot, kept across recaptures; starts when a wiggle is chosen.", 0f, 900f));
+            WiggleStrength = c.Bind(Pose, "Wiggle strength", 0.6f, Range("Fraction of a full lean.", 0.1f, 1f));
+            WiggleSwings = c.Bind(Pose, "Wiggle swings", 4, IntRange("Leans, alternating sides, then back to upright.", 2, 8));
+            WiggleSwingSeconds = c.Bind(Pose, "Wiggle swing time (s)", 0.3f, Range("Per lean; the game smooths between them.", 0.15f, 1f));
+            WiggleDelayMin = c.Bind(Pose, "Wiggle after settling min (s)", 0.8f, Range("Delay after his arms are fully up before the first opportunity.", 0f, 10f));
+            WiggleDelayMax = c.Bind(Pose, "Wiggle after settling max (s)", 2.5f, Range("", 0f, 10f));
+            WiggleWindow = c.Bind(Pose, "Wiggle window (s)", 4f, Range("A chosen wiggle waits at most this long for a suitable moment (standing still, facing you, room to lean), else it is skipped.", 0.5f, 20f));
+            WiggleSampleGap = c.Bind(Pose, "Wiggle sample gap (s)", 20f, Range("Minimum time between two wiggle rolls for one bot.", 1f, 300f));
+            WiggleClearance = c.Bind(Pose, "Wiggle clearance (m)", 0.45f, Range("Free space needed on both sides at shoulder height; a wall closer than this skips the wiggle.", 0.1f, 1.5f));
+            Defiant = c.Bind(Pose, "Middle finger", true,
+                "A held bot may flip you off once: the game's own middle-finger gesture (GetOffGesture) on his left hand while his right hand stays up. Purely a gesture: no fight, no draw, no escape, and no bot hears it as a gesture.");
+            DefiantChance = c.Bind(Pose, "Middle finger chance", 0.05f,
+                Range("Per surrender, rolled once after he settles. Final chance = this x (1 + influence x (personality x nerve - 1)), capped at the max. Personality: Wreckless 2.0, GigaChad 1.8, Chad 1.5, SnappingTurtle 1.3, others 1, Rat 0.6, Timmy 0.4, Coward 0.3; nerve 0 x0.5 .. nerve 1 x1.5.", 0f, 1f));
+            DefiantInfluence = c.Bind(Pose, "Middle finger personality influence", 1f, Range("0: every bot uses the plain chance; 1: full personality and nerve bias.", 0f, 1f));
+            DefiantMaxChance = c.Bind(Pose, "Middle finger max chance", 0.15f, Range("Cap on the final per-surrender chance.", 0f, 1f));
+            DefiantCooldown = c.Bind(Pose, "Middle finger cooldown (s)", 600f, Range("Per bot, kept across recaptures; starts when it is chosen.", 0f, 3600f));
+            DefiantDelayMin = c.Bind(Pose, "Middle finger after settling min (s)", 3f, Range("When the roll happens after his arms are fully up, between min and max.", 0f, 60f));
+            DefiantDelayMax = c.Bind(Pose, "Middle finger after settling max (s)", 10f, Range("", 0f, 60f));
+            DefiantWindow = c.Bind(Pose, "Middle finger window (s)", 8f, Range("A chosen gesture waits at most this long for a suitable moment (still, facing you, you watching), else it is skipped.", 1f, 60f));
+            GestureBlend = c.Bind(Pose, "Gesture arm blend (s)", 0.15f, Range("How quickly the gesturing arm leaves and rejoins the hands-up pose.", 0.05f, 1f));
 
             // 14 Other mods
             SainPersonality = c.Bind(Compat, "Read SAIN personality", true,
@@ -444,6 +543,14 @@ namespace HandsAreHigh
             NerveOverride = c.Bind(Debug, "Override nerve", false, "Every bot uses the value below instead of his own roll, live.");
             NerveOverrideValue = c.Bind(Debug, "Nerve value", 0.5f, Range("", 0f, 1f));
             ErrorLogCooldown = c.Bind(Debug, "Repeat errors every (s)", 10f, Range("The same error is logged at most this often.", 1f, 120f));
+            LogDecisions = c.Bind(Debug, "Log decisions", true,
+                "Each choice a held bot makes (act on an opening, react to you leaving) with its main reasons. Rolls where he stays put only with Verbose logs.");
+            LogGestures = c.Bind(Debug, "Log gestures", true, "Wiggle rolls, starts, completions, skips and interruptions.");
+            LogVoice = c.Bind(Debug, "Log voice", true,
+                "Every line a held bot (or you, for orders) says, and whether audio actually started (or why not: no such line in his voice, out of earshot, speaker busy).");
+            Profile = c.Bind(Debug, "Profile", false,
+                "Off by default; costs nothing when off. On: logs frame times (avg, p50, p99, worst, 1% low), GC activity, our own cost per hook, tracked object counts, and any frame where our code took over 1 ms. For comparing runs with Enabled on and off.");
+            ProfileSeconds = c.Bind(Debug, "Profile report every (s)", 10f, Range("", 2f, 120f));
         }
 
         internal static float RollNerve()
@@ -462,5 +569,8 @@ namespace HandsAreHigh
             float hi = Mathf.Max(RegroupMin.Value, RegroupMax.Value);
             return Random.Range(lo, hi);
         }
+
+        internal static float Between(ConfigEntry<float> a, ConfigEntry<float> b) =>
+            Random.Range(Mathf.Min(a.Value, b.Value), Mathf.Max(a.Value, b.Value));
     }
 }

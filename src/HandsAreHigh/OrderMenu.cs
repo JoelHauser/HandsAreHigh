@@ -21,6 +21,10 @@ namespace HandsAreHigh
         private SurrenderState _open;
         private int _index;
         private GUIStyle _box, _line, _hint;
+        private SurrenderState _hintFor;
+        private string _hintText;
+
+        internal static bool HasNote => _note != null && Time.time < _noteUntil;
 
         internal static void Notify(string msg)
         {
@@ -111,6 +115,19 @@ namespace HandsAreHigh
             if (s.Captor != me) s.Captor = me;
             HandsAreHighPlugin.Log.LogInfo($"{s.Name}: ordered {order}");
 
+            // Your line (optional) is only sound; the order below is applied once, now,
+            // whatever happens to the audio. Any gesture stops; a fresh order holds him to it
+            // for a moment (varied) before he looks for an opening again.
+            HandsAreHighPlugin.Try("order speech", () => CommandVoice.Speak(me, order));
+            Gestures.Cancel(s, "given an order");
+            if (order != OrderKind.Leave)
+            {
+                s.ComplyUntil = Mathf.Max(s.ComplyUntil, Time.time + Settings.OrderCompliance.Value * Random.Range(0.7f, 1.3f));
+                s.DecideAt = -1f;
+                s.OpenSince = -1f;
+                s.LastCovered = true;
+            }
+
             switch (order)
             {
                 case OrderKind.DropWeapons:
@@ -125,23 +142,30 @@ namespace HandsAreHigh
                 case OrderKind.Follow:
                     s.Order = Order.Follow;
                     Notify($"{s.Name} follows you, hands up");
-                    Voice.Say(s, VoiceEvent.Acknowledge);
+                    Answer(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Kneel:
                     s.Order = Order.Kneel;
                     Notify($"{s.Name} gets down");
-                    Voice.Say(s, VoiceEvent.Acknowledge);
+                    Answer(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Stay:
                     s.Order = Order.None;
                     Notify($"{s.Name} stays put");
-                    Voice.Say(s, VoiceEvent.Acknowledge);
+                    Answer(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Leave:
                     Notify($"{s.Name} is let go");
                     s.BeginRetreat("let go", emergency: false);
+                    Answer(s, VoiceEvent.Released);
                     break;
             }
+        }
+
+        // His answer, after a short varied delay; never holds up the order itself.
+        private static void Answer(SurrenderState s, VoiceEvent e)
+        {
+            if (Settings.Acknowledge.Value) Voice.Say(s, e, Voice.AckDelay());
         }
 
         private static void QueueDrop(SurrenderState s, List<KeyValuePair<EquipmentSlot, Item>> items, string name)
@@ -152,7 +176,7 @@ namespace HandsAreHigh
             if (items.Count == 0)
             {
                 Notify($"{s.Name} has nothing like that on him");
-                Voice.Say(s, VoiceEvent.Refuse);
+                Answer(s, VoiceEvent.Refuse);
                 return;
             }
             foreach (var kv in items)
@@ -162,7 +186,7 @@ namespace HandsAreHigh
             }
             s.NextDropAt = Time.time + 0.3f;
             Notify($"{s.Name}: {name} ({items.Count} item(s))");
-            Voice.Say(s, VoiceEvent.Acknowledge);
+            Answer(s, VoiceEvent.Acknowledge);
         }
 
         internal void OnGUI()
@@ -192,7 +216,12 @@ namespace HandsAreHigh
             }
             else if (_target != null && Settings.Hints.Value)
             {
-                GUI.Label(new Rect(cx - 250f, y, 500f, 24f), $"{Settings.MenuKey.Value}: give {_target.Name} orders", _hint);
+                if (_hintFor != _target)
+                {
+                    _hintFor = _target;
+                    _hintText = $"{Settings.MenuKey.Value}: give {_target.Name} orders";
+                }
+                GUI.Label(new Rect(cx - 250f, y, 500f, 24f), _hintText, _hint);
             }
 
             if (_note != null && Time.time < _noteUntil && Settings.Hints.Value)

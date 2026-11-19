@@ -12,7 +12,10 @@ He isn't a statue after that. He watches you, and if you look away, reload or ho
 - **Openings:** a held bot breaks free if you stop covering him. Close up he uses his knife, further away a sidearm.
 - **Escape and rearm:** he runs, regroups, then goes back for his own gun, finds another one, or hides.
 - **Orders:** look at a held bot up close to make him drop his weapons, drop his kit, take his armour off, follow you, get down, stay, or leave.
-- **Reactions:** shoot a surrendered bot and the others who see it run.
+- **Reactions:** shoot a surrendered bot and the others who see it run. A warning shot past him keeps him still; he notices when you reload, look away, walk up or take his gun, a moment later, like a person would.
+- **Talking:** held bots plead, mutter, answer your orders and sometimes mouth off, using only lines their voice actually has. Optionally your own character speaks your orders.
+- **The wiggle:** now and then a nervous bot leans left and right with his hands up.
+- **Defiance:** once in a while a bold one flips you off with his free hand, the right one staying up.
 - **Settings:** everything is adjustable in the F12 menu.
 
 ## Requirements

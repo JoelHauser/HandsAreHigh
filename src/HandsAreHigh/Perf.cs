@@ -1,0 +1,137 @@
+using System;
+using System.Diagnostics;
+using System.Text;
+using UnityEngine;
+
+namespace HandsAreHigh
+{
+    // Optional profiler (F12 > 14. Debug > Profile, off by default). Off, every hook costs one
+    // bool test. On, it times each of our entry points (Stopwatch ticks, no allocation) and
+    // records every frame's unscaled delta time, and every ReportSeconds logs:
+    //   frame times: average, p50, p99, p99.9, worst, 1% low FPS (whole game, for comparing a
+    //                run with the mod enabled against one with "Enabled" off);
+    //   our cost: per entry point total ms per second, average and worst microseconds per call;
+    //   GC: gen-0 collections and managed heap size since the last report;
+    //   our tracked objects: held bots, raid history, caches (should stay bounded).
+    internal static class Perf
+    {
+        internal enum Sec { Pose, Tilt, Shot, Hit, Registry, Natural, Menu, Layer, Gui, Count }
+
+        internal static bool On;
+        private static readonly long[] Ticks = new long[(int)Sec.Count];
+        private static readonly long[] Max = new long[(int)Sec.Count];
+        private static readonly int[] Calls = new int[(int)Sec.Count];
+        private static readonly float[] Frames = new float[8192];
+        private static readonly float[] Sorted = new float[8192];
+        private static int _frames;
+        private static float _since = -1f;
+        private static int _gc0;
+        private static readonly long[] FrameTicks = new long[(int)Sec.Count];
+        private static float _nextSpikeLog;
+        private static readonly StringBuilder Sb = new StringBuilder(1024);
+        private const double SpikeMs = 1.0;
+
+        internal static long Begin() => On ? Stopwatch.GetTimestamp() : 0L;
+
+        internal static void End(Sec s, long t0)
+        {
+            if (t0 == 0L) return;
+            long d = Stopwatch.GetTimestamp() - t0;
+            int i = (int)s;
+            Ticks[i] += d;
+            FrameTicks[i] += d;
+            Calls[i]++;
+            if (d > Max[i]) Max[i] = d;
+        }
+
+        // Once per frame from Runtime.Update.
+        internal static void Frame()
+        {
+            On = Settings.Profile.Value;
+            if (!On) { _since = -1f; return; }
+            float now = Time.realtimeSinceStartup;
+            Spike(now);
+            if (_since < 0f) { Clear(now); return; }
+            float dt = Time.unscaledDeltaTime;
+            if (_frames < Frames.Length) Frames[_frames++] = dt;
+            if (now - _since >= Settings.ProfileSeconds.Value) Report(now);
+        }
+
+        // Our own work over the last frame above SpikeMs: logged with its breakdown (at most
+        // once a second), so a hitch on the first surrender, gesture, pick-up or a death shows
+        // up with what caused it.
+        private static void Spike(float now)
+        {
+            double tickMs = 1000.0 / Stopwatch.Frequency;
+            long sum = 0;
+            for (int i = 0; i < FrameTicks.Length; i++) sum += FrameTicks[i];
+            if (sum * tickMs >= SpikeMs && now >= _nextSpikeLog)
+            {
+                _nextSpikeLog = now + 1f;
+                Sb.Length = 0;
+                Sb.Append($"Profile spike: Hands Are High took {sum * tickMs:0.00} ms in one frame (frame {Time.unscaledDeltaTime * 1000f:0.0} ms):");
+                for (int i = 0; i < FrameTicks.Length; i++)
+                    if (FrameTicks[i] > 0) Sb.Append($" {(Sec)i} {FrameTicks[i] * tickMs:0.00}");
+                HandsAreHighPlugin.Log.LogInfo(Sb.ToString());
+            }
+            Array.Clear(FrameTicks, 0, FrameTicks.Length);
+        }
+
+        private static void Clear(float now)
+        {
+            Array.Clear(Ticks, 0, Ticks.Length);
+            Array.Clear(Max, 0, Max.Length);
+            Array.Clear(Calls, 0, Calls.Length);
+            _frames = 0;
+            _since = now;
+            _gc0 = GC.CollectionCount(0);
+        }
+
+        internal static void Reset()
+        {
+            On = false;
+            _since = -1f;
+        }
+
+        private static void Report(float now)
+        {
+            float span = Mathf.Max(0.001f, now - _since);
+            int n = _frames;
+            Array.Copy(Frames, Sorted, n);
+            Array.Sort(Sorted, 0, n);
+            double sum = 0;
+            for (int i = 0; i < n; i++) sum += Sorted[i];
+            float avg = n > 0 ? (float)(sum / n) : 0f;
+            // 1% low: average FPS over the slowest 1% of frames.
+            int worstCount = Mathf.Max(1, n / 100);
+            double worstSum = 0;
+            for (int i = n - worstCount; i < n; i++) if (i >= 0) worstSum += Sorted[i];
+            float low1 = worstSum > 0 ? (float)(worstCount / worstSum) : 0f;
+
+            double tickMs = 1000.0 / Stopwatch.Frequency;
+            Sb.Length = 0;
+            Sb.Append($"Profile {span:0} s, {n} frames: avg {avg * 1000f:0.00} ms ({(avg > 0 ? 1f / avg : 0):0} fps), ");
+            Sb.Append($"p50 {P(n, 0.5f):0.00}, p99 {P(n, 0.99f):0.00}, p99.9 {P(n, 0.999f):0.00}, worst {(n > 0 ? Sorted[n - 1] * 1000f : 0):0.00} ms; 1% low {low1:0} fps; ");
+            Sb.Append($"GC gen0 +{GC.CollectionCount(0) - _gc0}, heap {GC.GetTotalMemory(false) / 1048576f:0} MB; ");
+            Sb.Append($"held {SurrenderRegistry.Count}, history {SurrenderRegistry.HistoryCount}, loot cache {Arsenal.CacheCount}\n  Hands Are High cost:");
+            double totalMs = 0;
+            for (int i = 0; i < (int)Sec.Count; i++)
+            {
+                if (Calls[i] == 0) continue;
+                double ms = Ticks[i] * tickMs;
+                totalMs += ms;
+                Sb.Append($" {(Sec)i} {ms / span:0.000} ms/s ({Calls[i]} calls, avg {ms * 1000.0 / Calls[i]:0.0} us, worst {Max[i] * tickMs * 1000.0:0} us);");
+            }
+            Sb.Append($" total {totalMs / span:0.000} ms/s = {(avg > 0 ? totalMs / span / (1000.0 / avg) * 100.0 : 0):0.00}% of frame time");
+            HandsAreHighPlugin.Log.LogInfo(Sb.ToString());
+            Clear(now);
+        }
+
+        private static float P(int n, float q)
+        {
+            if (n == 0) return 0f;
+            int i = Mathf.Clamp(Mathf.CeilToInt(q * n) - 1, 0, n - 1);
+            return Sorted[i] * 1000f;
+        }
+    }
+}

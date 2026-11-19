@@ -91,10 +91,12 @@ namespace HandsAreHigh
         private const float EndSnap = 1.5f;
         private const float EndSnapHeight = 1.2f;
 
-        internal static bool PathTo(Vector3 from, Vector3 to, out Vector3[] corners) =>
-            PathTo(from, to, out corners, out _);
+        internal static bool PathTo(Vector3 from, Vector3 to, out Vector3[] corners, out string why) =>
+            Solve(from, to, true, out corners, out why);
 
-        internal static bool PathTo(Vector3 from, Vector3 to, out Vector3[] corners, out string why)
+        // NavMeshPath.corners allocates a new array on every read: only paths that will be
+        // walked read it; a reachability check only needs the status.
+        private static bool Solve(Vector3 from, Vector3 to, bool wantCorners, out Vector3[] corners, out string why)
         {
             corners = null;
             if (!Snap(from, StartSnap, StartSnapHeight, out Vector3 start)) { why = "he isn't on the NavMesh"; return false; }
@@ -104,13 +106,28 @@ namespace HandsAreHigh
                 why = "no complete path";
                 return false;
             }
+            why = null;
+            if (!wantCorners) return true;
             corners = Path.corners;
             if (corners == null || corners.Length == 0) { why = "empty path"; return false; }
-            why = null;
             return true;
         }
 
-        internal static bool Reachable(Vector3 from, Vector3 to) => PathTo(from, to, out _);
+        internal static bool Reachable(Vector3 from, Vector3 to) => Solve(from, to, false, out _, out _);
+
+        // Heavy searches (a retreat or cover point: up to PathCandidates path solves, a 60 m
+        // weapon search) are limited to HeavyPerFrame per frame across all bots, so several
+        // bots fleeing at once (a witnessed shooting) spread over a few frames instead of one.
+        private const int HeavyPerFrame = 2;
+        private static int _heavyFrame = -1, _heavyUsed;
+        internal static bool TakeHeavy()
+        {
+            int f = Time.frameCount;
+            if (f != _heavyFrame) { _heavyFrame = f; _heavyUsed = 0; }
+            if (_heavyUsed >= HeavyPerFrame) return false;
+            _heavyUsed++;
+            return true;
+        }
 
         // Nearest NavMesh point within `radius` horizontally and `height` vertically.
         private static bool Snap(Vector3 p, float radius, float height, out Vector3 snapped)
