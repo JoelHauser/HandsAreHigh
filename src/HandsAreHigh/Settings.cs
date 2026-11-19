@@ -200,9 +200,9 @@ namespace HandsAreHigh
             PersonalityMax = c.Bind(Role, "Personality multiplier max", 1.5f, Range("Applied to Cowards.", 0f, 3f));
 
             // 06 While held
-            LeaveDistance = c.Bind(Coverage, "You've left beyond (m)", 25f, Range("Further than this while he can see you: he runs.", 5f, 100f));
+            LeaveDistance = c.Bind(Coverage, "Captor gone beyond (m)", 25f, Range("Further than this while he can see you: he runs.", 5f, 100f));
             LeaveSeconds = c.Bind(Coverage, "Out of sight for (s)", 6f, Range("He can't see you this long: he runs.", 0.5f, 30f));
-            WatchAngle = c.Bind(Coverage, "You're covering him within (deg)", 30f,
+            WatchAngle = c.Bind(Coverage, "Covered within (deg)", 30f,
                 Range("Looking further away than this counts as an opening. So do reloading, the inventory, no gun in hand and no line of sight.", 1f, 90f));
             OpeningDelay = c.Bind(Coverage, "Opening must last (s)", 1.5f, Range("", 0f, 10f));
             BreakInterval = c.Bind(Coverage, "Roll every (s)", 1f, Range("While there's an opening.", 0.1f, 10f));
@@ -216,7 +216,7 @@ namespace HandsAreHigh
 
             // 07 Retreat and recapture
             RetreatDistance = c.Bind(Retreat, "Retreat distance (m)", 35f, Range("", 5f, 150f));
-            Grace = c.Bind(Retreat, "Can't be caught for (s)", 4f, Range("After he starts running.", 0f, 30f));
+            Grace = c.Bind(Retreat, "Grace after running (s)", 4f, Range("After he starts running.", 0f, 30f));
             ResurrenderDistance = c.Bind(Retreat, "Caught again within (m)", 12f, Range("", 1f, 50f));
             AimTolerance = c.Bind(Retreat, "Aim within (deg)", 10f, Range("How directly you must aim at him to catch him again.", 1f, 45f));
             AimConfirm = c.Bind(Retreat, "Aim for (s)", 0.4f, Range("", 0f, 3f));
@@ -256,9 +256,9 @@ namespace HandsAreHigh
             FollowDistance = c.Bind(Interact, "Follow distance (m)", 4f, Range("", 1f, 15f));
             FollowTolerance = c.Bind(Interact, "Follow slack (m)", 1f, Range("", 0.25f, 5f));
             DropItemDelay = c.Bind(Interact, "Time per dropped item (s)", 0.4f, Range("", 0.1f, 3f));
-            KitOrder = c.Bind(Interact, "Allow 'drop your kit'", true, "");
-            ArmourOrder = c.Bind(Interact, "Allow 'armour off'", true, "");
-            FollowOrder = c.Bind(Interact, "Allow 'follow me'", true, "");
+            KitOrder = c.Bind(Interact, "Allow kit order", true, "");
+            ArmourOrder = c.Bind(Interact, "Allow armour order", true, "");
+            FollowOrder = c.Bind(Interact, "Allow follow order", true, "");
 
             // 11 Reactions and voice
             LocalReactions = c.Bind(Feedback, "Other held bots react", true, "A held bot who sees another one shot runs.");

@@ -52,6 +52,20 @@ if ($csprojVersion -ne $sourceVersion) {
 $version = $csprojVersion
 Write-Host "Version $version" -ForegroundColor Cyan
 
+# ---- config keys -----------------------------------------------------------------
+# BepInEx throws on = \ " ' [ ] in a section or key name, and a throw in Awake kills the
+# whole plugin without a line in LogOutput.log (0.0.2-0.1.0 shipped "You've left beyond").
+$settings = Join-Path $root 'src\HandsAreHigh\Settings.cs'
+$badChars = '[=\\"''\[\]\t]'
+$bad = @()
+foreach ($m in [regex]::Matches((Get-Content $settings -Raw), 'c\.Bind\(\s*(\w+)\s*,\s*"((?:[^"\\]|\\.)*)"')) {
+    if ($m.Groups[2].Value -match $badChars) { $bad += $m.Groups[2].Value }
+}
+foreach ($m in [regex]::Matches((Get-Content $settings -Raw), 'const string \w+ = "((?:[^"\\]|\\.)*)"')) {
+    if ($m.Groups[1].Value -match $badChars) { $bad += $m.Groups[1].Value }
+}
+if ($bad) { throw "Config names BepInEx rejects: $($bad -join ' | ')" }
+
 # ---- build -----------------------------------------------------------------------
 $buildArgs = @($project, '-c', 'Release', "-p:SPTPath=$SPTPath", '--nologo')
 if ($BigBrainDll) { $buildArgs += "-p:BigBrainDll=$BigBrainDll" }
