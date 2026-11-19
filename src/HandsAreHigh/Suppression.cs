@@ -66,7 +66,11 @@ namespace HandsAreHigh
             float radius = Settings.NearMissRadius.Value;
             float range = Settings.NearMissRange.Value;
             if (!shooter.IsAI && SurrenderRegistry.Any) WarningShots(shooter, from, dir, radius, range);
-            if (!Settings.NaturalSurrender.Value) return;
+            // Gunfire is heard: a held man can tell his captor is shooting (Reactions), a captor
+            // can tell he is being shot at. Only kept while anyone is held (one lookup per shot).
+            if (SurrenderRegistry.Any) SurrenderRegistry.HistoryOf(shooter).ShotAt = Time.time;
+            // Near misses feed the surrender checks and the captors' threat sense.
+            if (!Settings.NaturalSurrender.Value && !Captors.Any) return;
             GameWorld world = Singleton<GameWorld>.Instance;
             if (world?.AllAlivePlayersList == null) return;
 
@@ -98,6 +102,12 @@ namespace HandsAreHigh
                 float miss = Mathf.Sqrt(miss2);
                 float weight = 1f - 0.5f * (miss / radius);   // 1 at the body, 0.5 at the edge
                 Record(bot, weight, nearMiss: true, shooter, miss);
+                // Where it came from, as he can tell it from the crack and thump: the muzzle
+                // position, blurred by a tenth of the distance. Never the shooter himself.
+                BotHistory bh = SurrenderRegistry.HistoryOf(bot);
+                float blur = 0.1f * along;
+                bh.FireFrom = from + new Vector3(Random.Range(-blur, blur), 0f, Random.Range(-blur, blur));
+                bh.FireFromAt = Time.time;
             }
             Candidates.Clear();
         }

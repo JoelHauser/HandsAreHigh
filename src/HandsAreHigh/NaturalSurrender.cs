@@ -76,6 +76,8 @@ namespace HandsAreHigh
 
                 budget--;
                 h.NextEval = now + Settings.EvalInterval.Value * Random.Range(0.8f, 1.2f);
+                // Your teammates (your group, Pit Fireteam followers) stay under your orders.
+                if (!Settings.TeammatesSurrender.Value && Teammates.IsPlayerTeammate(owner)) continue;
                 TrackSquad(owner, h);
                 if (now < h.CooldownUntil) continue;
                 try { Evaluate(bot, owner, h); }
@@ -139,9 +141,10 @@ namespace HandsAreHigh
 
         private static void Evaluate(Player bot, BotOwner owner, BotHistory h)
         {
-            // He gives up to a human player close by, whom he sees now or saw a moment ago
-            // (a man pinned behind cover still knows where you are), or to the player whose
-            // Stop demand he heard (checked in StopDemand when it was made).
+            // He gives up, at any range, to the enemy he is fighting (a human, or a hostile bot
+            // with bot captors on) whom he sees now, saw a moment ago, or is under fire from while
+            // he knows of him; or to the player whose Stop demand he heard (StopDemand checks range
+            // and line when it is made: a spoken demand carries DemandRange, no further).
             float now = Time.time;
             bool demanded = Settings.DemandEnabled.Value && now < h.DemandUntil && Perception.Alive(h.DemandBy);
             Player enemy;
@@ -165,17 +168,23 @@ namespace HandsAreHigh
                 }
                 enemy = foe;
                 seenNow = goal.IsVisible;
-                if (!seenNow && now - goal.PersonalLastSeenTime > Settings.SeenWithin.Value)
+                // A credible threat he perceives, at any range (0.9.0: no distance limit): in
+                // sight, seen a moment ago, or fire coming in while he knows of this enemy (the
+                // game's own enemy memory). A man pinned behind cover still knows you're there;
+                // a man who only remembers you from a minute ago doesn't give up to you.
+                float since = now - goal.PersonalLastSeenTime;
+                bool fire = now - h.FireAt < 3f || (owner.Memory != null && owner.Memory.IsUnderFire);
+                if (!seenNow && since > Settings.SeenWithin.Value && !(fire && goal.HaveSeen && since < Settings.EnemyMemory.Value))
                 {
-                    if (Settings.VerboseLogs.Value) Blocked(bot, $"hasn't seen you for {now - goal.PersonalLastSeenTime:0} s");
+                    if (Settings.VerboseLogs.Value) Blocked(bot, $"hasn't seen {foe.Profile?.Nickname} for {since:0} s and isn't under fire");
                     return;
                 }
             }
             bool botFoe = enemy.IsAI;
+            // Distance is logged, never a gate. Where he gives up towards is where he knows the
+            // threat to be (in sight: exactly; else the EnemyInfo's last sighting), never more.
             float dist = Vector3.Distance(enemy.Position, bot.Position);
-            float maxDist = demanded ? Mathf.Max(Settings.SurrenderDistance.Value, Settings.DemandRange.Value)
-                : botFoe ? Settings.BotSurrenderDistance.Value : Settings.SurrenderDistance.Value;
-            if (dist > maxDist) { if (Settings.VerboseLogs.Value) Blocked(bot, $"you're {dist:0} m away (max {maxDist:0})"); return; }
+            Vector3 knownAt = demanded ? enemy.Position : Perception.KnownPosition(owner, enemy, out _);
 
             // Mid weapon change: wait for the next check. (Mid-reload is fine: the surrender
             // cuts the reload short and drops the gun.)
@@ -286,7 +295,7 @@ namespace HandsAreHigh
 
             var sb = new StringBuilder();
             sb.Append($"{bot.Profile?.Nickname} ({role}, lvl {bot.Profile?.Info?.Level}{(string.IsNullOrEmpty(personality) ? "" : ", " + personality)}) ");
-            sb.Append($"vs {enemy.Profile?.Nickname}{(botFoe ? $" (bot {enemy.Profile?.Info?.Settings?.Role}, {credible})" : "")} {dist:0} m{(seenNow ? "" : " (just lost sight)")}: pressure {pressure:0.00} [");
+            sb.Append($"vs {enemy.Profile?.Nickname}{(botFoe ? $" (bot {enemy.Profile?.Info?.Settings?.Role}, {credible})" : "")} {dist:0} m{(seenNow ? "" : $" (not in sight; believes him {Vector3.Distance(knownAt, enemy.Position):0} m from where he is)")}: pressure {pressure:0.00} [");
             sb.Append($"hurt {injury:0.00} ({injuryWhy}), ammo {ammo:0}, ");
             sb.Append($"fire {suppression:0.00} (near misses/hits {shots:0.0} = {ownFire:0.00}, SAIN {sainFire:0.00}, armour x{armourDull:0.00}), ");
             sb.Append($"outnumbered {outnumbered:0.00} ({hostiles} vs {friends}), squad {squad:0.00} ({squadWhy})]; {gate}; ");
@@ -300,7 +309,7 @@ namespace HandsAreHigh
             HandsAreHighPlugin.Log.LogInfo(sb.ToString());
 
             if (!gives) return;
-            SurrenderRegistry.Surrender(bot, enemy, $"gave up ({gate}, pressure {pressure:0.00}, chance {chance:0.000})");
+            SurrenderRegistry.Surrender(bot, enemy, $"gave up ({gate}, pressure {pressure:0.00}, chance {chance:0.000}, {dist:0} m)", knownAt);
             HandsAreHighPlugin.Log.LogInfo(SurrenderRegistry.HoldsBot(bot)
                 ? $"{bot.Profile?.Nickname}: surrender activated (layer will take him on its next brain update)"
                 : $"{bot.Profile?.Nickname}: surrender activation FAILED (mod disabled or registry refused)");

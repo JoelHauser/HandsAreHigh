@@ -46,12 +46,19 @@ namespace HandsAreHigh
                 BotOwner o = captor.AIData?.BotOwner;
                 if (o == null || o.BotState != EBotState.Active) { kind = "his captor stopped moving"; strength = 0.9f; clear = true; return false; }
                 if (o.WeaponManager?.Selector?.IsChanging == true) { kind = "his captor switches weapons"; strength = 1f; clear = true; return false; }
-                if (s.Custody != null && s.Custody.Busy) { kind = $"his captor is fighting {s.Custody.BusyWhy}"; strength = 0.9f; clear = true; return false; }
-                if (s.Custody == null) { kind = "nobody guards him"; strength = 0.85f; clear = true; return false; }
+                if (captor.IsSprintEnabled) { kind = "his captor is running"; strength = 0.95f; clear = true; return false; }
             }
 
+            // Only what he can see or hear: where the gun points, and gunfire (0.9.0: no longer
+            // the captor's internal "busy" state or whether anyone had custody of him).
             Vector3 eye = Perception.Eye(captor);
             float angle = Vector3.Angle(captor.LookDirection, Perception.Chest(bot) - eye);
+            if (Time.time - SurrenderRegistry.HistoryOf(captor).ShotAt < 1.5f && angle > watchAngle * 0.5f)
+            {
+                kind = ai ? "his captor is shooting at someone else" : "you're shooting at someone else";
+                strength = 0.95f; clear = true;
+                return false;
+            }
             if (angle > watchAngle)
             {
                 kind = ai ? $"his captor looks {angle:0} deg away" : $"you look {angle:0} deg away";

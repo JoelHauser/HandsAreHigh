@@ -22,6 +22,9 @@ namespace HandsAreHigh
         internal float Fire;
         internal float FireAt;
         internal float NearMissAt = -1000f;
+        internal Vector3 FireFrom;              // roughly where the last near miss came from
+        internal float FireFromAt = -1000f;
+        internal float ShotAt = -1000f;         // he last fired (heard by those near)
 
         // Stop demand (StopDemand.cs): who demanded, until when it weighs, and the cooldown.
         internal Player DemandBy;
@@ -96,6 +99,9 @@ namespace HandsAreHigh
             _world = world;
             Restraint.Clear();
             Captors.Clear();
+            CaptorVoice.Clear();
+            Voice.ClearChecks();
+            OrbitAdapter.ReleaseAll();
             Runtime.Menu.Reset();   // nothing bound to the old raid's bots, no key blocked
             UnhookAll();
             States.Clear();
@@ -106,6 +112,7 @@ namespace HandsAreHigh
             // First-use costs (assembly scan for SAIN, Unity layer lookups) paid now, at raid
             // start, not in the frame of the first surrender check.
             if (world != null) HandsAreHighPlugin.Try("prewarm", SainAdapter.Prewarm);
+            if (world != null) HandsAreHighPlugin.Try("prewarm orbit", OrbitAdapter.Prewarm);
         }
 
         internal static BotHistory HistoryOf(Player bot)
@@ -154,7 +161,9 @@ namespace HandsAreHigh
             ByPlayer.Remove(bot);
         }
 
-        internal static void Surrender(Player bot, Player captor, string reason)
+        // knownAt: where he knows his threat to be (NaturalSurrender passes the EnemyInfo's last
+        // sighting); null when the captor is right there (debug keys, being caught again).
+        internal static void Surrender(Player bot, Player captor, string reason, Vector3? knownAt = null)
         {
             if (bot == null || captor == null || !Settings.Enabled.Value) return;
             EnsureRaid();
@@ -178,12 +187,13 @@ namespace HandsAreHigh
                 existing.Order = Order.None;
                 existing.TargetWeapon = null;
                 existing.CaptorHiddenSince = -1f;
-                existing.CaptorLastSeen = captor.Position;
+                existing.CaptorLastSeen = knownAt ?? captor.Position;
                 existing.WasHit = false;
                 existing.AimedBy = null;
                 existing.DebugOpeningUntil = 0f;
                 existing.FaceSet = false;
                 existing.ResetEncounter();
+                AcknowledgeIfClose(existing, captor);
                 existing.SetPhase(Phase.HandsUp, reason);
                 if (existing.Moving) { bot.AIData?.BotOwner?.StopMove(); existing.Moving = false; }
                 StartDrop(existing);
@@ -201,7 +211,7 @@ namespace HandsAreHigh
                 Captor = captor,
                 Seed = Random.value * 100f,
                 RolledNerve = h.Nerve,
-                CaptorLastSeen = captor.Position,
+                CaptorLastSeen = knownAt ?? captor.Position,
                 DropPosition = bot.Position,
                 LastPosition = bot.Position,
                 Reaction = h.Reaction
@@ -220,9 +230,12 @@ namespace HandsAreHigh
             s.DeathHandler = p => OnDeadOrGone(s);
             bot.OnPlayerDeadOrUnspawn += s.DeathHandler;
             States[bot] = s;
+            s.OfferUntil = Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * s.Nerve);
+            AcknowledgeIfClose(s, captor);
             HandsAreHighPlugin.Log.LogInfo(
                 $"Surrender: {s.Name} ({bot.Profile?.Info?.Settings?.Role}), nerve {s.Nerve:0.00}, reaction {s.Reaction:0.00} s" +
-                $"{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}, voice {bot.Speaker?.PlayerVoice}, to {captor.Profile?.Nickname}: {reason}");
+                $"{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}, voice {bot.Speaker?.PlayerVoice}, to {captor.Profile?.Nickname} {Vector3.Distance(captor.Position, bot.Position):0} m " +
+                $"({(s.Accepted ? "close, acknowledged" : $"unanswered for now, lasts {s.OfferUntil - Time.time:0} s")}): {reason}");
             s.SetPhase(Phase.HandsUp, reason);
 
             BotOwner owner = bot.AIData?.BotOwner;
@@ -235,6 +248,16 @@ namespace HandsAreHigh
             // gave up to decides about him.
             Captors.EndFor(bot, "surrendered himself");
             if (captor.IsAI) Captors.OnSurrender(s, captor, reason);
+        }
+
+        // A human captor close and in sight has his surrender already (as before 0.9.0); far away,
+        // or a bot captor (custody decides), it starts as an offer. Logged in the surrender line.
+        private static void AcknowledgeIfClose(SurrenderState s, Player captor)
+        {
+            if (captor == null || captor.IsAI) return;
+            float d = Vector3.Distance(captor.Position, s.Bot.Position);
+            if (d <= Settings.AcknowledgeDistance.Value && Perception.LineClear(Perception.Eye(s.Bot), Perception.Eye(captor)))
+                s.Accepted = true;
         }
 
         // Personality never changes in a raid: one reflection call per bot, not per check.
@@ -608,6 +631,9 @@ namespace HandsAreHigh
             UnhookAll();
             Restraint.Clear();
             Captors.Clear();
+            CaptorVoice.Clear();
+            Voice.ClearChecks();
+            OrbitAdapter.ReleaseAll();
             States.Clear();
             Finished.Clear();
             History.Clear();

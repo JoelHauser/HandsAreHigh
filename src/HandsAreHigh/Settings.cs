@@ -40,7 +40,6 @@ namespace HandsAreHigh
         // 03
         internal static ConfigEntry<float> EvalInterval;
         internal static ConfigEntry<float> SurrenderCooldown;
-        internal static ConfigEntry<float> SurrenderDistance;
         internal static ConfigEntry<float> SeenWithin;
         internal static ConfigEntry<int> RequiredFactors;
         internal static ConfigEntry<float> NerveResistance;
@@ -96,6 +95,10 @@ namespace HandsAreHigh
         // 06
         internal static ConfigEntry<float> LeaveDistance;
         internal static ConfigEntry<float> LeaveSeconds;
+        internal static ConfigEntry<float> WalkAwayMargin;
+        internal static ConfigEntry<float> AcknowledgeDistance;
+        internal static ConfigEntry<float> OfferMin;
+        internal static ConfigEntry<float> OfferMax;
         internal static ConfigEntry<float> WatchAngle;
         internal static ConfigEntry<bool> BoltWhenShot;
         internal static ConfigEntry<bool> FastHolster;
@@ -231,6 +234,8 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> SainPersonality;
         internal static ConfigEntry<bool> SainSuppression;
         internal static ConfigEntry<bool> PauseWhenAsleep;
+        internal static ConfigEntry<bool> OrbitKeepAwake;
+        internal static ConfigEntry<bool> TeammatesSurrender;
         // 15
         internal static ConfigEntry<bool> DebugKeys;
         internal static ConfigEntry<KeyboardShortcut> SurrenderKey;
@@ -255,7 +260,6 @@ namespace HandsAreHigh
         internal static ConfigEntry<int> CaptorPriority;
         internal static ConfigEntry<int> MaxAiEncounters;
         internal static ConfigEntry<float> BotSurrenderScale;
-        internal static ConfigEntry<float> BotSurrenderDistance;
         internal static ConfigEntry<float> AcceptChance;
         internal static ConfigEntry<float> SpareChance;
         internal static ConfigEntry<float> AcceptRange;
@@ -267,6 +271,14 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> BusyRelease;
         internal static ConfigEntry<bool> AlliedCaptors;
         internal static ConfigEntry<bool> CaptorSpeech;
+        internal static ConfigEntry<bool> CaptorCover;
+        internal static ConfigEntry<float> CaptorCoverRadius;
+        internal static ConfigEntry<bool> PrisonerFollowsToCover;
+        internal static ConfigEntry<float> FollowToCoverWithin;
+        internal static ConfigEntry<float> QuietBeforeGuarding;
+        internal static ConfigEntry<float> MinEngageSeconds;
+        internal static ConfigEntry<bool> CaptorGlances;
+        internal static ConfigEntry<float> CaptorVoiceGap;
         // 16 Sparing surrendered enemies
         internal static ConfigEntry<bool> SquadRestraint;
         internal static ConfigEntry<float> SquadNoticeRadius;
@@ -308,9 +320,10 @@ namespace HandsAreHigh
             EvalInterval = c.Bind(Natural, "Check every (s)", 5f, Range("How often each bot weighs giving up. One roll per check, never caught up after a pause.", 1f, 60f));
             SurrenderCooldown = c.Bind(Natural, "Cooldown after a surrender (s)", 30f,
                 Range("Once he's fighting again, how long before he can give up again.", 0f, 300f));
-            SurrenderDistance = c.Bind(Natural, "Within (m)", 30f, Range("Only gives up to a player this close.", 1f, 100f));
+            // 0.9.0: no distance limit ("Within (m)" removed). He gives up at any range to a threat
+            // he perceives: sees, just saw, or is under fire while he knows of him.
             SeenWithin = c.Bind(Natural, "Seen within (s)", 3f,
-                Range("He must see that player now or have seen him this recently: a pinned-down man behind cover still knows where you are.", 0f, 15f));
+                Range("He must see the threat now, have seen him this recently, or be under fire while he knows of him (the game's own enemy memory). He gives up towards where he last saw him, never to a position he doesn't know.", 0f, 15f));
             RequiredFactors = c.Bind(Natural, "Reasons needed", 2,
                 IntRange("How many separate reasons must apply at once (severe injury, being pinned down or a Stop demand count on their own).", 1, 5));
             NerveResistance = c.Bind(Natural, "Nerve resistance", 0.85f, Range("1: a bot with full nerve never gives up.", 0f, 1f));
@@ -391,7 +404,15 @@ namespace HandsAreHigh
             KitRecheck = c.Bind(Role, "Re-value kit every (s)", 30f, Range("", 5f, 300f));
 
             // 06 While held
-            LeaveDistance = c.Bind(Coverage, "Captor gone beyond (m)", 25f, Range("Further than this while he can see you: he runs.", 5f, 100f));
+            LeaveDistance = c.Bind(Coverage, "Captor gone beyond (m)", 25f,
+                Range("The captor walks away: further than this AND further than his closest approach plus the margin below. A surrender made from far away is never cancelled just for being far.", 5f, 100f));
+            WalkAwayMargin = c.Bind(Coverage, "Captor walks away by (m)", 12f,
+                Range("How much further than his closest approach the captor must go before it counts as leaving.", 2f, 60f));
+            AcknowledgeDistance = c.Bind(Coverage, "Surrender acknowledged within (m)", 25f,
+                Range("A human captor who comes this close in sight, aims at him for a moment, or gives an order has taken the surrender. A bot captor acknowledges it by taking custody.", 3f, 100f));
+            OfferMin = c.Bind(Coverage, "Unanswered surrender lasts min (s)", 15f,
+                Range("Nobody has acknowledged his surrender: he stays visibly compliant this long (longer while the captor closes in), then seeks safety or reassesses.", 3f, 120f));
+            OfferMax = c.Bind(Coverage, "Unanswered surrender lasts max (s)", 35f, Range("", 3f, 240f));
             LeaveSeconds = c.Bind(Coverage, "Out of sight for (s)", 6f, Range("He can't see you this long: he runs.", 0.5f, 30f));
             WatchAngle = c.Bind(Coverage, "Covered within (deg)", 30f,
                 Range("Looking further away than this counts as an opening. So do reloading, the inventory, no gun in hand and no line of sight.", 1f, 90f));
@@ -575,6 +596,10 @@ namespace HandsAreHigh
                 "Uses SAIN's suppression level as well as the game's own incoming-fire signal (the higher counts). No effect without SAIN.");
             PauseWhenAsleep = c.Bind(Compat, "Pause while a bot is asleep", true,
                 "If another mod (ORBIT's Ghost Mode) puts a held bot to sleep, he drops any plan to fetch a gun and decides again when he wakes.");
+            OrbitKeepAwake = c.Bind(Compat, "Keep a bot-held encounter awake (ORBIT)", true,
+                "While a bot holds a prisoner, ORBIT is asked not to put those two to sleep (OrbitBotControl.SetBotSleepAllowed, ORBIT 3.1.1+), and allowed again when custody ends. Only bots already awake; nobody is woken. No effect without ORBIT.");
+            TeammatesSurrender = c.Bind(Compat, "Your teammates can surrender", false,
+                "Off: bots allied to you (your group, Pit Fireteam teammates) never give up on their own, so they stay under your orders. Debug keys still work on them.");
 
             // 15 Debug
             DebugKeys = c.Bind(Debug, "Debug keys", false, "Turns on the three keys below. Each acts only on the bot under your crosshair.");
@@ -610,12 +635,12 @@ namespace HandsAreHigh
             MaxAiEncounters = c.Bind(BotCaptor, "Bot-held prisoners at once", 4, IntRange("Across the map. Further surrenders to bots are spared or refused instead of taken.", 0, 16));
             BotSurrenderScale = c.Bind(BotCaptor, "Surrender chance against a bot", 0.85f,
                 Range("Multiplies the chance of giving up when the threat is a bot (you: 1). Scavs still give up far more readily than PMCs (section 05).", 0f, 2f));
-            BotSurrenderDistance = c.Bind(BotCaptor, "Gives up to a bot within (m)", 25f, Range("", 5f, 60f));
             AcceptChance = c.Bind(BotCaptor, "Takes a prisoner", 0.65f,
                 Range("When it is practical (gun with rounds, not under fire, no other threat in sight, prisoner in sight and close): the chance he takes custody, before personality and his own disposition.", 0f, 1f));
             SpareChance = c.Bind(BotCaptor, "Spares if not taking him", 0.75f,
                 Range("Not taking custody (impractical, busy, or declined): the chance he still holds his fire at him instead of fighting on. Being unable to guard him never by itself means killing him.", 0f, 1f));
-            AcceptRange = c.Bind(BotCaptor, "Guards from up to (m)", 20f, Range("Farther than this he won't take custody.", 4f, 40f));
+            AcceptRange = c.Bind(BotCaptor, "Guards from up to (m)", 20f,
+                Range("Custody (control), not surrender: farther than this he won't take custody, but the surrender itself can happen at any range and he may still spare him.", 4f, 80f));
             HoldMin = c.Bind(BotCaptor, "Holds a prisoner min (s)", 25f, Range("Then he lets him go (or earlier, by his plan). Never indefinite.", 5f, 300f));
             HoldMax = c.Bind(BotCaptor, "Holds a prisoner max (s)", 70f, Range("", 5f, 600f));
             OrderGapMin = c.Bind(BotCaptor, "Between his orders min (s)", 2.5f, Range("", 0.5f, 30f));
@@ -625,7 +650,21 @@ namespace HandsAreHigh
                 Range("Pulled into another fight (under fire, another enemy in sight) for this long, he stops guarding; the prisoner is then on his own and the restraint stays as decided.", 2f, 120f));
             AlliedCaptors = c.Bind(BotCaptor, "Your allies can make bots surrender", true,
                 "Bots in a group allied to you (BotsGroup.IsAlly) can cause a surrender and hold fire, but never get the guarding layer: their movement stays with their own mod and your orders. You can take over their prisoner with the order menu.");
-            CaptorSpeech = c.Bind(BotCaptor, "Bots speak their orders", true, "A line from the bot's own voice with each order (feedback only: the order is applied either way).");
+            CaptorSpeech = c.Bind(BotCaptor, "Bots speak their orders", true,
+                "Captors talk: surrender demands, orders, warnings, new threats, hand-overs. Lines from the bot's own voice, queued, never blocking anything (the order is applied either way).");
+            CaptorVoiceGap = c.Bind(BotCaptor, "Captor line gap (s)", 3.5f, Range("Least time between two non-urgent lines of one captor.", 0.5f, 30f));
+            CaptorCover = c.Bind(BotCaptor, "Captors take cover", true,
+                "Under fire from a direction he can tell, a captor moves to a reachable spot hidden from it (keeping the prisoner in sight if he can) instead of standing exposed. A visible enemy always goes to the combat AI.");
+            CaptorCoverRadius = c.Bind(BotCaptor, "Captor cover search (m)", 12f, Range("", 3f, 40f));
+            PrisonerFollowsToCover = c.Bind(BotCaptor, "Prisoner follows into cover", true,
+                "A captor going into cover orders a close prisoner to follow (hands up, his own path) and to stay once there. Only with a complete path and the prisoner in order range.");
+            FollowToCoverWithin = c.Bind(BotCaptor, "Follows into cover within (m)", 10f, Range("", 2f, 25f));
+            QuietBeforeGuarding = c.Bind(BotCaptor, "Back to guarding after quiet (s)", 2.5f,
+                Range("After a fight he goes back to guarding only once no enemy is in sight and no fire came in for this long.", 0.5f, 20f));
+            MinEngageSeconds = c.Bind(BotCaptor, "Fights at least (s)", 3f,
+                Range("Once he turns to a threat he stays on it at least this long (no flip-flopping between guarding and fighting).", 0.5f, 20f));
+            CaptorGlances = c.Bind(BotCaptor, "Captors look around", true,
+                "A guarding captor glances away now and then (towards where he last knew an enemy, or around him). Each glance is a real opening the prisoner can see.");
 
             // 16 Sparing surrendered enemies
             SquadRestraint = c.Bind(RestraintSec, "Captor squad holds fire", true,

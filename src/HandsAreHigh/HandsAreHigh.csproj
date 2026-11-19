@@ -9,7 +9,7 @@
     <Nullable>disable</Nullable>
 
     <!-- Must match HandsAreHighPlugin.PluginVersion. -->
-    <Version>0.8.0</Version>
+    <Version>0.9.0</Version>
 
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

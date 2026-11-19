@@ -40,7 +40,7 @@ namespace HandsAreHigh
         private static readonly HashSet<string> MissingLogged = new HashSet<string>();
         private static readonly List<EPhraseTrigger> Options = new List<EPhraseTrigger>(8);
 
-        internal static void Reset() => MissingLogged.Clear();
+        internal static void Reset() { MissingLogged.Clear(); Checks.Clear(); }
 
         private static VoicePriority PriorityOf(VoiceEvent e)
         {
@@ -170,6 +170,8 @@ namespace HandsAreHigh
             if (speaker == null) { s.PendingVoice = null; return; }
             if (speaker.Speaking || speaker.Busy) return;
             if (s.PendingPriority < VoicePriority.Urgent && FloorTaken(s, now)) return;
+            // His captor (a bot) is speaking: answer after him, not over him.
+            if (s.PendingPriority < VoicePriority.Urgent && s.Custody != null && CaptorVoice.Talking(s.Custody.Bot)) return;
             Play(s, e, speaker, now);
         }
 
@@ -279,6 +281,45 @@ namespace HandsAreHigh
                 result = "line chosen, but no audio started on his speech source";
             HandsAreHighPlugin.Log.LogInfo($"{s.Name}: says {what}: {result}");
         }
+
+        // Lines of bots we don't hold (captors): the same check, a moment after the game took
+        // the line. A small list, empty almost always.
+        private struct Pending { internal Player Bot; internal TaggedClip Clip; internal string What; internal float At; }
+        private static readonly List<Pending> Checks = new List<Pending>(4);
+
+        internal static void VerifyLater(Player bot, TaggedClip clip, string what)
+        {
+            if (!Settings.LogVoice.Value || bot == null) return;
+            if (Checks.Count >= 16) Checks.RemoveAt(0);
+            Checks.Add(new Pending { Bot = bot, Clip = clip, What = what, At = Time.time + VerifyAfter });
+        }
+
+        internal static void TickChecks()
+        {
+            if (Checks.Count == 0) return;
+            float now = Time.time;
+            for (int i = Checks.Count - 1; i >= 0; i--)
+            {
+                Pending c = Checks[i];
+                if (now < c.At) continue;
+                Checks.RemoveAt(i);
+                if (c.Bot == null) continue;
+                HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(c.Bot)}: says {c.What}: {Outcome(c.Bot, c.Clip)}");
+            }
+        }
+
+        private static string Outcome(Player bot, TaggedClip clip)
+        {
+            BetterSource src = SpeechSourceRef(bot);
+            AudioSource audio = src != null ? src.source1 : null;
+            if (clip?.Clip != null && audio != null && audio.isPlaying && audio.clip == clip.Clip)
+                return $"audible ({clip.Clip.name}, {clip.Length:0.0} s)";
+            if (src != null && bot.IsOutOfProtagonistsRange(src.MaxDistance))
+                return "line chosen, but he is out of your earshot so the game played no audio";
+            return "line chosen, but no audio started on his speech source";
+        }
+
+        internal static void ClearChecks() => Checks.Clear();
 
         // The bot's own tag mask (faction, combat state, injury), as BotTalk builds it.
         private static ETagStatus MaskFor(Player bot)

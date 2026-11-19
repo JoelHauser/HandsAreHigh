@@ -49,6 +49,8 @@ namespace HandsAreHigh
             // Bot captors (each every 0.25 s) and one prisoner's observer scan per frame.
             try { Captors.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("captors", e); }
             try { Restraint.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("restraint", e); }
+            // Captors' queued lines and the audio checks after any line (both empty almost always).
+            try { CaptorVoice.Tick(); Voice.TickChecks(); } catch (Exception e) { HandsAreHighPlugin.Report("captor voice", e); }
             Perf.End(Perf.Sec.Natural, t0);
 
             Player me = Singleton<GameWorld>.Instance.MainPlayer;
@@ -108,7 +110,9 @@ namespace HandsAreHigh
                 else if (SurrenderRegistry.HoldsBot(foe)) outcome = $"his enemy {foe.Profile?.Nickname} is a prisoner himself";
                 else
                 {
-                    SurrenderRegistry.Surrender(target, foe, "debug key: to his enemy");
+                    // Towards where he knows his enemy to be, as a natural surrender would.
+                    SurrenderRegistry.Surrender(target, foe, "debug key: to his enemy",
+                        Perception.KnownPosition(target.AIData?.BotOwner, foe, out _));
                     outcome = SurrenderRegistry.HoldsBot(target) ? $"surrenders to {foe.Profile?.Nickname} (see the log for his decision)" : "didn't surrender";
                 }
             }

@@ -44,8 +44,9 @@ namespace HandsAreHigh
             s.OrderByHuman = human;
             HandsAreHighPlugin.Log.LogInfo($"{s.Name}: ordered {order} by {(human ? "you" : Restraint.Name(by))}");
 
+            s.Accept(human ? "gave an order" : "his captor gives orders");
             if (human) HandsAreHighPlugin.Try("order speech", () => CommandVoice.Speak(by, order));
-            else if (Settings.CaptorSpeech.Value) HandsAreHighPlugin.Try("captor speech", () => CommandVoice.SpeakAs(by, order));
+            else CaptorVoice.Say(by, CaptorVoice.ForOrder(order));   // queued; the order applies now either way
             Gestures.Cancel(s, "given an order");
             if (order != OrderKind.Leave)
             {

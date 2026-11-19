@@ -40,6 +40,51 @@ namespace HandsAreHigh
 
         internal static bool CanSee(Player from, Vector3 point) => LineClear(Eye(from), point + Vector3.up * 1.2f);
 
+        // Within this a clear line is enough to know where someone is (sight, hearing, peripheral).
+        internal const float CloseNotice = 25f;
+
+        // Does a bot see this man? A clear line, and beyond CloseNotice the game's own sight of him
+        // (EnemyInfo.IsVisible, which models distance, light and the vision cone; a blink of under
+        // a second is bridged by PersonalLastSeenTime). No EnemyInfo (not an enemy of his): the
+        // line alone. Never through walls: the line is always required.
+        internal static bool Sees(Player bot, Player other, float dist)
+        {
+            if (!Alive(other) || !LineClear(Eye(bot), Eye(other))) return false;
+            if (dist <= CloseNotice) return true;
+            var infos = bot.AIData?.BotOwner?.EnemiesController?.EnemyInfos;
+            if (infos == null || !infos.TryGetValue(other, out EnemyInfo e) || e == null) return true;
+            return e.IsVisible || Time.time - e.PersonalLastSeenTime < 1f;
+        }
+
+        // A bot recognising another man's surrender: the game's own sight of him (EnemyInfo
+        // IsVisible) and a clear line to his chest; at arm's length (6 m) the line alone.
+        internal static bool Recognises(BotOwner o, Player prisoner)
+        {
+            Player p = o?.GetPlayer;
+            if (p == null || !Alive(prisoner)) return false;
+            if (!LineClear(Eye(p), Chest(prisoner))) return false;
+            if ((p.Position - prisoner.Position).sqrMagnitude <= 36f) return true;
+            var infos = o.EnemiesController?.EnemyInfos;
+            if (infos == null || !infos.TryGetValue(prisoner, out EnemyInfo e) || e == null) return false;
+            return e.IsVisible || Time.time - e.PersonalLastSeenTime < 1f;
+        }
+
+        // Where a bot believes someone is, from what he has perceived: in sight, exactly; else the
+        // last place he personally saw him, else his group's last known position (EnemyInfo).
+        internal static Vector3 KnownPosition(BotOwner o, Player other, out bool exact)
+        {
+            exact = false;
+            var infos = o?.EnemiesController?.EnemyInfos;
+            if (infos != null && infos.TryGetValue(other, out EnemyInfo e) && e != null)
+            {
+                if (e.IsVisible) { exact = true; return other.Position; }
+                if (e.HaveSeenPersonal) return e.PersonalLastPos;
+                if (e.HaveSeen) return e.EnemyLastPosition;
+            }
+            exact = true;   // no record: only reached for a man right in front of him (debug, recapture)
+            return other.Position;
+        }
+
         // A spot roughly `distance` away from the threat with a complete path to it,
         // preferring ones the threat can't see. hiddenOnly: only spots out of its sight.
         internal static bool RetreatPoint(Player bot, Vector3 threat, float distance, bool hiddenOnly, out Vector3 point)
@@ -70,6 +115,41 @@ namespace HandsAreHigh
 
                 bestScore = score;
                 point = hit.position;
+                found = true;
+            }
+            return found;
+        }
+
+        // A captor's cover: a NavMesh spot within `radius`, hidden from where the fire came from
+        // (no clear line from that eye height to his chest height there), with a complete path,
+        // preferring one that keeps `keepInSight` (his prisoner) in view, then the nearest.
+        // At most PathCandidates path solves; callers spend Perception.TakeHeavy first.
+        internal static bool CoverPoint(Player bot, Vector3 threat, float radius, Player keepInSight, out Vector3 point, out bool keepsSight)
+        {
+            point = bot.Position;
+            keepsSight = false;
+            Vector3 away = bot.Position - threat;
+            away.y = 0f;
+            if (away.sqrMagnitude < 0.01f) away = -bot.Transform.forward;
+            away.Normalize();
+            Vector3 threatEye = threat + Vector3.up * 1.5f;
+            float best = float.MinValue;
+            bool found = false;
+            int tries = Settings.PathCandidates.Value;
+            for (int i = 0; i < tries; i++)
+            {
+                float angle = Random.Range(-110f, 110f);
+                float dist = radius * Random.Range(0.3f, 1f);
+                Vector3 candidate = bot.Position + Quaternion.Euler(0f, angle, 0f) * away * dist;
+                if (!NavMesh.SamplePosition(candidate, out NavMeshHit hit, 3f, NavMesh.AllAreas)) continue;
+                if (LineClear(threatEye, hit.position + Vector3.up * 1.2f)) continue;   // still exposed
+                bool sight = keepInSight != null && LineClear(hit.position + Vector3.up * 1.6f, Chest(keepInSight));
+                float score = (sight ? 50f : 0f) - 2f * Vector3.Distance(hit.position, bot.Position);
+                if (score <= best) continue;
+                if (!Reachable(bot.Position, hit.position)) continue;
+                best = score;
+                point = hit.position;
+                keepsSight = sight;
                 found = true;
             }
             return found;

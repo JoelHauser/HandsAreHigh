@@ -49,8 +49,7 @@ namespace HandsAreHigh
             Say(me, order);
         }
 
-        // A bot captor's order, from his own voice (Speaker.Play, as for every bot line here).
-        internal static void SpeakAs(Player bot, OrderKind order) => Say(bot, order);
+        // A bot captor's order lines: CaptorVoice (queued, per-bot gap, waits for a free speaker).
 
         private static void Say(Player me, OrderKind order)
         {

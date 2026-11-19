@@ -111,9 +111,7 @@ namespace HandsAreHigh
         {
             Hold(1f);
             if (!s.DrawPending) return;
-            Player c = s.Captor;
-            Vector3 at = Perception.Alive(c) ? c.Position : s.CaptorLastSeen;
-            Face(s, at + Vector3.up * 1.3f);
+            Face(s, ThreatPos(s, s.Captor) + Vector3.up * 1.3f);
         }
 
         // ---- hands up ------------------------------------------------------------------
@@ -129,8 +127,9 @@ namespace HandsAreHigh
                 case Order.Follow when captorAlive: Follow(s, captor); break;
                 default: Hold(Settings.Stance.Value); break;
             }
+            // He faces the captor he sees; otherwise where he last knew him to be.
             if (Settings.FaceCaptor.Value && captorAlive)
-                Face(s, captor.Position + Vector3.up * 1.6f);
+                Face(s, ThreatPos(s, captor) + Vector3.up * 1.6f);
 
             ProcessDropQueue(s);
             if (!check) return;
@@ -203,22 +202,42 @@ namespace HandsAreHigh
                 NoticeGunGone(s, captorAlive ? captor : null);
             }
 
-            // What he can see of the captor. Out of sight, he only knows where he last saw him.
+            // What he can see of the captor (a clear line; beyond close range the game's own sight
+            // of him). Out of sight, he only knows where he last saw him.
             float dist = captorAlive ? Vector3.Distance(captor.Position, Me.Position) : float.MaxValue;
-            bool seen = captorAlive && Perception.LineClear(Perception.Eye(Me), Perception.Eye(captor));
+            bool seen = captorAlive && Perception.Sees(Me, captor, dist);
+            s.CaptorSeen = seen;
             string gone = null;
             if (!captorAlive) gone = "captor is dead";
             else if (seen)
             {
                 s.CaptorLastSeen = captor.Position;
                 s.CaptorHiddenSince = -1f;
-                if (dist > Settings.LeaveDistance.Value) gone = $"captor {dist:0} m away";
+                // Closing in on an unanswered surrender keeps it open a little longer.
+                if (!s.Accepted && dist <= s.OfferRef - 3f)
+                {
+                    if (s.OfferRef < float.MaxValue) s.OfferUntil = Mathf.Max(s.OfferUntil, now + 8f);
+                    s.OfferRef = dist;
+                }
+                if (dist < s.ClosestDist) s.ClosestDist = dist;
+                if (!s.Accepted && !captor.IsAI && dist <= Settings.AcknowledgeDistance.Value) s.Accept($"came within {dist:0} m");
+                // Leaving is walking away from where he was, not being far: a surrender made at
+                // 150 m is not cancelled for being at 150 m (0.9.0; the old rule was a flat 25 m).
+                float walkAway = Mathf.Max(Settings.LeaveDistance.Value, s.ClosestDist + Settings.WalkAwayMargin.Value);
+                if (dist > walkAway) gone = $"captor walked away ({dist:0} m, closest {s.ClosestDist:0} m)";
             }
             else
             {
                 if (s.CaptorHiddenSince < 0f) s.CaptorHiddenSince = now;
-                if (now - s.CaptorHiddenSince > Settings.LeaveSeconds.Value) gone = $"captor out of sight {Settings.LeaveSeconds.Value:0} s";
+                // An unanswered surrender to a man he can't see (pinned behind cover, an unseen
+                // shooter) stands a little longer, so it can be seen; the offer timer still ends it.
+                float hiddenLimit = s.Accepted ? Settings.LeaveSeconds.Value : 2.5f * Settings.LeaveSeconds.Value;
+                if (now - s.CaptorHiddenSince > hiddenLimit) gone = $"captor out of sight {hiddenLimit:0} s";
             }
+            // An unanswered surrender does not hold him forever: nobody acknowledged it (no human
+            // came close or aimed at him, no bot took custody) by OfferUntil, so he seeks safety.
+            if (gone == null && !s.Accepted && s.Custody == null && now >= s.OfferUntil && now >= s.ComplyUntil)
+                gone = captor.IsAI ? $"{Restraint.Name(captor)} never took him prisoner" : "nobody came for his surrender";
 
             // Captor gone: he reacts after his own reaction time, and only if it still holds.
             if (gone != null)
@@ -239,7 +258,15 @@ namespace HandsAreHigh
             bool covered = Reactions.Covered(s, captor, Me, seen, Settings.WatchAngle.Value, out kind, out strength, out clear);
             if (debugOpening) { covered = false; kind = "debug opening"; strength = 1f; clear = true; }
 
-            NoticeApproach(s, dist);
+            // A human captor holding him at gunpoint for a moment has acknowledged the surrender.
+            if (covered && !captor.IsAI && !s.Accepted)
+            {
+                if (s.CoveredSince < 0f) s.CoveredSince = now;
+                else if (now - s.CoveredSince >= Mathf.Max(0.8f, 2f * Settings.AimConfirm.Value)) s.Accept($"aims at him from {dist:0} m");
+            }
+            else s.CoveredSince = -1f;
+
+            if (seen) NoticeApproach(s, dist);
 
             if (covered)
             {
@@ -296,7 +323,7 @@ namespace HandsAreHigh
                 if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening, but still complying for {s.ComplyUntil - now:0.0} s");
                 return;
             }
-            float scramble = ScrambleQuality(s, captor.Position, Perception.Eye(captor), out string scrambleWhy);
+            float scramble = ScrambleQuality(s, ThreatPos(s, captor), ThreatEye(s, captor), out string scrambleWhy);
             int allies = Reactions.FreeAlliesNear(BotOwner, Me);
             float nerveScale = Mathf.Lerp(0.3f, 1f, s.Nerve);
             float squad = 1f + Settings.SquadBoost.Value * Mathf.Clamp01(allies / 2f);
@@ -322,7 +349,7 @@ namespace HandsAreHigh
             if (!Perception.LineClear(Perception.Eye(Me), s.DropPosition + Vector3.up * 0.3f)) return;
             if (Arsenal.StillThere(s.DroppedWeapon, s.DropPosition)) return;
             s.GunGone = true;
-            bool you = captor != null && Vector3.Distance(captor.Position, s.DropPosition) < 3f;
+            bool you = captor != null && s.CaptorSeen && Vector3.Distance(captor.Position, s.DropPosition) < 3f;
             if (Settings.LogDecisions.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: sees his {s.DroppedWeapon.ShortName.Localized()} is gone{(you ? " (you took it)" : "")}");
             if (you) Voice.Reply(s, VoiceEvent.Plead);
@@ -354,9 +381,10 @@ namespace HandsAreHigh
         private void DecideOnLeave(SurrenderState s, Player captor, float dist, string gone)
         {
             Gestures.Cancel(s, "you left");
-            Vector3 threat = captor != null ? captor.Position : s.CaptorLastSeen;
-            Vector3 threatEye = captor != null ? Perception.Eye(captor) : s.CaptorLastSeen + Vector3.up * 1.5f;
-            bool seen = captor != null && Perception.LineClear(Perception.Eye(Me), threatEye);
+            // Only what he knows: the captor's position if he sees him, else his last sighting.
+            Vector3 threat = ThreatPos(s, captor);
+            Vector3 threatEye = ThreatEye(s, captor);
+            bool seen = captor != null && s.CaptorSeen;
             EquipmentSlot? gun = Arsenal.GunOnBody(Me);
             float nerve = s.Nerve;
 
@@ -556,12 +584,12 @@ namespace HandsAreHigh
             else Add(options, log, "scramble", Settings.ScrambleWeight.Value * scramble * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f) * legs);
 
             if (dist < Settings.EscapeMinDistance.Value) log.Append($"run: you're within {Settings.EscapeMinDistance.Value:0} m; ");
-            else if (!Perception.RetreatPoint(Me, captor.Position, Settings.RetreatDistance.Value, false, out _)) log.Append("run: no way out; ");
+            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.RetreatDistance.Value, false, out _)) log.Append("run: no way out; ");
             else Add(options, log, "run", Settings.EscapeWeight.Value * Mathf.Max(0.1f, 1.3f - nerve) * flee * legs);
 
             Vector3 hidePoint = Vector3.zero;
             if (dist < Settings.EscapeMinDistance.Value * 0.5f) log.Append("hide: you're right there; ");
-            else if (!Perception.RetreatPoint(Me, captor.Position, Settings.CoverRadius.Value, true, out hidePoint)) log.Append("hide: no hidden spot near; ");
+            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.CoverRadius.Value, true, out hidePoint)) log.Append("hide: no hidden spot near; ");
             else Add(options, log, "hide", Settings.HideWeight.Value * (1.3f - nerve) * flee * (s.LegsBad ? 1.5f : 1f));
 
             if (options.Count == 0)
@@ -579,7 +607,7 @@ namespace HandsAreHigh
             }
             else if (chosen.Name == "scramble")
             {
-                StartScramble(s, captor.Position, scrambleWhy);
+                StartScramble(s, ThreatPos(s, captor), scrambleWhy);
             }
             else if (chosen.Name == "run")
             {
@@ -587,7 +615,7 @@ namespace HandsAreHigh
             }
             else if (chosen.Name == "hide")
             {
-                BeginHide(s, captor.Position, "slips into cover during an opening");
+                BeginHide(s, ThreatPos(s, captor), "slips into cover during an opening");
                 s.HideSearchPending = false;   // already found one
                 s.TargetPoint = hidePoint;
                 s.HideMoving = true;
@@ -669,6 +697,13 @@ namespace HandsAreHigh
             s.SetPhase(Phase.Rearmed, reason);
         }
 
+        // Where he believes his captor is: exactly while he sees him, else the last sighting.
+        private static Vector3 ThreatPos(SurrenderState s, Player c) =>
+            s.CaptorSeen && Perception.Alive(c) ? c.Position : s.CaptorLastSeen;
+
+        private static Vector3 ThreatEye(SurrenderState s, Player c) =>
+            s.CaptorSeen && Perception.Alive(c) ? Perception.Eye(c) : s.CaptorLastSeen + Vector3.up * 1.5f;
+
         private void Follow(SurrenderState s, Player captor)
         {
             Vector3 to = captor.Position - Me.Position;
@@ -681,7 +716,13 @@ namespace HandsAreHigh
                 return;
             }
             Vector3 point = captor.Position - to.normalized * want;
-            MoveTo(s, point, sprint: false);
+            // No path (MoveTo false): stand and try again in a second, never a path solve per frame.
+            if (Time.time < s.FollowRetryAt) { Hold(Settings.Stance.Value); return; }
+            if (!MoveTo(s, point, sprint: false))
+            {
+                s.FollowRetryAt = Time.time + 1f;
+                Hold(Settings.Stance.Value);
+            }
         }
 
         // One item at a time, in order; a report once the last one should have landed.

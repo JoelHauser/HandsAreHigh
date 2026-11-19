@@ -85,8 +85,25 @@ namespace HandsAreHigh
         internal int HidCount;          // hide-and-look-again cycles since last caught: only the first is logged
 
         // What he knows about the captor. After losing sight he only uses the last sighting.
+        // At a surrender it is where he last saw his threat (EnemyInfo), never a position he
+        // didn't know.
         internal Vector3 CaptorLastSeen;
         internal float CaptorHiddenSince = -1f;
+        internal bool CaptorSeen;           // this check: he sees his captor (Perception.SeesCaptor)
+
+        // The surrender as an offer (0.9.0). Accepted: the captor has acknowledged it (a human came
+        // within AcknowledgeDistance in sight, aimed at him a moment, or gave an order; a bot took
+        // custody). Until then it lasts until OfferUntil (longer while the captor closes in), then
+        // he seeks safety or reassesses. Distance alone never cancels it.
+        internal bool Accepted;
+        internal float OfferUntil;
+        internal float ClosestDist = float.MaxValue;   // captor's closest approach seen this encounter
+        internal float OfferRef = float.MaxValue;      // distance the next "he is coming for me" is measured from
+        internal float CoveredSince = -1f;  // the captor has been aiming at him since (acknowledgement)
+
+        // Follow: a failed path is retried at most once a second (not a path solve per frame).
+        internal float FollowRetryAt;
+        internal bool FollowToCover;        // a bot captor ordered him along into cover
 
         // Set by Player.BeingHitAction (bullets, melee, explosions; never bleeding).
         internal bool WasHit;
@@ -224,7 +241,22 @@ namespace HandsAreHigh
             DefiantPendingUntil = -1f;
             DrawCommitUntil = 0f;
             TDecided = -1f;
+            Accepted = false;
+            ClosestDist = float.MaxValue;
+            OfferRef = float.MaxValue;
+            CoveredSince = -1f;
+            FollowToCover = false;
+            OfferUntil = Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * Nerve);
             Gestures.Cancel(this, "new surrender");
+        }
+
+        // The captor acknowledged the surrender (logged once per encounter).
+        internal void Accept(string how)
+        {
+            if (Accepted) return;
+            Accepted = true;
+            if (Settings.LogDecisions.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{Name}: surrender acknowledged by {Restraint.Name(Captor)} ({how})");
         }
 
         // quiet: routine repeats (hiding and looking again every few seconds) only go to the

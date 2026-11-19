@@ -6,13 +6,97 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
-**0.8.0, built on the work laptop against `C:\HUH` 2026-11-19 (dist/HandsAreHigh-0.8.0.zip);
-0.7.0 + 0.8.0 in one commit, pushed to `main` 2026-11-19; not installed, never run in game.** 0.5.0-0.8.0 are all
-unverified in raid. No GitHub release. `C:\HUH` has no SAIN and no BigBrain (compiled against
-the scratchpad BigBrain 1.5.0); SAIN behaviour below comes from earlier notes, not this build.
+**0.9.0, built on the work laptop against `C:\HUH` 2026-11-19 (dist/HandsAreHigh-0.9.0.zip),
+0 warnings; committed and pushed to `main` 2026-11-19; not installed, never run in game.**
+(0.7.0 + 0.8.0 were one commit before it.) 0.5.0-0.9.0 are all unverified in raid. No GitHub release.
+`C:\HUH` (EFT 0.16.9.40743) has no SAIN, ORBIT, Pit Fireteam or BigBrain (compiled against the
+scratchpad BigBrain 1.5.0).
 
-Next: Joel runs the 0.8.0 plan, then 0.7.0, then 0.5.0 + 0.6.0 with Profile on. Open idea (not
-built): a "converted" bot that stays friendly for the raid.
+Next: Joel runs the 0.9.0 plan, then 0.8.0, 0.7.0, 0.5.0 + 0.6.0 with Profile on. Open ideas (not
+built): a "converted" bot that stays friendly for the raid; a bot captor's own Stop demand
+before a surrender (today the Demand line plays once he takes custody).
+
+### 0.9.0 (custody that weakens, distant surrender, encounter speech)
+
+Sources read 2026-11-19 (scratchpad clones): SAIN master = v4.5.1 (SPT 4.1.3, EFT 40743 = C:\HUH);
+Pit Fireteam main = 1.1.2 (SPT 4.1.x, addon needs SAIN 4.5.1); ORBIT tag 3.1.1 (Joel's), main 3.2.1.
+- SAIN 4.5.1: layers combat solo 20 / squad 22 / extract 24, AvoidThreat 80. BotComponent.ActiveLayer
+  still has a public setter (-> SAINActivationClass.SetActiveLayer): ReleaseLayer still works.
+  Suppression.CurrentState (ESuppressionState) unchanged. SAINExternal: GetPersonality,
+  TimeSinceSenseEnemy (SAIN's own GoalEnemy, may be the prisoner: not used), IsBotInCombat private.
+  Talk: PlayerComponent.PlayVoiceLine = Speaker.Play, refuses while Speaking/Busy; CanTalk needs a
+  human within 150 m. Bot/Player talk patches swallow all but hurt/death/breath.
+- Pit Fireteam 1.1.2: follower layers 71 patrol, 72 combat, 73 request, 74/75 SAIN addon, 76 wire,
+  101 tripwire, 65 friendly encounter, on PMC + Scav brains. Follower = BotFollower.BossToFollow is
+  pitAIBossPlayer; its group AddAlly(real player). Talks via BotTalk.TrySay. Knows nothing of us.
+- ORBIT 3.1.1: layer 19. Ghost sleep refused only while GoalEnemy != null or IsUnderFire, so a calm
+  captor could be ghosted mid-custody. OrbitBotControl.SetBotSleepAllowed(BotOwner, bool, string)
+  exists from 3.1.1 (blocks the bot's ORBIT squad too; false on a ghost wakes it).
+- Game: BotOwner.UpdateManual runs LookSensor regardless of brain, so a held bot's EnemyInfo
+  IsVisible keeps updating. EnemyInfo.PersonalLastPos / EnemyLastPosition = last known position.
+  The bundle bank "Attention" is EPhraseTrigger.Look (35); Gogogo has no bank in any voice.
+
+Changes:
+- Range audit. Removed: "Within (m)" (30 m to a player) and "Gives up to a bot within (m)" (25 m).
+  The killer was "Captor gone beyond (m)" 25: a surrender at 26-30 m was cancelled after the
+  reaction time. Now leaving = seen beyond max(25, closest approach + 12 m "walks away by").
+  Kept (justified): order ranges 3.5 m / 15 m, Stop demand 20 m, recapture 12 m, squad covers
+  25 m, observer scan 50 m, AcceptRange (custody only, max now 80).
+- Natural surrender: any range; threat perceived = in sight, seen <= SeenWithin, or under fire
+  (our near misses / IsUnderFire) while he saw him within EnemyMemory. Gives up towards
+  Perception.KnownPosition (exact if visible, else PersonalLastPos), logged. Player teammates
+  (IsAlly or Pit Fireteam follower) skip checks unless "Your teammates can surrender".
+- Offer: SurrenderState.Accepted. Human: within 25 m in sight at the surrender (as before), later
+  within "acknowledged within", covering him ~0.8 s, or an order. Bot: custody. Unanswered lasts
+  15-35 s x (1.2 - 0.4 nerve), +8 s each time the captor closes 3 m, then DecideOnLeave ("nobody
+  came" / "never took him prisoner"). Out of sight while unanswered: 2.5 x LeaveSeconds.
+- Held bot sight: Perception.Sees = clear line and, beyond 25 m, his EnemyInfo IsVisible (or seen
+  < 1 s). Faces / flees / hides relative to the known position only.
+- Bot captor recognition: Perception.Recognises (line + EnemyInfo IsVisible, line alone <= 6 m).
+  Unseen: Captors.Pending, checked every 0.5 s, decides when he sees it.
+- Captor modes (Captors.cs header): Assess every 0.25 s -> Contact (another enemy visible) /
+  Fire (IsUnderFire, near misses < 2.5 s, SAIN suppression >= Medium; direction = last near-miss
+  origin blurred 10% of range, else last seen enemy) / Alert (enemy seen < 5 s). Guard -> Cover
+  (Fire with a known direction: spot within 12 m hidden from it, complete path, prefers keeping
+  the prisoner in sight; prisoner within 10 m with a path is ordered Follow, Stay on arrival; max
+  2 moves, 10 s apart; 6 s limit; stuck 2 s -> Engage) -> Engage (Contact, or Fire with no cover;
+  layer off, dialogue interrupted, follow cancelled, one hand-over try to a practical squadmate;
+  >= 3 s, back to Guard after 2.5 s quiet; > BusyRelease 12 s: custody given up). Glances every
+  6-14 s (2-4 s when alert) for 0.8-1.8 s; no order during a glance. Custody ending (not a
+  release) makes the offer unanswered again (0.6 x offer). Restraint never lifted by custody loss.
+- Prisoner openings: removed the captor's internal Busy and "nobody guards him"; added gunfire
+  heard (captor shot < 1.5 s, aim off him) and a sprinting captor; aim angle/line as before.
+- Voice: CaptorVoice.cs (Demand, Stay, Disarm, Follow, Leave, Warn, Resist, Threat/OnSix,
+  UnderFire, TakeCover, HandOver, TakeOver, Abandon, LostSight), one pending line per bot, urgent
+  lines skip the gap (3.5 s) and drop queued ones, waits for Speaking/Busy and for his prisoner;
+  prisoner waits for his captor. Voice.VerifyLater logs audible / out of earshot / no audio.
+- ORBIT: OrbitAdapter.KeepAwake for captor + prisoner on Accept, lifted on End/CaptorDown/hand-over,
+  ReleaseAll on raid change and teardown. Follow path failures retried 1/s (was a solve per frame).
+- New cfg: 06 "Captor walks away by (m)", "Surrender acknowledged within (m)", "Unanswered
+  surrender lasts min/max (s)"; 15 "Captor line gap", "Captors take cover", "Captor cover search
+  (m)", "Prisoner follows into cover", "Follows into cover within (m)", "Back to guarding after
+  quiet (s)", "Fights at least (s)", "Captors look around"; 13 "Keep a bot-held encounter awake
+  (ORBIT)", "Your teammates can surrender". Profile line adds unrecognised / ORBIT blocks.
+
+### In-game test plan (0.9.0)
+
+Debug keys, Log decisions/voice/restraint on. Grep `->` (captor modes), `acknowledged`,
+`unanswered`, `never took`, `nobody came`, `hands`, `takes over`, `captor voice`, `says`.
+1. PMC holds a Scav (Ctrl+`[`), then shoot near the PMC from 40 m: `Guard -> Cover` (or Engage)
+   within ~0.5 s, he moves (no wall clipping), the Scav follows if close, `Cover -> Guard`, Stay.
+2. Show yourself to the PMC: `-> Engage`, a free squadmate `takes over`; the Scav's log shows an
+   opening (`shooting at someone else` / `looks .. away`); zero `RESTRAINT LEAK`.
+3. Stay hidden 15 s: `Engage -> Guard (quiet ...)` after >= 3 s; no flip-flop lines.
+4. Natural surrender at 10 m, 40 m, 120 m+ (pin a Scav with a DMR): `surrenders`, no `walked
+   away` while you stand still; aim at him: `acknowledged (aims at him...)`; or wait:
+   `nobody came for his surrender` after 15-35 s, then run/hide.
+5. Fire at a Scav from cover he can't see: he gives up towards where he last saw you (log
+   `believes him N m from where he is`), faces that spot, not you.
+6. Bot-vs-bot at 60 m+: `hasn't seen X give up`, then `now sees` or the offer ends.
+7. ORBIT installed: walk > 260 m from a bot-held encounter: both stay awake until custody ends;
+   Verbose shows `ORBIT: sleep blocked / allowed again`.
+8. Pit Fireteam: teammates never surrender; they obey orders next to a prisoner; no extra lines.
+9. Profile on during 1-6: no `Profile spike:` from captors; unrecognised/ORBIT counts return to 0.
 
 ### 0.8.0 (bots take prisoners, restraint)
 
