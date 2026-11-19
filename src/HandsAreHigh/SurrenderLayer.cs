@@ -26,7 +26,7 @@ namespace HandsAreHigh
     internal sealed class SurrenderLogic : CustomLogic
     {
         private const float CheckInterval = 0.25f;
-        private const float MoveOrderInterval = 1f;
+        private const float RepathInterval = 3f;
         private const float ReachDist = 0.5f;
         private const float ScrambleGrace = 0.75f;
         private const int MaxDropAttempts = 3;
@@ -41,16 +41,36 @@ namespace HandsAreHigh
             BotOwner.Sprint(false);
         }
 
+        private SurrenderState _s;   // the state this frame's Update is working on (for Hold)
+        private float _pose = -1f;
+
         public override void Update(CustomLayer.ActionData data)
         {
             if (!SurrenderRegistry.TryGet(Me, out SurrenderState s) || s.Suspended) return;
+            _s = s;
             HandsAreHighPlugin.Try($"phase {s.Phase}", () => Run(s));
+        }
+
+        public override void Stop()
+        {
+            // Handing the bot back: leave the mover and pose for the next layer to set.
+            _pose = -1f;
+            base.Stop();
         }
 
         private void Run(SurrenderState s)
         {
             bool check = Time.time >= s.NextCheck;
-            if (check) s.NextCheck = Time.time + CheckInterval;
+            if (check)
+            {
+                s.NextCheck = Time.time + CheckInterval;
+                // While we hold him, nothing else moves or turns him (see SainAdapter.ReleaseLayer).
+                if (SainAdapter.ReleaseLayer(BotOwner) && !s.SainReleased)
+                {
+                    s.SainReleased = true;
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: SAIN still had its layer marked active; released so it stops steering him and blocking his movement");
+                }
+            }
 
             switch (s.Phase)
             {
@@ -78,12 +98,29 @@ namespace HandsAreHigh
                 default: Hold(Settings.Stance.Value); break;
             }
             if (Settings.FaceCaptor.Value && captorAlive)
-                BotOwner.Steering.LookToPoint(Perception.Eye(captor));
+                Face(s, captor.Position + Vector3.up * 1.6f);
 
             ProcessDropQueue(s);
             if (!check) return;
 
             if (s.DropPending && !CheckDrop(s)) return;
+
+            // Deterministic debug commands (this bot only).
+            if (s.ForceRun)
+            {
+                s.ForceRun = false;
+                s.BeginRetreat("debug: forced run", emergency: true);
+                return;
+            }
+            if (s.ForceGrab)
+            {
+                s.ForceGrab = false;
+                if (!captorAlive) { HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced grab: no captor"); return; }
+                float q = ScrambleQuality(s, captor, out string qWhy, forced: true);
+                if (q > 0f) StartScramble(s, captor, $"debug: forced, {qWhy}");
+                else HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced grab not possible: {qWhy}");
+                return;
+            }
 
             // Shot while his hands are up, by anyone: he runs. (A hit, not health: a bleeding
             // man loses health every second without anyone firing.)
@@ -91,7 +128,7 @@ namespace HandsAreHigh
             s.WasHit = false;
             if (hit && Settings.BoltWhenShot.Value)
             {
-                Voice.Say(s, EPhraseTrigger.OnBeingHurt);
+                Voice.Say(s, VoiceEvent.Hurt);
                 SurrenderRegistry.Witness(Me.Position, Me, "a surrendered man shot");
                 s.BeginRetreat("shot with his hands up", emergency: true);
                 return;
@@ -154,35 +191,50 @@ namespace HandsAreHigh
             float roll = Random.value;
             if (Settings.VerboseLogs.Value || debugOpening)
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening{(debugOpening ? " (debug)" : "")}, nerve {s.Nerve:0.00}, " +
-                    $"gun nearby {scramble:0.00} ({scrambleWhy}), chance {chance:0.00}, roll {roll:0.00}{(roll < chance ? " -> takes it" : "")}");
+                    $"gun nearby {scramble:0.00} ({scrambleWhy}), chance {chance:0.00}, roll {roll:0.00} " +
+                    (roll < chance ? "-> takes it" : "-> waits this second"));
             if (roll >= chance) return;
 
             TakeOpening(s, captor, dist, scramble, scrambleWhy);
         }
 
-        // The game's callback normally clears DropPending within the holster time. If it
-        // hasn't come, ask again; after a few tries give up surrendering rather than pose
-        // holding a gun.
+        // The game's callback normally clears DropPending within the hide animation. One
+        // request at a time: while it is unanswered nothing new is asked (a second hands
+        // change on top of a pending one is what leaves a bot with "busy hands"). After
+        // DropRetrySeconds: a reload still running is cut short; after twice that with no
+        // answer the request is abandoned (its callback ignored) and a new one made. After
+        // MaxDropAttempts requests he fights instead of posing with a gun.
         private bool CheckDrop(SurrenderState s)
         {
-            if (Arsenal.HandsFree(Me))
+            if (Arsenal.HandsEmpty(Me))
             {
                 s.DropPending = false;
+                s.HandsPending = false;
                 return true;
             }
-            if (Time.time - s.DropSince < Settings.DropRetrySeconds.Value) return false;
+            float waited = Time.time - s.DropSince;
+            float limit = Settings.DropRetrySeconds.Value;
+            if (waited < limit) return false;
+
+            if (s.HandsPending)
+            {
+                SurrenderRegistry.CutReload(s);
+                if (Time.time - s.HandsSince < limit * 2f) return false;
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: no answer to the hands change in {limit * 2f:0.0} s ({Arsenal.DescribeHands(Me)}), abandoning it");
+                SurrenderRegistry.AbandonRequest(s);
+            }
 
             if (s.DropAttempts >= MaxDropAttempts)
             {
-                HandsAreHighPlugin.Log.LogWarning($"{s.Name}: couldn't empty his hands after {s.DropAttempts} tries, fights instead");
+                HandsAreHighPlugin.Log.LogWarning($"{s.Name}: couldn't empty his hands after {s.DropAttempts} requests ({Arsenal.DescribeHands(Me)}), fights instead");
+                SurrenderRegistry.AbandonRequest(s);
                 s.DropPending = false;
                 s.LowerArms(Settings.EmergencyLowerSeconds.Value);
                 s.SetPhase(Phase.Rearmed, "drop failed");
                 return false;
             }
-            s.DropAttempts++;
             s.DropSince = Time.time;
-            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: weapon still in hands after {Settings.DropRetrySeconds.Value:0.0} s, drop try {s.DropAttempts}");
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: hands still busy ({Arsenal.DescribeHands(Me)}), new request {s.DropAttempts + 1}");
             SurrenderRegistry.RequestDrop(s);
             return false;
         }
@@ -191,12 +243,12 @@ namespace HandsAreHigh
 
         // 0..1: how good a grab for his own dropped gun would be right now. Closer, reachable,
         // and the further you are from it (and the less you can see it), the better.
-        private float ScrambleQuality(SurrenderState s, Player captor, out string why)
+        private float ScrambleQuality(SurrenderState s, Player captor, out string why, bool forced = false)
         {
             Item gun = s.DroppedWeapon;
             if (gun == null) { why = "he didn't drop a gun"; return 0f; }
-            if (Time.time < s.ScrambleCooldownUntil) { why = "stopped once, not again yet"; return 0f; }
-            if (s.Skip.Contains(gun)) { why = "failed to get it before"; return 0f; }
+            if (!forced && Time.time < s.ScrambleCooldownUntil) { why = "stopped once, not again yet"; return 0f; }
+            if (!forced && s.Skip.Contains(gun)) { why = "failed to get it before"; return 0f; }
             float d = Vector3.Distance(Me.Position, s.DropPosition);
             float range = Settings.ScrambleRange.Value;
             if (d > range) { why = $"{d:0} m away, over {range:0} m"; return 0f; }
@@ -311,7 +363,7 @@ namespace HandsAreHigh
             s.TargetPoint = s.DropPosition;
             s.GraceUntil = Time.time + ScrambleGrace;
             s.CaptorLastSeen = captor.Position;
-            Voice.Say(s, EPhraseTrigger.OnFight);
+            Voice.Say(s, VoiceEvent.Break);
             s.SetPhase(Phase.Recovering, $"scrambles for his {s.DroppedWeapon.ShortName.Localized()} ({why})");
             s.Scrambling = true;
         }
@@ -339,7 +391,7 @@ namespace HandsAreHigh
             s.Order = Order.None;
             s.DropQueue.Clear();
             s.TargetWeapon = null;
-            Voice.Say(s, EPhraseTrigger.OnFight);
+            Voice.Say(s, VoiceEvent.Break);
             s.SetPhase(Phase.Rearmed, reason);
         }
 
@@ -382,7 +434,7 @@ namespace HandsAreHigh
                     : $"{s.Name} dropped {done} of {s.Ordered.Count}; {kept} wouldn't come off";
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: order '{s.OrderName}': {msg}");
                 OrderMenu.Notify(msg);
-                if (kept > 0) Voice.Say(s, EPhraseTrigger.Negative);
+                if (kept > 0) Voice.Say(s, VoiceEvent.Refuse);
             }
         }
 
@@ -439,7 +491,7 @@ namespace HandsAreHigh
 
         private void Regroup(SurrenderState s, string why)
         {
-            BotOwner.StopMove();
+            StopMoving();
             s.RegroupUntil = Time.time + Settings.RegroupSeconds();
             s.SetPhase(Phase.Regrouping, why);
         }
@@ -524,7 +576,7 @@ namespace HandsAreHigh
 
             if (Arrived(s.TargetPoint, Settings.PickupRange.Value))
             {
-                BotOwner.StopMove();
+                StopMoving();
                 Item weapon = s.TargetWeapon;
                 bool scrambling = s.Scrambling;
                 s.SetPhase(Phase.PickingUp, $"picking up {weapon.ShortName.Localized()}");
@@ -580,7 +632,7 @@ namespace HandsAreHigh
         {
             if (s.TargetWeapon != null) s.Skip.Add(s.TargetWeapon);
             s.TargetWeapon = null;
-            BotOwner.StopMove();
+            StopMoving();
             s.RegroupUntil = Time.time + 1f;
             s.SetPhase(Phase.Regrouping, $"gave up on the gun: {why}");
         }
@@ -589,7 +641,7 @@ namespace HandsAreHigh
         // and looks again every few seconds.
         private void GoHide(SurrenderState s, string why, bool quiet = false)
         {
-            BotOwner.StopMove();
+            StopMoving();
             s.SetPhase(Phase.Hiding, why, quiet);
             if (Perception.CanSee(Me, s.CaptorLastSeen) &&
                 Perception.RetreatPoint(Me, s.CaptorLastSeen, Settings.CoverRadius.Value, true, out s.TargetPoint))
@@ -615,7 +667,7 @@ namespace HandsAreHigh
             if (s.HideMoving && (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value) || Stalled(s)))
             {
                 s.HideMoving = false;
-                BotOwner.StopMove();
+                StopMoving();
             }
             if (Time.time - s.PhaseSince > Settings.HideRecheck.Value)
             {
@@ -630,6 +682,8 @@ namespace HandsAreHigh
         private bool SpottedAgain(SurrenderState s)
         {
             if (Time.time < s.GraceUntil) return false;
+            // A debug opening simulates you not covering him: your aim doesn't count until it ends.
+            if (Time.time < s.DebugOpeningUntil) { s.AimedBy = null; return false; }
             GameWorld world = Singleton<GameWorld>.Instance;
             if (world == null) return false;
 
@@ -646,7 +700,9 @@ namespace HandsAreHigh
 
             if (aiming == null) { s.AimedBy = null; return false; }
             if (s.AimedBy != aiming) { s.AimedBy = aiming; s.AimedSince = Time.time; }
-            if (Time.time - s.AimedSince < Settings.AimConfirm.Value) return false;
+            // Mid-scramble he's committed: it takes a steadier aim (hysteresis) to stop him.
+            float confirm = s.Scrambling ? Mathf.Max(0.8f, Settings.AimConfirm.Value * 2f) : Settings.AimConfirm.Value;
+            if (Time.time - s.AimedSince < confirm) return false;
 
             s.AimedBy = null;
             if (Arsenal.GunOnBody(Me) != null)
@@ -659,7 +715,6 @@ namespace HandsAreHigh
                     return true;
                 }
             }
-            BotOwner.StopMove();
             s.HidCount = 0;
             SurrenderRegistry.Surrender(Me, aiming, s.Scrambling ? "caught mid-scramble" : "caught again");
             return true;
@@ -667,29 +722,95 @@ namespace HandsAreHigh
 
         // ---- movement ------------------------------------------------------------------
 
+        // Standing still: the mover is stopped once (not every frame), the pose only set when
+        // it changes. Repeating Stop/SetPose every frame restarts the mover's and the pose's
+        // transitions and shows as twitching.
         private void Hold(float pose)
         {
+            SurrenderState s = _s;
+            if (s != null && s.Moving)
+            {
+                BotOwner.StopMove();
+                BotOwner.SetTargetMoveSpeed(0f);
+                s.Moving = false;
+            }
+            SetPose(pose);
+        }
+
+        private void StopMoving()
+        {
             BotOwner.StopMove();
-            BotOwner.SetTargetMoveSpeed(0f);
+            if (_s != null) _s.Moving = false;
+        }
+
+        private void SetPose(float pose)
+        {
+            if (Mathf.Abs(pose - _pose) < 0.01f) return;
+            _pose = pose;
             BotOwner.SetPose(pose);
         }
 
-        // Follows a NavMesh path we computed (BotMover.GoToByWay), re-issued every second;
-        // false if there's no complete way there. Never BotOwner.GoToPoint (see Perception.PathTo).
+        // Facing the captor: the look point only moves when he has moved more than
+        // FaceHysteresis degrees around the bot, and it's his body (not his bobbing head bone),
+        // so the turn is one smooth steering target instead of a new one every frame.
+        private void Face(SurrenderState s, Vector3 point)
+        {
+            Vector3 me = Me.Position;
+            Vector3 want = point - me; want.y = 0f;
+            Vector3 have = s.FaceTarget - me; have.y = 0f;
+            if (!s.FaceSet || have.sqrMagnitude < 0.01f || Vector3.Angle(have, want) > Settings.FaceHysteresis.Value)
+            {
+                s.FaceTarget = point;
+                s.FaceSet = true;
+            }
+            BotOwner.Steering.LookToPoint(s.FaceTarget);
+        }
+
+        // Follows a NavMesh path we computed (BotMover.GoToByWay). The path is only re-issued
+        // when the destination moves (following you), or every few seconds as a fallback,
+        // never every frame: each GoToByWay restarts the mover on the new path.
+        // False if there's no complete way there. Never BotOwner.GoToPoint (see Perception.PathTo).
         private bool MoveTo(SurrenderState s, Vector3 point, bool sprint)
         {
-            BotOwner.SetPose(1f);
+            SetPose(1f);
             BotOwner.SetTargetMoveSpeed(1f);
-            if (Time.time < s.NextMoveOrder) return true;
-            bool first = s.NextMoveOrder == 0f;
-            s.NextMoveOrder = Time.time + MoveOrderInterval;
+            bool first = s.NextMoveOrder == 0f || !s.Moving;
+            bool moved = (point - s.PathTarget).sqrMagnitude > 1f;
+            if (!first && !moved && Time.time < s.NextMoveOrder) return true;
+            s.NextMoveOrder = Time.time + RepathInterval;
             if (first) ResetProgress(s);
 
-            if (!Perception.PathTo(Me.Position, point, out Vector3[] corners)) return false;
+            if (!Perception.PathTo(Me.Position, point, out Vector3[] corners, out string why))
+            {
+                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: no route ({why})");
+                return false;
+            }
+            if (first) Relink();
+            s.PathTarget = point;
+            s.Moving = true;
             BotOwner.MovementResume();
             BotOwner.Mover.GoToByWay(corners, ReachDist);
             BotOwner.Sprint(sprint);
             return true;
+        }
+
+        // Before he starts walking, the mover's record of his last good NavMesh position is set
+        // to where he stands now. Left stale (it is not updated while he stands with his hands
+        // up, nor while SAIN drove him), BotMover.method_12 snaps a walking bot back to it as
+        // soon as he is 0.3 m away from it, which can put him on the far side of a wall.
+        // The same fields SAINLayer.OnLayerChanged resets when it hands a bot over; no
+        // SetPlayerToNavMesh, which can teleport (FindBetterPosition / Teleport).
+        private void Relink()
+        {
+            BotMover mover = BotOwner.Mover;
+            if (mover == null) return;
+            Vector3 here = Me.Position;
+            mover.PositionOnWayInner = here;
+            mover._prevSuccessLinkedFrom = here;
+            mover._prevLinkPos = here;
+            mover._lastGoodCastPoint = here;
+            mover._lastGoodCastPointTime = Time.time;
+            mover._prevPosLinkedTime = 0f;
         }
 
         private void ResetProgress(SurrenderState s)

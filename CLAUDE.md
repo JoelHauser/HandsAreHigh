@@ -6,9 +6,68 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
-**0.2.0, built, installed in `H:\SPT4.1.X` and pushed to `main` 2026-11-18; not yet run in game.**
-0.1.0 (pushed, 2efc082) was run once by Joel 2026-11-18: surrender, drop and pose worked;
-the log showed the problems 0.2.0 fixes (below). No GitHub release.
+**0.4.0, built, installed in `H:\SPT4.1.X` and pushed to `main` 2026-11-18; not yet run in game.**
+0.3.0 was never committed on its own; its changes are in the 0.4.0 commit.
+0.3.0 was run by Joel 2026-11-18 (voice, reload cut, SAIN release, near misses all worked in
+the log); 0.4.0 fixes what he reported after it. No GitHub release.
+
+### 0.4.0 (after the 0.3.0 run)
+
+- Walking through walls: BotMover moves a bot by setting `transform.position` along the path
+  (`CastFromPos`), so the NavMesh is the only wall. `Perception.PathTo` snapped the path start
+  up to 2 m away (could be past a thin wall or on another floor). Now start <= 0.5 m
+  horizontal / 0.6 m vertical, end <= 1.5 m / 1.2 m, complete paths only, else no move
+  (reassess). `Relink()` resets the mover's last-good-link fields to his real position before
+  a new walk (BotMover.method_12 snaps a walking bot back to a stale `_prevSuccessLinkedFrom`).
+  No teleport anywhere in our code.
+- Arms "coming loose" while walking: the pose frame was world-up/body-yaw; now torso frame
+  (shoulder line + ribcage->head) in `ArmPose.TorsoFrame`.
+- Natural surrender never seen: the pipeline worked (checks, near misses, pinned/severe all in
+  the log) but per-check chance was 0.01-0.09. Now per-role base/threshold/max and a pressure
+  curve; replaying the 0.3.0 log: a pinned, bleeding, ammo-less Scav ~95% over his checks, a
+  severely hurt Scav ~55%, a pinned PMC ~2%, a lightly pressed PMC 0%.
+- Roles: Scav base 0.35 / needs 0.40 / max 0.50; PMC 0.12 / 0.55 / 0.25; bosses+followers off by
+  default, else 0.03 / 0.75 / 0.08 (their brains registered only when enabled, restart).
+- Stop demand (off by default): postfix on `Player.Say` for the player's own `Stop` (the
+  gesture/phrase menu path: GamePlayerOwner.PlayPhraseOrGesture -> Player.Say), optional
+  unbound key that calls the same Say. One bot under the crosshair, 20 m, hostile, clear line;
+  one immediate check with +0.2 pressure (counts as a reason) and x1.5 chance; 8 s per-bot cooldown.
+- Pressure weights renamed (`Weight: ...`) so new defaults apply over old cfg values.
+
+### What the 0.2.0 log showed and what 0.3.0 changed (all confirmed in SAIN / EFT code)
+
+- Retreats always "stuck" and bots jittery: SAIN only clears `BotComponent.ActiveLayer` from
+  its own layer's IsActive(); once our layer wins BigBrain stops asking SAIN's layers, so the
+  flag stays set. While set, SAIN's `BotMoverManualUpdatePatch`/`ManualFixedUpdatePatch` skip
+  the game's mover (our path never walked) and `SmoothTurnPatch` keeps turning the bot itself
+  (fighting our facing). Now `SainAdapter.ReleaseLayer` sets it to None (what
+  `SAINLayer.SetLayer(false)` does), checked every 0.25 s while held. Also: facing target only
+  moves past a 4 deg hysteresis and uses the captor's body, not his bobbing head bone; mover
+  stopped once (not every frame); pose only set when it changes; path re-issued only when the
+  destination moves or every 3 s.
+- Reload before the drop: `BaseReloadOperation.HideWeapon` only stores the callback, the hide
+  waits for the reload. Now the reload is finished instantly with the game's own
+  `HandsController.FastForwardCurrentState()` (used by `BotWeaponManager.PreActivate`), whose
+  `SwitchToIdlingState` then runs the stored hide. A magazine swap can't be aborted midway.
+- Busy hands: drop retries stacked new hands changes on unanswered ones. Now one request at a
+  time with a token (stale callbacks ignored), failure callback handled, a request abandoned
+  only after 2x the retry time, 3 requests max; draw fallback only with empty hands.
+- Suppression stuck near 0: SAIN's `HearingSensorPatch` disables `BotHearingSensor`, the only
+  near-miss caller of `BotMemory.SetUnderFire`; only hits counted. Now near misses are measured
+  geometrically from every shot (postfix on `Player.FirearmController.InitiateShot`).
+- Severe injury couldn't qualify alone ("hurt 0.83" -> pressure 0.44, needs 2 reasons). Now an
+  injury model (worst of health / head-thorax / destroyed limb / bleeding) and a severe-injury
+  path, plus a pinned-down path.
+- Kit value always 0k: `HandbookNodes`' dictionary base only holds top-level categories; items
+  are in its node cache, read by the indexer. Now the indexer.
+- Silent surrenders: SAIN's `BotTalkPatch` / `PlayerTalkPatch` swallow every phrase but
+  hurt/agony/death/breath for SAIN bots. Now `Player.Speaker.Play` (what SAIN itself uses),
+  with fallback lines and the result logged.
+- Debug opening "stands still": the scramble was cancelled within 0.75 s because you kept
+  aiming. Debug openings now ignore your aim until they end; real scrambles need a steadier aim
+  to stop; force run / force grab keys added.
+
+### 0.2.0 notes
 
 Joel's direction (2026-11-18): standing, not crouched; drop **only** the weapon in hand; on
 an opening a bot draws the gun slung on his back first, then his sidearm, and only uses a
@@ -93,24 +152,36 @@ Order (none / follow / kneel) is separate from the phase: a following bot is sti
   and shown on screen. No target: nothing happens.
 - **Asleep** (ORBIT Ghost Mode): claim on a gun dropped, decides again on waking.
 
-## In-game test plan (0.2.0)
+## In-game test plan (0.4.0)
 
-F12 > Hands Are High > 14. Debug: **Debug keys** and **Overlay** on. Grep LogOutput.log for
-`Debug `, `Timeline`, `takes an opening`, `scramble`, `pressure`, `->`.
+No debug keys for 1-4 (debug keys off), Verbose logs on for 3.
 
-1. Two or three Scavs close together, crosshair on one, `[`: only that one surrenders
-   (`Debug surrender: target <name> (<id>)`). Crosshair on a wall, `[`: "no bot under your
-   crosshair", nobody changes.
-2. `]` on one of two held bots: only he gets "(debug)" opening lines.
-3. `]` with his rifle on the floor 2-5 m from him and you 8+ m from it, a few times on fresh
-   bots: he should often scramble for it, sprint, pick it up and fight. Pick it up yourself
-   while he runs: "scramble failed: it's gone", he draws or runs, no duplicate gun.
-4. Scav with a slung rifle (or PMC with a pistol), `]` at 3 m: he draws the gun, not the knife.
-5. `[` on a bot that's firing / sprinting / reloading: read the Timeline line for each.
-6. Pin a bot down with sustained fire near him vs a single shot: compare the `fire` value in
-   `pressure` lines (Verbose logs on shows every check).
-7. Retreat / regroup / recover now actually move (no instant "no path"); no teleports.
-8. Same checks with SAIN + ORBIT (Joel's normal install).
+1. Walls: surrender bots next to walls, doorways, stairs; give openings / force run / leave.
+   Nobody passes through geometry; unreachable spots log `no route (...)` with Verbose on.
+2. Arms: order "follow me" and walk; arms stay attached to the shoulders while he walks.
+3. Natural: pin a lone Scav down with sustained fire near him, or wound him badly; within a few
+   checks he should often give up (`-> surrenders`, then `surrender activated`). Same with a
+   PMC: far rarer. Bosses never (default).
+4. Stop demand: off by default (saying Stop does nothing extra). Turn on 10. Stop demand, aim at
+   a hostile Scav within 20 m, say Stop from the phrase menu: `Stop demand: target ...:
+   accepted, evaluating now`, then one `told to stop` check. Again within 8 s: cooldown.
+
+## In-game test plan (0.3.0)
+
+F12 > Hands Are High > 14. Debug: **Debug keys** and **Overlay** on, **Override nerve** off
+(the 0.2.0 log had every bot at 0.50). Keys: `[` surrender, `]` opening, Backspace leave,
+Ctrl+Backspace force run, Ctrl+`]` force gun grab. Grep LogOutput.log for `SAIN still had`,
+`Timeline`, `voice`, `opening`, `scramble`, `pressure`, `fire +` (Verbose), `->`.
+
+1. Surrender while he fires, sprints, reloads, heals, idles: Timeline line each time; when
+   reloading, "mid-reload: the reload is finished instantly". No pose with a gun in hand.
+2. A surrender plays a voice line (`voice Surrender: played ...`) for Scavs and PMCs.
+3. Leave / force run: he actually runs (no "stuck" x3), no teleport, no jitter while held.
+4. `]` with his gun 2-5 m away: scrambles often; keep aiming, he's not stopped by it.
+   Ctrl+`]`: always goes for it (or says why not). Grab it yourself first: clean fallback.
+5. Repeated surrender / escape / pickup / recapture on one bot: no "hands busy" lockups.
+6. Sustained fire close to a bot vs one shot and vs shooting elsewhere (Verbose logs on).
+7. Badly wound a bot (thorax, leg blacked, bleeding): `severely injured` checks appear.
 
 ## How it works (engine side, verified 2026-11-18)
 

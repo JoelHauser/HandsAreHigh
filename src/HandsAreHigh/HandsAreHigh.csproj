@@ -9,7 +9,7 @@
     <Nullable>disable</Nullable>
 
     <!-- Must match HandsAreHighPlugin.PluginVersion. -->
-    <Version>0.2.0</Version>
+    <Version>0.4.0</Version>
 
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -46,6 +46,7 @@
     <Reference Include="UnityEngine.AIModule"><HintPath>$(GameManaged)\UnityEngine.AIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(GameManaged)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(GameManaged)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="DissonanceVoip"><HintPath>$(GameManaged)\DissonanceVoip.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(GameManaged)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 

@@ -27,9 +27,13 @@ namespace HandsAreHigh
         // so it points where the pose wants it, then blended from the animated rotation
         // by the weight, so the raise is eased and breathing still shows at < 100%.
         //
-        // Directions are built in the body's own frame (forward/right/up) and bones are
-        // aimed by where their child bone sits, so this needs no knowledge of the rig's
-        // local bone axes.
+        // Directions are built in the torso's own frame and bones are aimed by where their
+        // child bone sits, so this needs no knowledge of the rig's local bone axes.
+        //
+        // The frame comes from the animated torso, not the world: right = the shoulder line,
+        // up = ribcage to head. While he walks, the walk animation leans and twists the spine;
+        // a world-upright frame (0.2.0-0.3.0) kept the arms pointing the same way regardless,
+        // so they came loose from the shoulders. In the torso frame they move with him.
         internal static void Apply(Player player, SurrenderState s)
         {
             PlayerBones bones = player.PlayerBones;
@@ -37,11 +41,7 @@ namespace HandsAreHigh
 
             try
             {
-                Transform body = player.Transform.Original;
-                Vector3 up = Vector3.up;
-                Vector3 fwd = Vector3.ProjectOnPlane(body.forward, up).normalized;
-                if (fwd.sqrMagnitude < 0.5f) return;
-                Vector3 right = Vector3.Cross(up, fwd);
+                if (!TorsoFrame(player, bones, out Vector3 right, out Vector3 up, out Vector3 fwd)) return;
 
                 float w = s.Weight * Settings.PoseStrength.Value;
                 Vector3 ribcage = bones.Ribcage.Original.position;
@@ -88,6 +88,41 @@ namespace HandsAreHigh
                     HandsAreHighPlugin.Log.LogError($"Arm pose failed (logged once): {e}");
                 }
             }
+        }
+
+        // right: along the shoulders (both upper arms), signed to match the body's right;
+        // up: ribcage to head, made square to right; fwd: right x up. Falls back to the body's
+        // yaw frame if the bones are missing or degenerate.
+        private static bool TorsoFrame(Player player, PlayerBones bones, out Vector3 right, out Vector3 up, out Vector3 fwd)
+        {
+            Transform body = player.Transform.Original;
+            Vector3 bodyRight = body.right;
+            right = bodyRight;
+            up = Vector3.up;
+            fwd = Vector3.ProjectOnPlane(body.forward, Vector3.up).normalized;
+
+            Transform head = bones.Head?.Original;
+            if (bones.Upperarms.Length >= 2 && bones.Upperarms[0] != null && bones.Upperarms[1] != null && head != null)
+            {
+                Vector3 shoulders = bones.Upperarms[1].position - bones.Upperarms[0].position;
+                if (Vector3.Dot(shoulders, bodyRight) < 0f) shoulders = -shoulders;
+                Vector3 spine = head.position - bones.Ribcage.Original.position;
+                if (shoulders.sqrMagnitude > 1e-4f && spine.sqrMagnitude > 1e-4f)
+                {
+                    Vector3 r = shoulders.normalized;
+                    Vector3 u = Vector3.ProjectOnPlane(spine, r).normalized;
+                    if (u.sqrMagnitude > 0.5f)
+                    {
+                        right = r;
+                        up = u;
+                        fwd = Vector3.Cross(right, up);
+                        return true;
+                    }
+                }
+            }
+            if (fwd.sqrMagnitude < 0.5f) return false;
+            right = Vector3.Cross(Vector3.up, fwd);
+            return true;
         }
 
         // Turn `bone` so the direction to `child` matches `desired`, blended by w.

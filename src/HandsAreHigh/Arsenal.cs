@@ -53,22 +53,41 @@ namespace HandsAreHigh
             return h.Maximum > 0f ? h.Current / h.Maximum : 1f;
         }
 
-        // Nothing he could fight with is in his hands.
-        internal static bool HandsFree(Player p)
+        // His hands hold nothing at all (the empty-hands controller). Meds or a grenade in hand
+        // count as busy: the arms only rise once the game has put them away too.
+        internal static bool HandsEmpty(Player p)
         {
-            Item inHands = p?.HandsController?.Item;
-            return inHands == null || !(inHands is Weapon || IsMelee(inHands));
+            Player.AbstractHandsController hc = p?.HandsController;
+            return hc == null || hc is Player.EmptyHandsController;
+        }
+
+        // For the logs: what his hands are doing right now.
+        internal static string DescribeHands(Player p)
+        {
+            Player.AbstractHandsController hc = p?.HandsController;
+            if (hc == null) return "no hands controller";
+            if (hc is Player.EmptyHandsController) return "empty";
+            string what = hc.Item?.ShortName?.Localized() ?? hc.GetType().Name;
+            if (hc is Player.FirearmController fc)
+            {
+                if (fc.IsInReloadOperation()) return $"reloading {what}";
+                if (fc.IsTriggerPressed) return $"firing {what}";
+                return $"holding {what}";
+            }
+            return $"{hc.GetType().Name} ({what})";
         }
 
         // A gun in his hands goes on the ground (and is returned); a knife goes back in its
-        // sheath. Holstered and slung guns stay on him, which is what makes a later draw possible.
+        // sheath; meds or a grenade are put away. Holstered and slung guns stay on him, which
+        // is what makes a later draw possible.
         //
         // Order matters: hands first, then the throw. Throwing the item still in hands makes
         // the game equip his next weapon in its place (Player.SetControllerInsteadRemovedOne),
         // which would put his pistol in his hands.
         // onEmpty: the game's own callback once the hands controller is empty (arms may rise).
+        // onFailed: the game refused or dropped the hands change.
         // onThrown: the throw transaction's result (false: the gun went back on his body).
-        internal static Item EmptyHands(Player bot, Action onEmpty, Action<bool> onThrown)
+        internal static Item EmptyHands(Player bot, Action onEmpty, Action onFailed, Action<bool> onThrown)
         {
             Item inHands = bot.HandsController?.Item;
             if (inHands is Weapon)
@@ -78,10 +97,10 @@ namespace HandsAreHigh
                     onEmpty?.Invoke();
                     HandsAreHighPlugin.Try("throw weapon",
                         () => bot.InventoryController.ThrowItem(inHands, false, result => onThrown?.Invoke(result.Succeed)));
-                });
+                }, onFailed);
                 return inHands;
             }
-            if (IsMelee(inHands)) Empty(bot, onEmpty);
+            Empty(bot, onEmpty, onFailed);
             return null;
         }
 
@@ -89,19 +108,18 @@ namespace HandsAreHigh
         // drop on, the same Process is started with fastHide = true, the flag the game itself
         // uses for a quick weapon switch (Player.Proceed(Weapon): CheckForFastWeaponSwitch),
         // so the firearm plays its short hide instead of the full holster.
-        private static void Empty(Player bot, Action onEmpty)
+        private static void Empty(Player bot, Action onEmpty, Action onFailed)
         {
-            // The callback also arrives when the change fails; only a success empties the hands
-            // (a failure leaves DropPending set, and CheckDrop asks again).
+            // The callback also arrives when the change fails; only a success empties the hands.
             Callback<IEmptyHandsController> done = result =>
             {
-                if (!result.Succeed) return;
+                if (!result.Succeed) { onFailed?.Invoke(); return; }
                 HandsAreHighPlugin.Try("hands empty", () => bot.SetInHands(false));
                 onEmpty?.Invoke();
             };
             if (!Settings.FastHolster.Value)
             {
-                bot.SetEmptyHands(result => { if (result.Succeed) onEmpty?.Invoke(); });
+                bot.SetEmptyHands(result => { if (result.Succeed) onEmpty?.Invoke(); else onFailed?.Invoke(); });
                 return;
             }
             new Player.Process<Player.EmptyHandsController, IEmptyHandsController>(
@@ -147,7 +165,14 @@ namespace HandsAreHigh
             selector.UpdateWeaponsList();
             if (selector.TryChangeToSlot(slot.Value, true)) return true;
 
-            HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname}: selector busy, drawing his {SlotName(slot)} directly");
+            // Never a second hands change on top of one in progress (the "busy hands" glitch):
+            // only when the selector isn't mid-change and his hands are really empty.
+            if (selector.IsChanging || !HandsEmpty(bot))
+            {
+                HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname}: can't draw yet, hands busy ({DescribeHands(bot)})");
+                return false;
+            }
+            HandsAreHighPlugin.Log.LogInfo($"{bot.Profile?.Nickname}: selector refused, drawing his {SlotName(slot)} directly");
             bot.SetSlotItem(slot.Value, result => HandsAreHighPlugin.Try("weapon taken", () => selector.OnWeaponTaken(result)));
             return true;
         }
@@ -207,13 +232,19 @@ namespace HandsAreHigh
 
             Handbook handbook = Singleton<Handbook>.Instance;
             if (handbook?.StructuredItems == null) { h.KitValue = -1f; return; }
+            // The indexer, not TryGetValue: HandbookNodes keeps every item in its node cache,
+            // but its dictionary base only holds the top-level categories (HandbookNodes ctor),
+            // which is why 0.2.0 valued every kit at 0.
             double total = 0;
+            int priced = 0;
             foreach (Item item in eq.GetAllItems())
             {
-                if (handbook.StructuredItems.TryGetValue(item.TemplateId.ToString(), out HandbookNode node) && node?.Data != null)
-                    total += node.Data.Price * Math.Max(1, item.StackObjectsCount);
+                HandbookNode node = handbook.StructuredItems[item.TemplateId.ToString()];
+                if (node?.Data == null) continue;
+                total += node.Data.Price * Math.Max(1, item.StackObjectsCount);
+                priced++;
             }
-            h.KitValue = (float)total;
+            h.KitValue = priced > 0 ? (float)total : -1f;
         }
 
         // ---- orders --------------------------------------------------------------------

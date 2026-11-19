@@ -79,24 +79,50 @@ namespace HandsAreHigh
         // used: it routes over the bot's cover-point graph, which failed for most targets in
         // testing, and its default mustHaveWay = true teleports the bot to a cover point when
         // it fails; BotPathFinderCorePoints.GoToPosition.)
-        internal static bool PathTo(Vector3 from, Vector3 to, out Vector3[] corners)
+        //
+        // The game's BotMover doesn't push the body with physics: it walks a point along the
+        // path (PositionOnWay) and sets the transform onto the NavMesh under it
+        // (BotMover.CastFromPos). The NavMesh is the only wall. So the path must start where
+        // the bot really stands: the start may only be snapped StartSnap metres (horizontally,
+        // same floor). The old 2 m snap could start the path on the far side of a thin wall or
+        // on another floor, and the mover then carried him straight through.
+        private const float StartSnap = 0.5f;
+        private const float StartSnapHeight = 0.6f;
+        private const float EndSnap = 1.5f;
+        private const float EndSnapHeight = 1.2f;
+
+        internal static bool PathTo(Vector3 from, Vector3 to, out Vector3[] corners) =>
+            PathTo(from, to, out corners, out _);
+
+        internal static bool PathTo(Vector3 from, Vector3 to, out Vector3[] corners, out string why)
         {
             corners = null;
-            if (!NavMesh.SamplePosition(from, out NavMeshHit start, 2f, NavMesh.AllAreas)) return false;
-            if (!NavMesh.SamplePosition(to, out NavMeshHit end, 2f, NavMesh.AllAreas)) return false;
-            if (!NavMesh.CalculatePath(start.position, end.position, NavMesh.AllAreas, Path) ||
-                Path.status != NavMeshPathStatus.PathComplete) return false;
+            if (!Snap(from, StartSnap, StartSnapHeight, out Vector3 start)) { why = "he isn't on the NavMesh"; return false; }
+            if (!Snap(to, EndSnap, EndSnapHeight, out Vector3 end)) { why = "the spot isn't on the NavMesh"; return false; }
+            if (!NavMesh.CalculatePath(start, end, NavMesh.AllAreas, Path) || Path.status != NavMeshPathStatus.PathComplete)
+            {
+                why = "no complete path";
+                return false;
+            }
             corners = Path.corners;
-            return corners != null && corners.Length > 0;
+            if (corners == null || corners.Length == 0) { why = "empty path"; return false; }
+            why = null;
+            return true;
         }
 
-        internal static bool Reachable(Vector3 from, Vector3 to)
+        internal static bool Reachable(Vector3 from, Vector3 to) => PathTo(from, to, out _);
+
+        // Nearest NavMesh point within `radius` horizontally and `height` vertically.
+        private static bool Snap(Vector3 p, float radius, float height, out Vector3 snapped)
         {
-            // Both ends snapped to the NavMesh: a gun on a table or a body's root sits off it.
-            if (!NavMesh.SamplePosition(from, out NavMeshHit start, 2f, NavMesh.AllAreas)) return false;
-            if (!NavMesh.SamplePosition(to, out NavMeshHit end, 2f, NavMesh.AllAreas)) return false;
-            return NavMesh.CalculatePath(start.position, end.position, NavMesh.AllAreas, Path) &&
-                   Path.status == NavMeshPathStatus.PathComplete;
+            snapped = p;
+            if (!NavMesh.SamplePosition(p, out NavMeshHit hit, Mathf.Max(radius, height), NavMesh.AllAreas)) return false;
+            Vector3 d = hit.position - p;
+            if (Mathf.Abs(d.y) > height) return false;
+            d.y = 0f;
+            if (d.magnitude > radius) return false;
+            snapped = hit.position;
+            return true;
         }
     }
 }

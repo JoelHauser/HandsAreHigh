@@ -17,7 +17,7 @@ namespace HandsAreHigh
     {
         public const string PluginGuid = "com.joelhauser.handsarehigh";
         public const string PluginName = "Hands Are High";
-        public const string PluginVersion = "0.2.0";
+        public const string PluginVersion = "0.4.0";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").
@@ -25,6 +25,18 @@ namespace HandsAreHigh
         {
             "Assault", "CursAssault", "PMC", "PmcBear", "PmcUsec"
         };
+
+        // Boss and follower brains, from the game's own brain ShortName() strings (Assembly-CSharp
+        // 0.16.9). Only registered when "Bosses and followers can surrender" is on at startup.
+        private static readonly List<string> BossBrains = new List<string>
+        {
+            "BigPipe", "BirdEye", "BoarSniper", "BossBoar", "BossBully", "BossGluhar", "BossKojaniy", "BossKolontay",
+            "BossPartisan", "BossSanitar", "BossZryachiy", "Fl_Zraychiy", "FlKlnAslt", "FollowerBully",
+            "FollowerGluharAssault", "FollowerGluharProtect", "FollowerGluharScout", "FollowerKojaniy",
+            "FollowerSanitar", "Killa", "KillaAgro", "Knight", "KolonSec", "Tagilla", "TagillaAgro", "TagillaFollower"
+        };
+
+        internal static bool BossLayersRegistered;
 
         internal static ManualLogSource Log;
         private static readonly Dictionary<string, float> ErrorLoggedAt = new Dictionary<string, float>();
@@ -42,6 +54,11 @@ namespace HandsAreHigh
             // SurrenderLayer stays in every brain. It only activates for bots in the old
             // assembly's registry, so emptying that registry (below) leaves it inert.
             BrainManager.AddCustomLayer(typeof(SurrenderLayer), Brains, Settings.LayerPriority.Value);
+            if (Settings.IncludeBosses.Value)
+            {
+                BrainManager.AddCustomLayer(typeof(SurrenderLayer), BossBrains, Settings.LayerPriority.Value);
+                BossLayersRegistered = true;
+            }
             _teardown.Add(SurrenderRegistry.Clear);
             _teardown.Add(SainAdapter.Reset);
             _teardown.Add(OrderMenu.ClearNotes);

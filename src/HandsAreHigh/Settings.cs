@@ -19,6 +19,7 @@ namespace HandsAreHigh
         private const string Recovery = "08. Regroup and rearm";
         private const string Hiding = "09. Hiding and movement";
         private const string Interact = "10. Orders";
+        private const string Demand = "10. Stop demand";
         private const string Feedback = "11. Reactions and voice";
         private const string Pose = "12. Arm pose";
         private const string Compat = "13. Other mods";
@@ -28,6 +29,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> Enabled;
         internal static ConfigEntry<bool> NaturalSurrender;
         internal static ConfigEntry<bool> IncludePmcs;
+        internal static ConfigEntry<bool> IncludeBosses;
         internal static ConfigEntry<int> LayerPriority;
         // 02
         internal static ConfigEntry<float> NerveMin;
@@ -38,11 +40,9 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> SurrenderCooldown;
         internal static ConfigEntry<float> SurrenderDistance;
         internal static ConfigEntry<float> SeenWithin;
-        internal static ConfigEntry<float> PressureThreshold;
         internal static ConfigEntry<int> RequiredFactors;
-        internal static ConfigEntry<float> BaseChance;
-        internal static ConfigEntry<float> MaxChance;
         internal static ConfigEntry<float> NerveResistance;
+        internal static ConfigEntry<float> CurveStart;
         // 04
         internal static ConfigEntry<float> InjuryThreshold;
         internal static ConfigEntry<float> InjuryWeight;
@@ -57,9 +57,33 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> SquadMemory;
         internal static ConfigEntry<float> AloneFactor;
         internal static ConfigEntry<float> AllyRadius;
+        internal static ConfigEntry<float> VitalThreshold;
+        internal static ConfigEntry<float> SevereInjury;
+        internal static ConfigEntry<float> SeverePressure;
+        internal static ConfigEntry<float> SevereChanceBoost;
+        internal static ConfigEntry<float> PinnedLevel;
+        internal static ConfigEntry<float> PinnedPressure;
+        internal static ConfigEntry<float> NearMissRadius;
+        internal static ConfigEntry<float> NearMissRange;
+        internal static ConfigEntry<float> PromptCheckDelay;
         // 05
-        internal static ConfigEntry<float> ScavMultiplier;
-        internal static ConfigEntry<float> PmcMultiplier;
+        internal static ConfigEntry<float> ScavChance;
+        internal static ConfigEntry<float> ScavThreshold;
+        internal static ConfigEntry<float> ScavMax;
+        internal static ConfigEntry<float> PmcChance;
+        internal static ConfigEntry<float> PmcThreshold;
+        internal static ConfigEntry<float> PmcMax;
+        internal static ConfigEntry<float> BossChance;
+        internal static ConfigEntry<float> BossThreshold;
+        internal static ConfigEntry<float> BossMax;
+        // 10 Stop demand
+        internal static ConfigEntry<bool> DemandEnabled;
+        internal static ConfigEntry<KeyboardShortcut> DemandKey;
+        internal static ConfigEntry<float> DemandRange;
+        internal static ConfigEntry<float> DemandCooldown;
+        internal static ConfigEntry<float> DemandWindow;
+        internal static ConfigEntry<float> DemandPressure;
+        internal static ConfigEntry<float> DemandChanceBoost;
         internal static ConfigEntry<float> PersonalityMin;
         internal static ConfigEntry<float> PersonalityMax;
         internal static ConfigEntry<float> ArmourConfidence;
@@ -74,7 +98,9 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> BoltWhenShot;
         internal static ConfigEntry<bool> FastHolster;
         internal static ConfigEntry<float> DropRetrySeconds;
-        // 07
+        internal static ConfigEntry<bool> FinishReloadInstantly;
+        internal static ConfigEntry<float> FaceHysteresis;
+        internal static ConfigEntry<bool> ReleaseSainControl;
         internal static ConfigEntry<float> OpeningDelay;
         internal static ConfigEntry<float> BreakInterval;
         internal static ConfigEntry<float> BreakChance;
@@ -162,6 +188,8 @@ namespace HandsAreHigh
         internal static ConfigEntry<KeyboardShortcut> LeaveKey;
         internal static ConfigEntry<float> DebugKeyDistance;
         internal static ConfigEntry<float> DebugOpeningSeconds;
+        internal static ConfigEntry<KeyboardShortcut> ForceRunKey;
+        internal static ConfigEntry<KeyboardShortcut> ForceGrabKey;
         internal static ConfigEntry<bool> Overlay;
         internal static ConfigEntry<bool> VerboseLogs;
         internal static ConfigEntry<bool> NerveOverride;
@@ -180,7 +208,9 @@ namespace HandsAreHigh
             Enabled = c.Bind(General, "Enabled", true, "Off: no new surrenders, and bots already held are let go.");
             NaturalSurrender = c.Bind(General, "Bots surrender on their own", true,
                 "Hurt, pinned down, out of ammo, outnumbered or left alone, a bot may give up. Off: only the debug key starts a surrender.");
-            IncludePmcs = c.Bind(General, "PMCs can surrender", true, "Off: only Scavs. Bosses and followers never surrender.");
+            IncludePmcs = c.Bind(General, "PMCs can surrender", true, "Off: only Scavs.");
+            IncludeBosses = c.Bind(General, "Bosses and followers can surrender (restart)", false,
+                "Off (default): bosses and their followers never surrender. On: they can, but far more reluctantly than PMCs (section 05). Needs a game restart.");
             LayerPriority = c.Bind(General, "Layer priority (restart)", 95,
                 IntRange("BigBrain priority. SAIN uses 20-24 and 80, ORBIT 19.", 1, 200));
 
@@ -197,36 +227,73 @@ namespace HandsAreHigh
             SurrenderDistance = c.Bind(Natural, "Within (m)", 30f, Range("Only gives up to a player this close.", 1f, 100f));
             SeenWithin = c.Bind(Natural, "Seen within (s)", 3f,
                 Range("He must see that player now or have seen him this recently: a pinned-down man behind cover still knows where you are.", 0f, 15f));
-            PressureThreshold = c.Bind(Natural, "Pressure needed", 0.5f,
-                Range("Sum of the weighted reasons (section 04) before he rolls at all.", 0f, 1f));
-            RequiredFactors = c.Bind(Natural, "Reasons needed", 2, IntRange("How many separate reasons must apply at once.", 1, 5));
-            BaseChance = c.Bind(Natural, "Base chance", 0.08f, Range("Per check, times pressure, nerve, role, personality, kit and experience.", 0f, 1f));
-            MaxChance = c.Bind(Natural, "Max chance", 0.20f, Range("Per check, after everything.", 0f, 1f));
+            RequiredFactors = c.Bind(Natural, "Reasons needed", 2,
+                IntRange("How many separate reasons must apply at once (severe injury, being pinned down or a Stop demand count on their own).", 1, 5));
             NerveResistance = c.Bind(Natural, "Nerve resistance", 0.85f, Range("1: a bot with full nerve never gives up.", 0f, 1f));
+            CurveStart = c.Bind(Natural, "Chance starts at pressure", 0.3f,
+                Range("Below this pressure the chance is 0; it rises to the role's full base chance at pressure 1.", 0f, 0.9f));
 
             // 04 Pressure
             InjuryThreshold = c.Bind(Pressure, "Hurt below (health fraction)", 0.35f, Range("Where injury starts to count.", 0.05f, 1f));
-            InjuryWeight = c.Bind(Pressure, "Injury weight", 0.35f, Range("", 0f, 1f));
-            AmmoWeight = c.Bind(Pressure, "Out of ammo weight", 0.30f, Range("No rounds left for his gun and none to reload, or no gun at all.", 0f, 1f));
-            SuppressionWeight = c.Bind(Pressure, "Suppression weight", 0.35f,
-                Range("Incoming fire: hits and shots aimed close to him (and SAIN's suppression level if installed).", 0f, 1f));
+            InjuryWeight = c.Bind(Pressure, "Weight: injury", 0.45f, Range("", 0f, 1f));
+            AmmoWeight = c.Bind(Pressure, "Weight: out of ammo", 0.35f, Range("No rounds left for his gun and none to reload, or no gun at all.", 0f, 1f));
+            SuppressionWeight = c.Bind(Pressure, "Weight: suppression", 0.40f,
+                Range("Incoming fire: hits and shots passing close to him (and SAIN's suppression level if installed).", 0f, 1f));
             SuppressionHalfLife = c.Bind(Pressure, "Suppression half-life (s)", 4f, Range("How fast the effect of incoming fire fades.", 0.5f, 30f));
             SustainedFireEvents = c.Bind(Pressure, "Full suppression at (shots)", 6f,
                 Range("Recent shots at him (after fading) for the full suppression weight. One stray shot counts for little.", 1f, 30f));
-            OutnumberedWeight = c.Bind(Pressure, "Outnumbered weight", 0.20f, Range("", 0f, 1f));
+            OutnumberedWeight = c.Bind(Pressure, "Weight: outnumbered", 0.25f, Range("", 0f, 1f));
             OutnumberedRatio = c.Bind(Pressure, "Fully outnumbered at", 2f,
                 Range("Enemies per friendly (counting himself) for the full outnumbered weight.", 1.1f, 6f));
             EnemyMemory = c.Bind(Pressure, "Enemy counts for (s)", 10f,
                 Range("An enemy he saw this recently counts toward being outnumbered.", 1f, 60f));
-            SquadWeight = c.Bind(Pressure, "Squad weight", 0.30f, Range("Squadmates killed recently, or squad alive but none of them close.", 0f, 1f));
+            SquadWeight = c.Bind(Pressure, "Weight: squad", 0.30f, Range("Squadmates killed recently, or squad alive but none of them close.", 0f, 1f));
             SquadMemory = c.Bind(Pressure, "Squad loss counts for (s)", 30f, Range("", 1f, 180f));
             AloneFactor = c.Bind(Pressure, "Squad too far away", 0.5f,
                 Range("Squad factor when his squad is alive but nobody is within the ally radius.", 0f, 1f));
             AllyRadius = c.Bind(Pressure, "Allies within (m)", 40f, Range("", 5f, 150f));
+            VitalThreshold = c.Bind(Pressure, "Head or thorax below (fraction)", 0.4f,
+                Range("Injury also counts a badly hurt head or thorax, a destroyed limb and bleeding; the worst of these is used, never their sum.", 0.05f, 1f));
+            SevereInjury = c.Bind(Pressure, "Severe injury from", 0.6f,
+                Range("Injury this bad lets him consider surrender on its own, without a second reason. Still a roll; still nerve and personality.", 0.1f, 1.1f));
+            SeverePressure = c.Bind(Pressure, "Severe injury pressure floor", 0.6f, Range("", 0f, 1f));
+            SevereChanceBoost = c.Bind(Pressure, "Severe injury chance boost", 2f, Range("Times the per-check chance while severely injured.", 1f, 5f));
+            PinnedLevel = c.Bind(Pressure, "Pinned down from", 0.8f,
+                Range("Suppression this heavy (sustained fire close to him) also counts on its own, like severe injury. 1.1 turns it off.", 0.1f, 1.1f));
+            PinnedPressure = c.Bind(Pressure, "Pinned down pressure floor", 0.5f, Range("", 0f, 1f));
+            NearMissRadius = c.Bind(Pressure, "Near miss within (m)", 2f,
+                Range("A shot from an enemy passing this close to him (with nothing solid in between) counts as fire at him; closer counts more.", 0.25f, 6f));
+            NearMissRange = c.Bind(Pressure, "Near miss checked up to (m)", 150f, Range("", 10f, 500f));
+            PromptCheckDelay = c.Bind(Pressure, "Recheck after a hit within (s)", 0.5f,
+                Range("Being hit or shot at brings his next surrender check forward to this soon (at most every 1.5 s).", 0.1f, 5f));
 
             // 05 Who he is
-            ScavMultiplier = c.Bind(Role, "Scav multiplier", 1f, Range("", 0f, 3f));
-            PmcMultiplier = c.Bind(Role, "PMC multiplier", 0.65f, Range("", 0f, 3f));
+            // Role sets the base odds and the bar to clear. Per check (every 5 s, every 1.5 s under
+            // fire): chance = base x pressure curve x (1 - nerve resistance x nerve) x personality
+            // x kit x experience (x2 severe injury), capped at max.
+            ScavChance = c.Bind(Role, "Scav base chance", 0.35f,
+                Range("Scavs are hired guns with little to die for: at full pressure an average Scav gives up about 1 check in 6.", 0f, 1f));
+            ScavThreshold = c.Bind(Role, "Scav pressure needed", 0.4f, Range("Pressure a Scav needs (with enough reasons) before he rolls at all.", 0f, 1f));
+            ScavMax = c.Bind(Role, "Scav max chance", 0.5f, Range("Per check, after everything.", 0f, 1f));
+            PmcChance = c.Bind(Role, "PMC base chance", 0.12f,
+                Range("PMCs are trained and committed: about a third of a Scav's odds.", 0f, 1f));
+            PmcThreshold = c.Bind(Role, "PMC pressure needed", 0.55f, Range("", 0f, 1f));
+            PmcMax = c.Bind(Role, "PMC max chance", 0.25f, Range("", 0f, 1f));
+            BossChance = c.Bind(Role, "Boss and follower base chance", 0.03f,
+                Range("Only with Bosses and followers can surrender on (section 01).", 0f, 1f));
+            BossThreshold = c.Bind(Role, "Boss and follower pressure needed", 0.75f, Range("", 0f, 1f));
+            BossMax = c.Bind(Role, "Boss and follower max chance", 0.08f, Range("", 0f, 1f));
+
+            // 10 Stop demand
+            DemandEnabled = c.Bind(Demand, "Stop demand", false,
+                "Off by default. On: saying Stop (the game's own phrase, from the gesture/phrase menu or its quick bind) to a bot under your crosshair asks him to surrender. It brings his surrender check forward and adds pressure; it doesn't make him comply.");
+            DemandKey = c.Bind(Demand, "Shout Stop key", KeyboardShortcut.Empty,
+                "Optional, unbound by default. Makes your character say the game's Stop line and counts as the same demand.");
+            DemandRange = c.Bind(Demand, "Demand range (m)", 20f, Range("He must be under your crosshair, this close, with a clear line to you.", 2f, 60f));
+            DemandCooldown = c.Bind(Demand, "Demand cooldown (s)", 8f, Range("Per bot: repeated shouting within this time does nothing more.", 1f, 60f));
+            DemandWindow = c.Bind(Demand, "Demand lasts (s)", 6f, Range("How long the demand weighs on him (it doesn't stack).", 1f, 30f));
+            DemandPressure = c.Bind(Demand, "Demand pressure", 0.2f, Range("Added to his pressure while it lasts; also counts as a reason.", 0f, 1f));
+            DemandChanceBoost = c.Bind(Demand, "Demand chance boost", 1.5f, Range("Times his chance on the checks while it lasts.", 1f, 5f));
             PersonalityMin = c.Bind(Role, "Personality multiplier min", 0.5f, Range("Applied to the bravest SAIN personalities.", 0f, 3f));
             PersonalityMax = c.Bind(Role, "Personality multiplier max", 1.5f, Range("Applied to Cowards.", 0f, 3f));
             ArmourConfidence = c.Bind(Role, "Armour confidence", 0.3f,
@@ -248,7 +315,13 @@ namespace HandsAreHigh
             FastHolster = c.Bind(Coverage, "Fast weapon drop", true,
                 "Empties his hands with the game's quick holster (as in a fast weapon switch) before throwing the gun. Off: the normal holster animation.");
             DropRetrySeconds = c.Bind(Coverage, "Ask again after (s)", 1f,
-                Range("If the game hasn't emptied his hands by then, ask again. After 3 tries he fights instead.", 0.3f, 5f));
+                Range("If the game hasn't emptied his hands by then, check what is holding it up. One request at a time; after 3 tries he fights instead.", 0.3f, 5f));
+            FinishReloadInstantly = c.Bind(Coverage, "Cut a reload short", true,
+                "A magazine reload in progress can't be aborted (the game holds the drop until it ends). On: it is finished instantly the way the game itself does for bots (FastForwardCurrentState) and the gun drops at once. Off: he finishes the reload first.");
+            FaceHysteresis = c.Bind(Coverage, "Turn to you after (deg)", 4f,
+                Range("He re-aims his face only when you've moved this far around him, so he doesn't twitch with every step.", 0.5f, 30f));
+            ReleaseSainControl = c.Bind(Coverage, "Take control from SAIN", true,
+                "SAIN keeps steering and blocks the game's movement for a bot whose SAIN layer was active when he surrendered. On: SAIN is told its layer is no longer active (its own BotComponent.ActiveLayer = None) while he is held. No effect without SAIN.");
 
             // 07 Taking an opening
             OpeningDelay = c.Bind(Opening, "Opening must last (s)", 1.5f, Range("", 0f, 10f));
@@ -362,6 +435,10 @@ namespace HandsAreHigh
                 "The held bot under your crosshair acts as if you walked off.");
             DebugKeyDistance = c.Bind(Debug, "Surrender key range (m)", 60f, Range("", 2f, 200f));
             DebugOpeningSeconds = c.Bind(Debug, "Opening lasts (s)", 6f, Range("", 1f, 30f));
+            ForceRunKey = c.Bind(Debug, "Force run", new KeyboardShortcut(KeyCode.Backspace, KeyCode.LeftControl),
+                "Deterministic test: the held bot under your crosshair runs now (no roll).");
+            ForceGrabKey = c.Bind(Debug, "Force gun grab", new KeyboardShortcut(KeyCode.RightBracket, KeyCode.LeftControl),
+                "Deterministic test: the held bot under your crosshair scrambles for his dropped gun now (no roll), if it's there and reachable.");
             Overlay = c.Bind(Debug, "Overlay", false, "Lists every held bot: phase, order, nerve, arms.");
             VerboseLogs = c.Bind(Debug, "Verbose logs", false, "Logs every roll, including the ones that change nothing.");
             NerveOverride = c.Bind(Debug, "Override nerve", false, "Every bot uses the value below instead of his own roll, live.");

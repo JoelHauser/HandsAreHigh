@@ -20,6 +20,10 @@ namespace HandsAreHigh
             Player me = Singleton<GameWorld>.Instance?.MainPlayer;
             HandsAreHighPlugin.Try("order menu", () => _menu.Update(me));
 
+            // Gameplay, not debug: the optional Shout Stop key (unbound by default).
+            if (Settings.DemandEnabled.Value && Settings.DemandKey.Value.IsDown())
+                HandsAreHighPlugin.Try("stop key", () => StopDemand.Shout(me));
+
             if (!Settings.DebugKeys.Value) return;
             if (Settings.SurrenderKey.Value.IsDown())
                 HandsAreHighPlugin.Try("surrender key", () => DebugCommand("surrender", me));
@@ -27,6 +31,10 @@ namespace HandsAreHigh
                 HandsAreHighPlugin.Try("opening key", () => DebugCommand("opening", me));
             if (Settings.LeaveKey.Value.IsDown())
                 HandsAreHighPlugin.Try("leave key", () => DebugCommand("leave", me));
+            if (Settings.ForceRunKey.Value.IsDown())
+                HandsAreHighPlugin.Try("force run key", () => DebugCommand("force run", me));
+            if (Settings.ForceGrabKey.Value.IsDown())
+                HandsAreHighPlugin.Try("force grab key", () => DebugCommand("force grab", me));
         }
 
         // Every debug key acts on exactly one bot: the one under the crosshair, resolved once
@@ -59,7 +67,13 @@ namespace HandsAreHigh
             }
             else
             {
-                outcome = command == "opening" ? SurrenderRegistry.DebugOpening(s) : SurrenderRegistry.DebugLeave(s);
+                switch (command)
+                {
+                    case "opening": outcome = SurrenderRegistry.DebugOpening(s); break;
+                    case "force run": outcome = SurrenderRegistry.DebugForceRun(s); break;
+                    case "force grab": outcome = SurrenderRegistry.DebugForceGrab(s); break;
+                    default: outcome = SurrenderRegistry.DebugLeave(s); break;
+                }
             }
 
             string who = target != null ? target.Profile?.Nickname : null;

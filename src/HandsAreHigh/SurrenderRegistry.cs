@@ -19,6 +19,13 @@ namespace HandsAreHigh
         // Incoming fire (Suppression.cs): shots at him, faded by half-life from FireAt.
         internal float Fire;
         internal float FireAt;
+        internal float NearMissAt = -1000f;
+
+        // Stop demand (StopDemand.cs): who demanded, until when it weighs, and the cooldown.
+        internal Player DemandBy;
+        internal float DemandUntil;
+        internal float DemandCooldownUntil;
+        internal float PromptAt = -1000f;     // last time a hit / near miss brought a check forward
 
         // Cached kit assessment (Arsenal.AssessKit), refreshed every KitRecheck seconds.
         internal float KitAt = -1000f;
@@ -90,10 +97,12 @@ namespace HandsAreHigh
                 existing.CaptorLastSeen = captor.Position;
                 existing.WasHit = false;
                 existing.AimedBy = null;
+                existing.DebugOpeningUntil = 0f;
+                existing.FaceSet = false;
                 existing.SetPhase(Phase.HandsUp, reason);
-                bot.AIData?.BotOwner?.StopMove();
+                if (existing.Moving) { bot.AIData?.BotOwner?.StopMove(); existing.Moving = false; }
                 StartDrop(existing);
-                Voice.Say(existing, EPhraseTrigger.HoldFire);
+                Voice.Say(existing, VoiceEvent.Surrender);
                 return;
             }
 
@@ -121,34 +130,59 @@ namespace HandsAreHigh
             HandsAreHighPlugin.Try("stop shooting", () => owner?.ShootData?.EndShoot());
             HandsAreHighPlugin.Try("stop sprinting", () => owner?.Sprint(false));
             StartDrop(s);
-            Voice.Say(s, EPhraseTrigger.HoldFire);
+            Voice.Say(s, VoiceEvent.Surrender);
         }
 
-        // Empties his hands at once: a gun goes on the ground, a knife goes back in its sheath.
-        // The game's callback (hands empty) is what lets the arms rise, the same frame; no
-        // polling in between. Timeline logged when the arms are fully up (Tick).
+        // Empties his hands at once: a gun goes on the ground, a knife goes back in its sheath,
+        // anything else (meds, a grenade) is put away. The game's callback (hands empty) is what
+        // lets the arms rise, the same frame. Timeline logged when the arms are fully up (Tick).
         internal static void StartDrop(SurrenderState s)
         {
             s.TStart = Time.realtimeSinceStartup;
-            s.TDropRequested = s.THandsEmpty = s.TThrown = -1f;
+            s.TDropRequested = s.THandsEmpty = s.TThrown = s.TInterrupt = -1f;
+            s.HandsAtStart = Arsenal.DescribeHands(s.Bot);
             s.TimingLogged = false;
-            s.DropAttempts = 1;
+            s.DropAttempts = 0;
             s.DropSince = Time.time;
-            s.DropPending = !Arsenal.HandsFree(s.Bot);
+            s.HandsPending = false;
+            s.DropPending = !Arsenal.HandsEmpty(s.Bot);
             if (!s.DropPending) { s.THandsEmpty = s.TStart; return; }
             RequestDrop(s);
         }
 
+        // Is this callback still about the request that is current for this bot?
+        private static bool Current(SurrenderState s, int token) =>
+            s.Bot != null && States.TryGetValue(s.Bot, out SurrenderState now) && now == s && s.HandsToken == token;
+
+        // One request at a time: never while the previous one is unresolved (CheckDrop decides
+        // when an unanswered one is given up). A magazine reload in progress holds the hide
+        // until it ends (BaseReloadOperation.HideWeapon only stores the callback), so it is
+        // finished instantly with the game's own FastForwardCurrentState, which then runs
+        // the stored hide (ReloadExternalMagOperation.SwitchToIdlingState).
         internal static void RequestDrop(SurrenderState s)
         {
+            if (s.HandsPending || s.Bot == null) return;
+            int token = ++s.HandsToken;
+            s.HandsPending = true;
+            s.HandsSince = Time.time;
+            s.DropAttempts++;
+            if (s.TDropRequested < 0f) s.TDropRequested = Time.realtimeSinceStartup;
+
             HandsAreHighPlugin.Try("drop weapon in hands", () =>
             {
-                if (s.TDropRequested < 0f) s.TDropRequested = Time.realtimeSinceStartup;
                 Item dropped = Arsenal.EmptyHands(s.Bot,
                     onEmpty: () =>
                     {
+                        if (!Current(s, token)) return;
+                        s.HandsPending = false;
                         if (s.THandsEmpty < 0f) s.THandsEmpty = Time.realtimeSinceStartup;
                         s.DropPending = false;
+                    },
+                    onFailed: () =>
+                    {
+                        if (!Current(s, token)) return;
+                        s.HandsPending = false;
+                        HandsAreHighPlugin.Log.LogInfo($"{s.Name}: the game refused the hands change ({Arsenal.DescribeHands(s.Bot)})");
                     },
                     onThrown: ok =>
                     {
@@ -159,9 +193,27 @@ namespace HandsAreHigh
                 {
                     s.DroppedWeapon = dropped;
                     s.DropPosition = s.Bot.Position;
-                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: drops {dropped.ShortName.Localized()}");
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: drops {dropped.ShortName.Localized()} (hands were: {s.HandsAtStart}, request {s.DropAttempts})");
                 }
+                CutReload(s);
             });
+        }
+
+        internal static void CutReload(SurrenderState s)
+        {
+            if (!Settings.FinishReloadInstantly.Value || s.TInterrupt >= 0f) return;
+            if (!(s.Bot?.HandsController is Player.FirearmController fc) || !fc.IsInReloadOperation()) return;
+            s.TInterrupt = Time.realtimeSinceStartup;
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: mid-reload: the reload is finished instantly so the gun can drop now");
+            HandsAreHighPlugin.Try("finish reload", () => s.Bot.HandsController.FastForwardCurrentState());
+        }
+
+        // CheckDrop: the outstanding request got no answer in time. Forget it (its callback
+        // will be ignored) so a fresh one can be made.
+        internal static void AbandonRequest(SurrenderState s)
+        {
+            s.HandsToken++;
+            s.HandsPending = false;
         }
 
         // Debug keys: one bot only, resolved by the caller from the crosshair.
@@ -180,7 +232,22 @@ namespace HandsAreHigh
             // The opening has to last OpeningDelay like a real one; make the first roll due then.
             s.UnwatchedSince = Time.time;
             s.NextBreakRoll = 0f;
-            return $"not covered for {secs:0} s; his own rolls decide";
+            return $"not covered for {secs:0} s (you can keep aiming, it doesn't count); his own rolls decide";
+        }
+
+        internal static string DebugForceRun(SurrenderState s)
+        {
+            if (s.Phase != Phase.HandsUp) return $"not holding his hands up ({s.Phase})";
+            s.ForceRun = true;
+            return "runs now (forced, no roll)";
+        }
+
+        internal static string DebugForceGrab(SurrenderState s)
+        {
+            if (s.Phase != Phase.HandsUp) return $"not holding his hands up ({s.Phase})";
+            if (s.DroppedWeapon == null) return "didn't drop a gun";
+            s.ForceGrab = true;
+            return "goes for his gun now (forced, no roll); the log says if he can't";
         }
 
         // A held bot was shot or killed: others with their hands up who can see it run.
@@ -230,6 +297,7 @@ namespace HandsAreHigh
                 }
 
                 UpdateSuspension(bot, s);
+                Voice.Tick(s);
 
                 if (s.ArmsUp)
                 {
@@ -247,9 +315,10 @@ namespace HandsAreHigh
                 if (s.ArmsUp && s.Progress >= 1f && !s.TimingLogged && s.TStart > 0f)
                 {
                     s.TimingLogged = true;
-                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: hands up. Timeline from surrender: drop asked {Ms(s, s.TDropRequested)}, " +
-                        $"hands empty {Ms(s, s.THandsEmpty)} (game holster), gun on the ground {Ms(s, s.TThrown)}, arms up {Ms(s, Time.realtimeSinceStartup)} " +
-                        $"(raise {Settings.RaiseSeconds.Value:0.00} s), drop tries {s.DropAttempts}");
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: hands up. Timeline from surrender (hands were: {s.HandsAtStart}): " +
+                        $"drop asked {Ms(s, s.TDropRequested)}, reload cut {Ms(s, s.TInterrupt)}, " +
+                        $"hands empty {Ms(s, s.THandsEmpty)} (game hide animation), gun on the ground {Ms(s, s.TThrown)}, " +
+                        $"arms up {Ms(s, Time.realtimeSinceStartup)} (raise {Settings.RaiseSeconds.Value:0.00} s), requests {s.DropAttempts}");
                 }
 
                 if (s.Phase == Phase.Rearmed && s.Progress <= 0f) Finished.Add(bot);

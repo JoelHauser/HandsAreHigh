@@ -49,7 +49,28 @@ namespace HandsAreHigh
         // Drop timeline (Time.realtimeSinceStartup), logged once his arms are fully up, so the
         // game's own holster/throw latency can be told apart from our timers.
         internal float TStart = -1f, TDropRequested = -1f, THandsEmpty = -1f, TThrown = -1f;
+        internal float TInterrupt = -1f;        // reload fast-forwarded
+        internal string HandsAtStart;           // what his hands were doing when he gave up
         internal bool TimingLogged;
+
+        // One hands request at a time. Callbacks carry the token they were issued with and
+        // do nothing if a newer request (or a new surrender) replaced it.
+        internal int HandsToken;
+        internal bool HandsPending;
+        internal float HandsSince;
+
+        // Ownership while held: facing only re-aimed past a hysteresis; the mover is stopped
+        // once when he stands still, not every frame.
+        internal Vector3 FaceTarget;
+        internal bool FaceSet;
+        internal bool Moving;
+        internal Vector3 PathTarget;
+        internal bool SainReleased;
+
+        // Voice: one pending event, played when the speaker is free.
+        internal VoiceEvent? PendingVoice;
+        internal float PendingVoiceUntil;
+        internal float NextSurrenderVoice;
 
         // Rearming.
         internal readonly HashSet<Item> Skip = new HashSet<Item>();   // guns he failed to reach or take
@@ -95,6 +116,8 @@ namespace HandsAreHigh
         internal bool Suspended;        // asleep (ORBIT Ghost Mode) or otherwise inactive
         internal float DebugOpeningUntil;   // debug key: treated as not covered until then (this bot only)
         internal bool ForcedLeave;          // debug key: this bot only
+        internal bool ForceRun;             // debug key: deterministic run
+        internal bool ForceGrab;            // debug key: deterministic scramble
         internal float NextVoice;
 
         // quiet: routine repeats (hiding and looking again every few seconds) only go to the

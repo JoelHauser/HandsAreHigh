@@ -125,17 +125,17 @@ namespace HandsAreHigh
                 case OrderKind.Follow:
                     s.Order = Order.Follow;
                     Notify($"{s.Name} follows you, hands up");
-                    Voice.Say(s, EPhraseTrigger.Roger);
+                    Voice.Say(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Kneel:
                     s.Order = Order.Kneel;
                     Notify($"{s.Name} gets down");
-                    Voice.Say(s, EPhraseTrigger.Roger);
+                    Voice.Say(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Stay:
                     s.Order = Order.None;
                     Notify($"{s.Name} stays put");
-                    Voice.Say(s, EPhraseTrigger.Roger);
+                    Voice.Say(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Leave:
                     Notify($"{s.Name} is let go");
@@ -152,7 +152,7 @@ namespace HandsAreHigh
             if (items.Count == 0)
             {
                 Notify($"{s.Name} has nothing like that on him");
-                Voice.Say(s, EPhraseTrigger.Negative);
+                Voice.Say(s, VoiceEvent.Refuse);
                 return;
             }
             foreach (var kv in items)
@@ -162,7 +162,7 @@ namespace HandsAreHigh
             }
             s.NextDropAt = Time.time + 0.3f;
             Notify($"{s.Name}: {name} ({items.Count} item(s))");
-            Voice.Say(s, EPhraseTrigger.Roger);
+            Voice.Say(s, VoiceEvent.Acknowledge);
         }
 
         internal void OnGUI()
