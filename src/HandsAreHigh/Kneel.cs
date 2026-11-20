@@ -218,12 +218,8 @@ namespace HandsAreHigh
         }
 
         // How far his hands are behind his head (0..1), for the head look's limits.
-        internal static float HandsWeight(SurrenderState s)
-        {
-            KneelStyle st = s.KneelStyle;
-            if (st == null || s.Kneel == KneelPhase.Standing || Off(KneelPoseIsolate.Hands)) return 0f;
-            return Ss(st.HandsA, st.HandsB, s.KneelT) * s.Weight * Settings.HandsBehindHeadStrength.Value;
-        }
+        // 0.16.0: the hand-position order's own weight (HandsPose), standing or kneeling.
+        internal static float HandsWeight(SurrenderState s) => HandsPose.Weight(s);
 
         // Sprinting waits for the hand-back blend: never a sprint cycle under a kneeling pose.
         internal static bool SprintAllowed(SurrenderState s) => s == null || (s.Kneel == KneelPhase.Standing && s.KneelFade <= 0f);
@@ -283,7 +279,9 @@ namespace HandsAreHigh
             s.KneelFaceSet = false;
             s.KneelFaceSince = -1f;
             s.KneelFaceLogged = false;
-            if (Settings.FaceCaptor.Value && by != null && s.Bot != null)
+            // 0.16.0: turned away on an order, he kneels the way he was told to face.
+            if ((s.TurnedAway || s.Turning) && s.TurnDir.sqrMagnitude > 0.5f) { s.KneelFaceDir = s.TurnDir; s.KneelFaceSet = true; }
+            else if (Settings.FaceCaptor.Value && by != null && s.Bot != null)
             {
                 Vector3 d = by.Position - s.Bot.Position; d.y = 0f;
                 if (d.sqrMagnitude > 0.25f) { s.KneelFaceDir = d.normalized; s.KneelFaceSet = true; }
@@ -296,7 +294,7 @@ namespace HandsAreHigh
                 Fallback(s, why);
                 return $"{s.Name} can't kneel ({why}): {(Settings.KneelFallbackCrouch.Value ? "crouches" : "stays standing")}, hands up";
             }
-            return $"{s.Name} gets down on his knees, hands behind his head";
+            return $"{s.Name} gets down on his knees, {(s.HandsOnHead ? "hands behind his head" : "hands up")}";
         }
 
         // The layer, as it commits to an action that needs his legs (or his hands): what kind of
@@ -389,7 +387,8 @@ namespace HandsAreHigh
                     if (!Settings.KneelEnabled.Value) { Fallback(s, "kneeling is off in the config"); break; }
                     if (s.KneelSpotMoving) { SpotWalk(s, now); break; }
                     if (s.KneelSearchI >= 0) { SearchSpot(s); break; }
-                    TurnRoot(s, dt, now);
+                    // 0.17.0: the turn to KneelFaceDir is TurnDriver's (Facing.Update), with the
+                    // game's stepping turn for a big one; TurnRoot's pivot is no longer used.
                     TryBegin(s, now);
                     break;
 
@@ -416,7 +415,7 @@ namespace HandsAreHigh
                         s.KneelVel = 0f;
                         s.KneelBrace = false;
                         s.Kneel = KneelPhase.Down;
-                        Log(s, $"kneel: on his knees, hands behind his head ({s.KneelStyle.Name}; {Timeline(s)})");
+                        Log(s, $"kneel: on his knees, {(s.HandsOnHead ? "hands behind his head" : "hands up")} ({s.KneelStyle.Name}; {Timeline(s)})");
                         s.KneelTestNextAt = now + 1.2f;
                     }
                     break;
@@ -652,6 +651,8 @@ namespace HandsAreHigh
             KneelBraceChoice c = Settings.KneelTestBrace.Value;
             if (c == KneelBraceChoice.Never) { why = "off (debug choice)"; return false; }
             if (s.DrawPending || s.HandsPending || s.DropPending) { why = "no: his hands are busy"; return false; }
+            // 0.16.0: told to keep his hands on his head, he stands up without them (no brace).
+            if (s.HandsOnHead && s.Phase == Phase.HandsUp) { why = "no: his hands stay on his head"; return false; }
             // Without the finger bones the wrist can't be laid flat: the fingers would go into
             // the thigh. The rise goes ahead without the brace.
             if (s.Rig == null || !s.Rig.HandOk) { why = "no: no finger bones in this rig to lay the hand flat"; return false; }
@@ -784,7 +785,7 @@ namespace HandsAreHigh
         // for the root). Standing, hands up, not moving: a turn on the spot, bounded in time.
         private const float FaceTurnSpeed = 150f;   // deg/s
         private const float FaceTolerance = 10f;
-        private const float FaceTurnLimit = 2.5f;   // s: then he kneels the way he faces
+        private const float FaceTurnLimit = 6f;     // s: then he kneels the way he faces (a step turn takes ~1 s per 90 deg)
 
         internal static bool PreTurn(SurrenderState s, out Vector3 dir)
         {
@@ -816,6 +817,7 @@ namespace HandsAreHigh
         private static bool FacingSettled(SurrenderState s, float now)
         {
             if (!s.KneelFaceSet) return true;
+            if (s.KneelFaceSince < 0f) s.KneelFaceSince = now;
             float off = Mathf.Abs(FaceOff(s));
             if (off <= FaceTolerance)
             {
@@ -1599,6 +1601,20 @@ namespace HandsAreHigh
             return v.sqrMagnitude > 1e-6f ? v.normalized : fallback;
         }
 
+        // Shoulder-to-hand distance kept to what an elbow angle of 25 deg (fully folded) to 160 deg
+        // (nearly straight, ~0.99 of the arm's length) gives: a two-bone solve then always has a
+        // real, bent elbow.
+        internal static Vector3 ClampReach(Vector3 shoulder, Vector3 target, float a, float b)
+        {
+            Vector3 d = target - shoulder;
+            float m = d.magnitude;
+            if (m < 1e-4f) return target;
+            float max = Mathf.Sqrt(a * a + b * b - 2f * a * b * Mathf.Cos(160f * Mathf.Deg2Rad));
+            float min = Mathf.Sqrt(a * a + b * b - 2f * a * b * Mathf.Cos(25f * Mathf.Deg2Rad));
+            float want = Mathf.Clamp(m, min, max);
+            return Mathf.Approximately(want, m) ? target : shoulder + d * (want / m);
+        }
+
         internal static void TwoBone(Vector3 root, Vector3 target, float a, float b, Vector3 hint, out Vector3 joint, out Vector3 end)
         {
             Vector3 axis = target - root;
@@ -1650,17 +1666,17 @@ namespace HandsAreHigh
         // over the last 65%. Offline: elbow twist 0, palm 0 deg from the skull, palm centre and
         // fingertips >= 3.5 cm clear (helmet incl.), wrist bend 25-45 deg, elbow 105-130 deg, no
         // elbow flips, hand/elbow steps <= 0.75 cm per 1/120 of the move.
+        // 0.16.0: standing too (Hands on head); the weight is the hand-position order's (HandsPose),
+        // which keeps each kneel style's own hand timing while he goes down or gets up.
         internal static void ApplyHands(Player p, SurrenderState s)
         {
-            KneelStyle st = s.KneelStyle;
-            if (st == null || s.Kneel == KneelPhase.Standing || Off(KneelPoseIsolate.Hands)) return;
-            float h = Ss(st.HandsA, st.HandsB, s.KneelT) * s.Weight * Settings.HandsBehindHeadStrength.Value;
+            float h = HandsPose.Weight(s);
             if (h <= 0.001f) return;
             PlayerBones b = p.PlayerBones;
             if (b?.Upperarms == null || b.Forearms == null || b.Head == null || b.Ribcage == null) return;
             if (!ArmPose.TorsoFrame(p, b, out Vector3 right, out Vector3 up, out Vector3 fwd)) return;
 
-            float helmet = s.KneelHelmet ? Settings.HelmetExtra.Value : 0f;
+            float helmet = HandsPose.Helmet(s) ? Settings.HelmetExtra.Value : 0f;
             // The head may be turned (Presence.ApplyHead, applied just before): the skull centre,
             // the hands' place on it and the elbows' lead turn with it, so the clearance round the
             // skull (and helmet) is kept wherever he looks.
@@ -1701,6 +1717,11 @@ namespace HandsAreHigh
                 // bends the way an elbow bends all the way there; then the arm on its own hinge.
                 Vector3 bendNow = Perp(el - sh, pa - sh, right * side);
                 Vector3 bendOut = (rightL * (side * elbowsOut) + fwd * 0.35f + up * 0.25f).normalized;
+                // 0.16.0: an arm never straightens to make contact (a locked elbow behind the head is
+                // not a pose people hold) nor folds tighter than an elbow bends: the hand stops
+                // short of an unreachable point instead (anatomy over exact contact), and nothing
+                // else (neck, spine) is bent to reach it.
+                pos = ClampReach(sh, pos, a, c);
                 TwoBone(sh, pos, a, c, Vector3.Slerp(bendNow, bendOut, h), out Vector3 elbow, out Vector3 wrist);
                 ArmPose.PoseArm(upper, fore, palm, elbow - sh, wrist - elbow, s, hi, 1f, roll);
 
@@ -1872,6 +1893,13 @@ namespace HandsAreHigh
             s.KneelTestBy = me;
             string r = Give(s, during == KneelInterruptDuring.GoingDown ? OrderKind.Kneel : OrderKind.Stand, me);
             return $"{r}; {Settings.KneelTestInterrupt.Value} at {Settings.KneelTestAt.Value:0.00} of {during}";
+        }
+
+        // 0.16.0: Hands on head / Hands up / Turn around from the debug keys (the menu's path).
+        internal static string DebugOrder(SurrenderState s, OrderKind k, Player me)
+        {
+            s.KneelTestLeft = 0;
+            return Give(s, k, me);
         }
 
         private static string Give(SurrenderState s, OrderKind k, Player me) =>

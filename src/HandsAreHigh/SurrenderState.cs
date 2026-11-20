@@ -107,6 +107,55 @@ namespace HandsAreHigh
         internal string ArmedPending;
         internal float ArmedPendingSince;
 
+        // 0.16.0: where his hands are, an order of its own (posture is Order / Kneel). HeadHands is
+        // the eased 0..1 the pose uses (HandsPose.Update); HandsOrdered: an explicit hands order was
+        // given this surrender (a later Get down then keeps them where they are).
+        internal bool HandsOnHead;
+        internal bool HandsOrdered;
+        internal float HeadHands;
+        internal bool HeadHandsLogged;
+        internal bool HeadHelmet;
+
+        // 0.16.0: Turn around (Facing.cs). TurnDir is fixed when the order is taken (away from where
+        // the issuer stood then); he turns to it, then stays facing it until a new facing order,
+        // a follow, or the end of this surrender. TurnReKneel: he got up to turn and kneels again.
+        internal bool Turning, TurnedAway, TurnReKneel;
+        internal Vector3 TurnDir;
+        internal float TurnSince = -1f;
+        internal Player TurnBy;
+        // 0.17.0: TurnDriver (the game's stepping turn or a pivot). TrunkLimitOrig >= 0 while his
+        // TrunkRotationLimit is raised for a step turn (always restored: TurnDriver.Stop).
+        internal int DriveMode, DriveFrame = -10;
+        internal float DriveSince, DriveYaw0, TrunkLimitOrig = -1f;
+        internal Vector3 DriveLook;
+        internal string DriveWhat;
+        internal bool NoStepTurn;
+
+        // 0.16.0: what the last Drop your weapons did (Compliance.cs): what he really dropped,
+        // what he kept back on purpose (never anything he doesn't carry), and how many times the
+        // demand was made. Disarmed only when his weapon slots really are empty (Compliance.Disarmed).
+        internal readonly List<Item> KeptBack = new List<Item>(2);
+        internal readonly List<Item> Dropped = new List<Item>(4);
+        internal int Demands;
+        internal float LastDemandAt = -1000f;
+        internal bool Deceiving;            // kept a weapon on purpose this surrender (weighs his draw later)
+        internal string ComplianceWhy;      // the last decision, for the report line
+        internal float EscalateAt;          // > 0: he goes for what he kept at this time (Compliance)
+        internal float DemandDoneAt = -1f;  // a Drop your weapons answered (dropped, partly, refused): a captor judges it once
+
+        // 0.17.0: a committed flight (BeginRetreat): where he was held (not where his captor was last
+        // seen), legs taken to get out of that area, when the flight started, and until when he
+        // won't go back for a gun lying in that area.
+        internal Vector3 HeldAt, FleeFrom;
+        internal bool HeldSet;
+        internal int FleeLegs, FleeReplans;
+        internal float FleeSince = -1f, LegSince, FleeLockUntil, NextFleeCheck;
+        internal bool FleeLockLogged;
+
+        // 0.16.0: who hit him last (BeingHitAction), for the death report: decided or a leak.
+        internal Player LastHitBy;
+        internal float LastHitAt = -1000f;
+
         // The surrender as an offer (0.9.0). Accepted: the captor has acknowledged it (a human came
         // within AcknowledgeDistance in sight, aimed at him a moment, or gave an order; a bot took
         // custody). Until then it lasts until OfferUntil (longer while the captor closes in), then
@@ -368,7 +417,17 @@ namespace HandsAreHigh
             KneelTestLeft = 0;
             KneelTestArmed = false;
             ForceDraw = false;
-            OfferUntil = Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * Nerve);
+            // 0.16.0: hands back up, facing free, demands start again (what he carries is real
+            // inventory and is never reset: KeptBack is rebuilt from it at the next demand).
+            HandsOnHead = false;
+            HandsOrdered = false;
+            HeadHandsLogged = false;
+            Facing.Clear(this);
+            Demands = 0;
+            LastDemandAt = -1000f;
+            ComplianceWhy = null;
+            EscalateAt = 0f;
+            OfferUntil =Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * Nerve);
             Gestures.Cancel(this, "new surrender");
         }
 
@@ -393,6 +452,10 @@ namespace HandsAreHigh
                 DecideAt = -1f;
                 LeaveAt = -1f;
                 DrawCommitUntil = 0f;
+                // 0.16.0: acting for himself: his hands come off his head (the arms come down with
+                // the phase), and nothing holds his facing any more.
+                HandsOnHead = false;
+                Facing.Clear(this);
             }
             PhaseSince = Time.time;
             NextMoveOrder = 0f;
@@ -428,6 +491,7 @@ namespace HandsAreHigh
         // Runs: arms down (fast if hurt), grace before he can be caught, orders cancelled.
         internal void BeginRetreat(string reason, bool emergency)
         {
+            MarkFlight();
             // On his knees: a bolt needs the fastest rise he can manage; being let go, a calm one.
             HandsAreHigh.Kneel.Urge(this, emergency ? KneelRise.Escape : KneelRise.Compliant);
             LowerArms(emergency ? Settings.EmergencyLowerSeconds.Value : Settings.LowerSeconds.Value);
@@ -436,6 +500,22 @@ namespace HandsAreHigh
             DropQueue.Clear();
             ReportAt = -1f;
             SetPhase(Phase.Retreating, reason);
+        }
+
+        // 0.17.0: leaving his captivity: remember where it was (once per flight from his hands up).
+        internal void MarkFlight()
+        {
+            if (Phase != Phase.HandsUp || Bot == null) return;
+            float now = Time.time;
+            HeldAt = Bot.Position;
+            HeldSet = true;
+            FleeFrom = Bot.Position;
+            FleeLegs = 0;
+            FleeReplans = 0;
+            FleeSince = now;
+            LegSince = now;
+            FleeLockUntil = now + Settings.FleeCommit.Value;
+            FleeLockLogged = false;
         }
 
         internal void LowerArms(float seconds)

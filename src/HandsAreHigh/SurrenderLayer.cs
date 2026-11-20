@@ -178,10 +178,17 @@ namespace HandsAreHigh
             // 0.15.0: about to kneel, he turns to the direction fixed when he took the order (not
             // to wherever his captor has walked since); Kneel turns his root to it (the game turns a
             // bot's root only once his look is 45 deg off, so a look alone never settled him).
-            if (Kneel.PreTurn(s, out Vector3 kneelDir))
-                BotOwner.Steering.LookToDirection(kneelDir, 360f);
-            else if (Settings.FaceCaptor.Value && captorAlive && !Kneel.Active(s))
-                Face(s, ThreatPos(s, captor) + Vector3.up * 1.6f);
+            // 0.16.0: told to turn around, he faces the way he was told (Facing): the captor-facing
+            // below would undo the order at once.
+            // 0.17.0: his body is turned by TurnDriver (Facing.Update: the game's stepping turn for
+            // big turns, a pivot for small ones); the look it needs is applied here. The captor-facing
+            // target is only updated (FaceTarget): looking straight at a man 120 deg round would make
+            // the game snap his root (or twist his trunk) instead of stepping round.
+            bool facing = Settings.FaceCaptor.Value && captorAlive && !Kneel.Active(s);
+            if (facing) AimAt(s, ThreatPos(s, captor) + Vector3.up * 1.6f);
+            if (Facing.Look(s, BotOwner)) { }
+            else if (Kneel.PreTurn(s, out Vector3 kneelDir)) BotOwner.Steering.LookToDirection(kneelDir, 360f);
+            else if (facing) BotOwner.Steering.LookToPoint(s.FaceTarget);
 
             ProcessDropQueue(s);
             if (!check) return;
@@ -203,6 +210,19 @@ namespace HandsAreHigh
                 float q = ScrambleQuality(s, captor.Position, Perception.Eye(captor), out string qWhy, forced: true);
                 if (q > 0f) { StartScramble(s, captor.Position, $"debug: forced, {qWhy}"); MarkKneelEscape(s, "scramble"); }
                 else HandsAreHighPlugin.Log.LogInfo($"{s.Name}: forced grab not possible: {qWhy}");
+                return;
+            }
+            // 0.16.0: told again to hand over what he kept, a bold man went for it instead
+            // (Compliance): the real draw (or knife), after his own reaction time; the readiness
+            // checks and the hand-off to the AI are the same as for any draw.
+            if (s.EscalateAt > 0f && Time.time >= s.EscalateAt)
+            {
+                s.EscalateAt = 0f;
+                bool knife = Arsenal.GunOnBody(Me) == null && Arsenal.HasMelee(Me);
+                if (knife ? Arsenal.Draw(s, BotOwner, true) : Arsenal.Draw(s, BotOwner, false))
+                    Rearm(s, $"refuses to hand over his {(knife ? "knife" : Arsenal.SlotName(Arsenal.GunOnBody(Me)))} and goes for it");
+                else if (!knife && Arsenal.GunOnBody(Me) != null) CommitDraw(s, Arsenal.SlotName(Arsenal.GunOnBody(Me)));
+                else HandsAreHighPlugin.Log.LogInfo($"{s.Name}: was going for what he kept, but it isn't on him any more; keeps his hands up");
                 return;
             }
             if (s.ForceDraw)
@@ -561,6 +581,7 @@ namespace HandsAreHigh
         // running. Hiding then crouches, watches and decides again (Regrouping).
         private void BeginHide(SurrenderState s, Vector3 threat, string why)
         {
+            s.MarkFlight();   // 0.17.0: slipping into cover is leaving captivity too (no going back for the gun)
             Kneel.Urge(s, KneelRise.Escape);
             s.LowerArms(Settings.EmergencyLowerSeconds.Value);
             s.GraceUntil = Time.time + Settings.Grace.Value;
@@ -730,8 +751,9 @@ namespace HandsAreHigh
             bool lunge = dist <= 2.5f;
             if (gun == null) log.Append("draw: no gun on him; ");
             else if (dist > Settings.SidearmRange.Value) log.Append($"draw: you're beyond {Settings.SidearmRange.Value:0} m; ");
-            else Add(options, log, "draw " + Arsenal.SlotName(gun) + (lunge ? " (at arm's reach)" : ""),
-                Settings.DrawWeight.Value * (0.4f + nerve) * fight * (allies > 0 ? 1.2f : 1f) * (1f - 0.4f * s.Injury) * drawK * (lunge ? 0.7f : 1f));
+            else Add(options, log, "draw " + Arsenal.SlotName(gun) + (lunge ? " (at arm's reach)" : "") + (s.Deceiving ? " (kept back for this)" : ""),
+                Settings.DrawWeight.Value * (0.4f + nerve) * fight * (allies > 0 ? 1.2f : 1f) * (1f - 0.4f * s.Injury) * drawK * (lunge ? 0.7f : 1f) *
+                (s.Deceiving ? Settings.KeptDrawBoost.Value : 1f));
 
             if (gun != null) log.Append("knife: has a gun to draw; ");
             else if (!Arsenal.HasMelee(Me)) log.Append("knife: none; ");
@@ -890,6 +912,7 @@ namespace HandsAreHigh
             s.CaptorLastSeen = captor.Position;
             s.CaptorHiddenSince = -1f;
             s.Order = backDown ? Order.Kneel : Order.None;
+            if (backDown && Settings.KneelHandsOnHead.Value && !s.HandsOrdered) s.HandsOnHead = true;   // 0.16.0: as a Get down
             s.KneelFallback = null;
             s.KneelMoves = 0;
             s.RaiseArms();
@@ -1025,7 +1048,10 @@ namespace HandsAreHigh
                 string msg = kept == 0
                     ? $"{s.Name} did it: {done} item(s) dropped"
                     : $"{s.Name} dropped {done} of {s.Ordered.Count}; {kept} wouldn't come off";
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: order '{s.OrderName}': {msg}");
+                // 0.16.0: what really happened, item by item (and what he kept back on purpose:
+                // in the log only, never on screen or to a captor who couldn't see it).
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: order '{s.OrderName}': {msg}{Compliance.OnDropReport(s)}");
+                if (s.OrderName == "drop your weapons") s.DemandDoneAt = Time.time;
                 if (s.OrderByHuman) OrderMenu.Notify(msg, kept == 0 ? NoteKind.Success : NoteKind.Error);
                 if (kept > 0) Voice.Say(s, VoiceEvent.Refuse);
             }
@@ -1058,19 +1084,72 @@ namespace HandsAreHigh
             }
             if (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value))
             {
-                Regroup(s, "got away");
+                LegDone(s, "got there");
                 return;
             }
-            if (Time.time - s.PhaseSince > Settings.RetreatTimeout.Value)
-                Regroup(s, "ran out of time running");
+            if (Time.time - s.LegSince > Settings.RetreatTimeout.Value)
+            {
+                LegDone(s, "ran out of time on this leg");
+                return;
+            }
+            // 0.17.0: the threat he can see now stands by where he is heading: a new destination
+            // (at most twice a leg, checked once a second).
+            if (Time.time >= s.NextFleeCheck && s.FleeReplans < 2)
+            {
+                s.NextFleeCheck = Time.time + 1f;
+                Player c = s.Captor;
+                if (Perception.Alive(c) && Perception.Flat(c.Position, s.TargetPoint) < 10f && Perception.Sees(Me, c, Vector3.Distance(Me.Position, c.Position)) && Perception.TakeHeavy())
+                {
+                    s.FleeReplans++;
+                    s.CaptorLastSeen = c.Position;
+                    if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {Restraint.Name(c)} is {Perception.Flat(c.Position, s.TargetPoint):0} m from where he is running to: another way");
+                    if (PickRetreat(s)) { s.NextMoveOrder = -1f; ResetProgress(s); }
+                }
+            }
         }
 
+        // 0.17.0: out of the captivity area (FleePoint), or the next leg towards it through cover.
         private bool PickRetreat(SurrenderState s)
         {
-            if (Perception.RetreatPoint(Me, s.CaptorLastSeen, Settings.RetreatDistance.Value, false, out s.TargetPoint))
+            if (!s.HeldSet) { s.HeldAt = Me.Position; s.HeldSet = true; s.FleeSince = s.LegSince = Time.time; s.FleeFrom = Me.Position; }
+            float radius = Settings.CaptivityRadius.Value;
+            Vector3 threat = Perception.Alive(s.Captor) && Perception.Sees(Me, s.Captor, Vector3.Distance(Me.Position, s.Captor.Position)) ? s.Captor.Position : s.CaptorLastSeen;
+            if (Perception.FleePoint(Me, threat, s.HeldAt, radius, out s.TargetPoint, out bool leg, out string why))
+            {
+                if (Settings.LogDecisions.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: flees to a spot {Perception.Flat(s.TargetPoint, Me.Position):0} m away, {Perception.Flat(s.TargetPoint, s.HeldAt):0} m from where he was held " +
+                        $"({(leg ? $"a leg through cover {s.FleeLegs + 1}: no way straight out of {radius:0} m" : $"out of the {radius:0} m area")}; {Perception.Flat(s.TargetPoint, threat):0} m from the threat, " +
+                        $"{(Perception.LineClear(threat + Vector3.up * 1.5f, s.TargetPoint + Vector3.up * 1.2f) ? "in its sight" : "hidden from it")})");
                 return true;
+            }
+            if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {why}");
             GoHide(s, "no way out");
             return false;
+        }
+
+        // 0.17.0: a leg reached, or out of time on it: on out of the area, or done.
+        private void LegDone(SurrenderState s, string why)
+        {
+            float radius = Settings.CaptivityRadius.Value;
+            float sep = Perception.Flat(Me.Position, s.HeldAt);
+            if (sep < radius && s.FleeLegs < 4)
+            {
+                s.FleeLegs++;
+                s.LegSince = Time.time;
+                s.FleeReplans = 0;
+                if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {why} {sep:0} m from where he was held, still inside {radius:0} m: keeps going (leg {s.FleeLegs + 1})");
+                s.NextMoveOrder = 0f;
+                ResetProgress(s);
+                return;
+            }
+            EndFlight(s, sep >= radius ? why : $"{why}, after {s.FleeLegs + 1} legs");
+            Regroup(s, why);
+        }
+
+        private void EndFlight(SurrenderState s, string why)
+        {
+            if (!Settings.LogDecisions.Value || s.FleeSince < 0f) return;
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: retreat ends ({why}): {Perception.Flat(Me.Position, s.HeldAt):0} m from where he was held, {Perception.Flat(Me.Position, s.FleeFrom):0} m covered in {Time.time - s.FleeSince:0} s, {s.FleeLegs + 1} leg(s)");
         }
 
         // Stuck or blocked: a few fresh routes, then hide where he is.
@@ -1117,8 +1196,18 @@ namespace HandsAreHigh
                 return;
             }
 
+            // 0.17.0: fled from captivity: no going back into that area for a gun until the commitment
+            // runs out (no escape, linger, recapture loop). Weapons he carries stay options (above).
+            bool committed = s.HeldSet && Time.time < s.FleeLockUntil;
+            float area = Settings.CaptivityRadius.Value;
+            bool ownInArea = committed && s.DroppedWeapon != null && Perception.Flat(s.DropPosition, s.HeldAt) < area;
+            if (ownInArea && !s.FleeLockLogged && Settings.LogDecisions.Value)
+            {
+                s.FleeLockLogged = true;
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his {s.DroppedWeapon.ShortName.Localized()} lies where he was held: not going back for it for {s.FleeLockUntil - Time.time:0} s");
+            }
             // What he believes: unless he saw it gone, his gun is where he dropped it.
-            if (Settings.RecoverOwnWeapon.Value && s.DroppedWeapon != null && !s.Skip.Contains(s.DroppedWeapon) &&
+            if (!ownInArea && Settings.RecoverOwnWeapon.Value && s.DroppedWeapon != null && !s.Skip.Contains(s.DroppedWeapon) &&
                 Vector3.Distance(s.DropPosition, s.CaptorLastSeen) > Settings.AvoidRadius.Value &&
                 !s.GunGone &&
                 Perception.Reachable(Me.Position, s.DropPosition))
@@ -1138,6 +1227,12 @@ namespace HandsAreHigh
                 Item found = Arsenal.FindWeapon(Me, s.CaptorLastSeen, Settings.ScavengeAvoid.Value,
                     Settings.ScavengeRadius.Value, s.Skip, out Vector3 at);
                 if (found == null) s.NextScavengeScan = Time.time + 20f;
+                if (found != null && committed && Perception.Flat(at, s.HeldAt) < area)
+                {
+                    // In the area he just fled: not now (looked at again once the commitment ends).
+                    s.NextScavengeScan = s.FleeLockUntil;
+                    found = null;
+                }
                 if (found != null)
                 {
                     if (Perception.Reachable(Me.Position, at))
@@ -1394,6 +1489,19 @@ namespace HandsAreHigh
         // Facing the captor: the look point only moves when he has moved more than
         // FaceHysteresis degrees around the bot, and it's his body (not his bobbing head bone),
         // so the turn is one smooth steering target instead of a new one every frame.
+        // The facing target only (hysteresis as Face), no look.
+        private void AimAt(SurrenderState s, Vector3 point)
+        {
+            Vector3 me = Me.Position;
+            Vector3 want = point - me; want.y = 0f;
+            Vector3 have = s.FaceTarget - me; have.y = 0f;
+            if (!s.FaceSet || have.sqrMagnitude < 0.01f || Vector3.Angle(have, want) > Settings.FaceHysteresis.Value)
+            {
+                s.FaceTarget = point;
+                s.FaceSet = true;
+            }
+        }
+
         private void Face(SurrenderState s, Vector3 point)
         {
             Vector3 me = Me.Position;

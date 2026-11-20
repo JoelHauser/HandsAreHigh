@@ -4,7 +4,9 @@ using UnityEngine;
 
 namespace HandsAreHigh
 {
-    internal enum OrderKind { DropWeapons, DropKit, ArmourOff, Follow, Kneel, Stay, Leave, Stand }
+    // 0.16.0: HandsOnHead / HandsUp (where his hands are, apart from posture) and TurnAround. New kinds
+    // go at the end: the menu's numbering of the older orders never changes.
+    internal enum OrderKind { DropWeapons, DropKit, ArmourOff, Follow, Kneel, Stay, Leave, Stand, HandsOnHead, HandsUp, TurnAround }
 
     internal enum NoteKind { Info, Success, Error }
 
@@ -59,6 +61,7 @@ namespace HandsAreHigh
             internal bool Available;
             internal bool Current;      // what he's already doing (follow / kneel)
             internal string Reason;     // why not, short
+            internal int Digit;         // 0.17.0: its own number key, fixed (never renumbered)
         }
 
         private static readonly KeyCode[] Alpha =
@@ -76,7 +79,8 @@ namespace HandsAreHigh
         private const float RangeSlack = 0.75f;    // hysteresis over the order range while open
         private const float SightGrace = 0.35f;    // s of blocked sight before it closes
 
-        private readonly Option[] _options = new Option[8];
+        private readonly Option[] _options = new Option[MaxOptions];
+        internal const int MaxOptions = 10;
         private int _count;
         private SurrenderState _open;      // the bot the menu is bound to
         private SurrenderState _hover;     // closed: the bot you could open it on
@@ -174,23 +178,30 @@ namespace HandsAreHigh
             if (!string.IsNullOrEmpty(msg)) Notify(msg, kind);
         }
 
+        // 0.17.0: one row per order with a fixed number key, whatever is turned off in the config or
+        // unavailable right now (shown greyed with the reason, never renumbered). Posture is one
+        // slot (Get down / Stand up) and hands another (Hands on head / Hands up): each pair is one
+        // order with two states, so the nine fit 1-9 and nothing is left without a key.
+        //   1 Drop weapons  2 Drop kit  3 Armour off  4 Follow me  5 Get down / Stand up
+        //   6 Hands on head / Hands up  7 Turn around  8 Stay  9 Let go
         private void BuildOptions()
         {
             _count = 0;
-            Add(OrderKind.DropWeapons);
-            if (Settings.KitOrder.Value) Add(OrderKind.DropKit);
-            if (Settings.ArmourOrder.Value) Add(OrderKind.ArmourOff);
-            if (Settings.FollowOrder.Value) Add(OrderKind.Follow);
-            Add(OrderKind.Kneel);
-            Add(OrderKind.Stand);
-            Add(OrderKind.Stay);
-            Add(OrderKind.Leave);
+            Add(OrderKind.DropWeapons, 1);
+            if (Settings.KitOrder.Value) Add(OrderKind.DropKit, 2);
+            if (Settings.ArmourOrder.Value) Add(OrderKind.ArmourOff, 3);
+            if (Settings.FollowOrder.Value) Add(OrderKind.Follow, 4);
+            Add(OrderKind.Kneel, 5);
+            if (Settings.HandsOnHeadOrder.Value) Add(OrderKind.HandsOnHead, 6);
+            if (Settings.TurnOrder.Value) Add(OrderKind.TurnAround, 7);
+            Add(OrderKind.Stay, 8);
+            Add(OrderKind.Leave, 9);
         }
 
-        private void Add(OrderKind k)
+        private void Add(OrderKind k, int digit)
         {
             if (_count >= _options.Length) return;
-            _options[_count++] = new Option { Kind = k, Available = true };
+            _options[_count++] = new Option { Kind = k, Available = true, Digit = digit };
         }
 
         // Cheap (slot lookups, no lists); on open, 4x a second while open, and at Submit.
@@ -224,10 +235,16 @@ namespace HandsAreHigh
                         if (s.Order == Order.Follow) { current = true; reason = "Following"; }
                         break;
                     case OrderKind.Kneel:
-                        if (s.Order == Order.Kneel) { current = true; reason = s.KneelFallback != null ? "Can't kneel here" : "Down"; }
+                        // Get down, or Stand up once he is down / going down (Resolve).
+                        if (s.Order != Order.Kneel && Kneel.Active(s)) reason = "Getting up";
+                        else if (s.KneelFallback != null) { current = true; reason = "Can't kneel here"; }
                         break;
-                    case OrderKind.Stand:
-                        if (s.Order != Order.Kneel && !Kneel.Active(s)) reason = "Standing";
+                    case OrderKind.HandsOnHead:
+                        if (dropping || s.DropPending || s.HandsPending) reason = "Hands busy";
+                        break;
+                    case OrderKind.TurnAround:
+                        reason = Facing.Unavailable(s);
+                        if (reason == null && s.TurnedAway) current = true;
                         break;
                 }
                 available = reason == null;
@@ -275,10 +292,12 @@ namespace HandsAreHigh
                 {
                     if (!Input.GetKeyDown(Alpha[d]) && !(pad && Input.GetKeyDown(Keypad[d]))) continue;
                     if (d == 0) { Close(null, NoteKind.Info); return; }
-                    if (d - 1 < _count)
+                    int at = -1;
+                    for (int i = 0; i < _count; i++) if (_options[i].Digit == d) { at = i; break; }
+                    if (at >= 0)
                     {
-                        if (_index != d - 1) { _index = d - 1; _version++; }
-                        Submit(d - 1, me);
+                        if (_index != at) { _index = at; _version++; }
+                        Submit(at, me);
                     }
                     else Footer(NoDigit[d], NoteKind.Error);
                     return;
@@ -341,7 +360,7 @@ namespace HandsAreHigh
             {
                 _flashIndex = i;
                 _flashAt = Time.realtimeSinceStartup;
-                Footer($"{Label(o.Kind)}: {o.Reason}", NoteKind.Error);
+                Footer($"{Label(Resolve(_open, o.Kind))}: {o.Reason}", NoteKind.Error);
                 return;
             }
             SurrenderState s = _open;
@@ -352,7 +371,7 @@ namespace HandsAreHigh
                 return;
             }
             Close(null, NoteKind.Info);
-            Orders.Give(s, o.Kind, me, human: true, out _);
+            Orders.Give(s, Resolve(s, o.Kind), me, human: true, out _);
         }
 
         // The held bot (hands up) you're looking at, close enough and in clear sight.
@@ -378,18 +397,30 @@ namespace HandsAreHigh
             return best;
         }
 
+        // The one slot for the hands: Hands on head, or Hands up while they are there.
+        internal static OrderKind Resolve(SurrenderState s, OrderKind k)
+        {
+            if (s == null) return k;
+            if (k == OrderKind.HandsOnHead && s.HandsOnHead) return OrderKind.HandsUp;
+            if (k == OrderKind.Kneel && (s.Order == Order.Kneel || Kneel.Active(s))) return OrderKind.Stand;
+            return k;
+        }
+
         internal static string Label(OrderKind k)
         {
             switch (k)
             {
-                case OrderKind.DropWeapons: return "Drop your weapons";
-                case OrderKind.DropKit: return "Drop your kit";
+                case OrderKind.DropWeapons: return "Drop weapons";
+                case OrderKind.DropKit: return "Drop kit";
                 case OrderKind.ArmourOff: return "Armour off";
                 case OrderKind.Follow: return "Follow me";
                 case OrderKind.Kneel: return "Get down";
-                case OrderKind.Stay: return "Stay there";
-                case OrderKind.Stand: return "On your feet";
-                default: return "Get lost";
+                case OrderKind.Stay: return "Stay";
+                case OrderKind.Stand: return "Stand up";
+                case OrderKind.HandsOnHead: return "Hands on head";
+                case OrderKind.HandsUp: return "Hands up";
+                case OrderKind.TurnAround: return "Turn around";
+                default: return "Let go";
             }
         }
 
@@ -436,9 +467,9 @@ namespace HandsAreHigh
             private float _scale;
             private float _k;
             private Rect _panel, _header, _rowsArea, _footerRect;
-            private readonly Rect[] _rows = new Rect[8];
-            private readonly GUIContent[] _labels = new GUIContent[8];
-            private readonly GUIContent[] _reasons = new GUIContent[8];
+            private readonly Rect[] _rows = new Rect[MaxOptions];
+            private readonly GUIContent[] _labels = new GUIContent[MaxOptions];
+            private readonly GUIContent[] _reasons = new GUIContent[MaxOptions];
             private readonly GUIContent _titleC = new GUIContent(), _tagC = new GUIContent(), _subC = new GUIContent(),
                 _footerC = new GUIContent(), _hintKeyC = new GUIContent(), _hintC = new GUIContent(), _noteC = new GUIContent();
             private Rect _hintRect, _hintKey, _noteRect;
@@ -530,13 +561,13 @@ namespace HandsAreHigh
                 _k = k;
                 if (_title == null) return;
                 int Px(float v) => Mathf.Max(10, Mathf.RoundToInt(v * _k));
-                _title.fontSize = Px(17f);
+                _title.fontSize = Px(14.5f);
                 _tag.fontSize = Px(11f);
-                _sub.fontSize = Px(12f);
-                _row.fontSize = Px(15f);
-                _badge.fontSize = Px(12.5f);
-                _reason.fontSize = Px(12f);
-                _footer.fontSize = Px(11.5f);
+                _sub.fontSize = Px(11f);
+                _row.fontSize = Px(13.5f);
+                _badge.fontSize = Px(11.5f);
+                _reason.fontSize = Px(11f);
+                _footer.fontSize = Px(10.5f);
                 _toast.fontSize = Px(14f);
                 _hint.fontSize = Px(14f);
             }
@@ -548,17 +579,19 @@ namespace HandsAreHigh
                 _builtVersion = m._version;
                 _builtNote = -1;   // the toast sits under the panel or the prompt: re-anchor it
                 float k = _k;
-                float pad = 12f * k, rowH = 30f * k, badge = 20f * k, gap = 10f * k;
+                float pad = Pad * k, rowH = RowH * k, badge = Badge * k, gap = 8f * k;
 
                 SurrenderState s = m._open ?? m._hover;
                 if (s != null)
                 {
-                    _titleC.text = s.Name;
-                    _tagC.text = SideTag(s.Bot);
-                    _subC.text = s.Order == Order.Follow ? "Hands up, following you"
-                        : Kneel.Active(s) ? "On his knees, hands behind his head"
-                        : s.Order == Order.Kneel ? (s.KneelFallback != null ? "Hands up, crouched (can't kneel here)" : "Hands up, getting down")
-                        : "Hands up";
+                    _titleC.text = s.Bot?.Profile?.Nickname ?? s.Name;
+                    // 0.17.0: one header line: side and what he is doing now, short.
+                    string state = s.Order == Order.Follow ? "following"
+                        : Kneel.Active(s) ? "kneeling"
+                        : s.TurnedAway || s.Turning ? "facing away"
+                        : "standing";
+                    _tagC.text = $"{SideTag(s.Bot)}  {state}{(s.HandsOnHead ? ", hands on head" : "")}";
+                    _subC.text = "";
                 }
 
                 if (m._open == null)
@@ -587,16 +620,16 @@ namespace HandsAreHigh
                 }
 
                 k = _k;
-                pad = 12f * k; rowH = 30f * k;
-                float headerH = 50f * k;
-                float footerH = 26f * k;
+                pad = Pad * k; rowH = RowH * k;
+                float headerH = HeaderH * k;
+                float footerH = FooterH * k;
                 Vector2 p = Anchor(w, hTotal);
                 _panel = new Rect(p.x, p.y, w, hTotal);
                 _header = new Rect(p.x, p.y, w, headerH);
-                _rowsArea = new Rect(p.x, p.y + headerH + 6f * k, w, m._count * rowH);
+                _rowsArea = new Rect(p.x, p.y + headerH + 3f * k, w, m._count * rowH);
                 for (int i = 0; i < m._count; i++)
-                    _rows[i] = new Rect(p.x + 4f * k, _rowsArea.y + i * rowH, w - 8f * k, rowH - 2f * k);
-                _footerRect = new Rect(p.x + pad, _rowsArea.yMax + 6f * k, w - 2f * pad, footerH);
+                    _rows[i] = new Rect(p.x + 3f * k, _rowsArea.y + i * rowH, w - 6f * k, rowH - 1f * k);
+                _footerRect = new Rect(p.x + pad, _rowsArea.yMax + 3f * k, w - 2f * pad, footerH);
             }
 
             // Panel size at the current scale: the widest row (label + reason), the header or
@@ -604,14 +637,14 @@ namespace HandsAreHigh
             private void Measure(OrderMenu m, out float w, out float h)
             {
                 float k = _k;
-                float pad = 12f * k, rowH = 30f * k, badge = 20f * k, gap = 10f * k;
+                float pad = Pad * k, rowH = RowH * k, badge = Badge * k, gap = 8f * k;
                 float labelW = 0f, reasonW = 0f;
                 for (int i = 0; i < m._count; i++)
                 {
                     Option o = m._options[i];
                     if (_labels[i] == null) _labels[i] = new GUIContent();
                     if (_reasons[i] == null) _reasons[i] = new GUIContent();
-                    _labels[i].text = OrderMenu.Label(o.Kind);
+                    _labels[i].text = OrderMenu.Label(Resolve(m._open, o.Kind));
                     _reasons[i].text = o.Reason ?? "";
                     labelW = Mathf.Max(labelW, _row.CalcSize(_labels[i]).x);
                     if (o.Reason != null) reasonW = Mathf.Max(reasonW, _reason.CalcSize(_reasons[i]).x);
@@ -620,10 +653,10 @@ namespace HandsAreHigh
                 _footerC.text = FooterHint(m._count);
                 float footerW = _footer.CalcSize(_footerC).x;
                 if (m._footerMsg != null && Time.realtimeSinceStartup < m._footerUntil) _footerC.text = m._footerMsg;
-                w = Mathf.Max(260f * k, pad + badge + gap + labelW + (reasonW > 0f ? gap * 2f + reasonW : 0f) + pad,
+                w = Mathf.Max(190f * k, pad + badge + gap + labelW + (reasonW > 0f ? gap * 2f + reasonW : 0f) + pad,
                               headerW + 2f * pad, footerW + 2f * pad);
                 w = Mathf.Min(w, Screen.width - 32f);
-                h = 50f * k + 6f * k + m._count * rowH + 6f * k + 26f * k;
+                h = HeaderH * k + 3f * k + m._count * rowH + 3f * k + FooterH * k;
             }
 
             // Right of the crosshair and a little above it, clear of the bot you're looking at
@@ -682,15 +715,14 @@ namespace HandsAreHigh
                 Fill(new Rect(panel.x, panel.y, panel.width, Mathf.Max(1f, 2f * k)), Accent * new Color(1f, 1f, 1f, 0.9f));
                 Outline(panel, Border);
 
-                float pad = 12f * k;
+                float pad = Pad * k;
                 Rect h = Shift(_header, slide);
-                Print(new Rect(h.x + pad, h.y + 6f * k, h.width - 2f * pad, 22f * k), _titleC, _title, Text);
-                Print(new Rect(h.x + pad, h.y + 6f * k, h.width - 2f * pad, 22f * k), _tagC, _tag, TextDim);
-                Print(new Rect(h.x + pad, h.y + 27f * k, h.width - 2f * pad, 18f * k), _subC, _sub, TextDim);
+                Print(new Rect(h.x + pad, h.y, h.width - 2f * pad, h.height), _titleC, _title, Text);
+                Print(new Rect(h.x + pad, h.y, h.width - 2f * pad, h.height), _tagC, _tag, TextDim);
                 Fill(new Rect(h.x, h.yMax, h.width, 1f), Border);
 
                 float now = Time.realtimeSinceStartup;
-                float badge = 20f * k;
+                float badge = Badge * k;
                 for (int i = 0; i < m._count; i++)
                 {
                     Option o = m._options[i];
@@ -700,14 +732,14 @@ namespace HandsAreHigh
                     if (i == m._flashIndex && now - m._flashAt < 0.4f)
                         Fill(r, new Color(Bad.r, Bad.g, Bad.b, 0.45f * (1f - (now - m._flashAt) / 0.4f)));
 
-                    Rect b = new Rect(r.x + 8f * k, r.y + (r.height - badge) * 0.5f, badge, badge);
+                    Rect b = new Rect(r.x + 6f * k, r.y + (r.height - badge) * 0.5f, badge, badge);
                     Color fg = sel && o.Available ? TextDark : o.Available ? Text : TextOff;
                     if (sel && o.Available) Fill(b, TextDark * new Color(1f, 1f, 1f, 0.85f));
                     else Outline(b, o.Available ? new Color(Text.r, Text.g, Text.b, 0.45f) : new Color(TextOff.r, TextOff.g, TextOff.b, 0.5f));
-                    if (i + 1 < Digits.Length)
-                        Print(b, Digits[i + 1], _badge, sel && o.Available ? Accent : o.Available ? Text : TextOff);
+                    if (o.Digit > 0 && o.Digit < Digits.Length)
+                        Print(b, Digits[o.Digit], _badge, sel && o.Available ? Accent : o.Available ? Text : TextOff);
 
-                    Rect lab = new Rect(b.xMax + 10f * k, r.y, r.xMax - b.xMax - 18f * k, r.height);
+                    Rect lab = new Rect(b.xMax + 8f * k, r.y, r.xMax - b.xMax - 14f * k, r.height);
                     Print(lab, _labels[i], _row, fg);
                     if (o.Reason != null)
                         Print(lab, _reasons[i], _reason, o.Current ? (sel ? TextDark : Accent) : (sel ? Text : TextOff));
@@ -772,12 +804,16 @@ namespace HandsAreHigh
                 return side == EPlayerSide.Savage ? "SCAV" : side == EPlayerSide.Usec ? "USEC" : "BEAR";
             }
 
+            // 0.17.0: the key hint, short (a passing message replaces it).
             private static string FooterHint(int count)
             {
-                string pick = Settings.NumberKeys.Value ? (count > 1 ? $"1-{count} order    0 close    " : "1 order    0 close    ") : "";
-                string sel = Settings.WheelSelect.Value ? "wheel" : $"{KeyText(Settings.PrevKey.Value.MainKey)} {KeyText(Settings.NextKey.Value.MainKey)}";
-                return $"{pick}{sel} select    {KeyText(Settings.MenuKey.Value.MainKey)} confirm";
+                string pick = Settings.NumberKeys.Value ? "1-9 give  0 close  " : "";
+                string sel = Settings.WheelSelect.Value ? "wheel" : $"{KeyText(Settings.PrevKey.Value.MainKey)}{KeyText(Settings.NextKey.Value.MainKey)}";
+                return $"{pick}{sel} + {KeyText(Settings.MenuKey.Value.MainKey)}";
             }
+
+            // 0.17.0 compact sizes (x the scale k): 0.15 used 30 px rows, a 50 px two-line header.
+            private const float Pad = 9f, RowH = 23f, Badge = 16f, HeaderH = 25f, FooterH = 19f;
 
             private static string KeyText(KeyCode k)
             {

@@ -133,3 +133,61 @@ namespace HandsAreHigh
         }
     }
 }
+
+namespace HandsAreHigh
+{
+    // 0.16.0, Looting Bots (optional; not installed on Joel's PC, so unverified against a live
+    // copy): its published external API is LootingBots.External.PreventBotFromLooting(BotOwner,
+    // float duration). Called only if a static method with exactly that name and those parameter
+    // types exists, so a different version means "not found" (logged once), never a wrong call.
+    // Used to keep it from starting its own looting on a captor while he guards or fetches
+    // (two systems moving the same bot to the same item). Its item claims are not readable here:
+    // a race it wins is a failed transaction on our side (the game allows one move), logged.
+    internal static class LootingBotsAdapter
+    {
+        private static bool _resolved;
+        private static System.Reflection.MethodInfo _prevent;
+        private static readonly object[] Args = new object[2];
+        private static readonly System.Collections.Generic.Dictionary<EFT.BotOwner, float> Until = new System.Collections.Generic.Dictionary<EFT.BotOwner, float>();
+
+        internal static bool Present { get { Resolve(); return _prevent != null; } }
+
+        private static void Resolve()
+        {
+            if (_resolved) return;
+            _resolved = true;
+            try
+            {
+                foreach (System.Reflection.Assembly a in System.AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    System.Type t = a.GetType("LootingBots.External", false);
+                    if (t == null) continue;
+                    _prevent = t.GetMethod("PreventBotFromLooting", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null,
+                        new[] { typeof(EFT.BotOwner), typeof(float) }, null);
+                    HandsAreHighPlugin.Log.LogInfo(_prevent != null
+                        ? "Looting Bots found: captors are kept from its own looting while they guard or fetch (PreventBotFromLooting)"
+                        : "Looting Bots found, but not PreventBotFromLooting(BotOwner, float): no coordination beyond the game's one-move-per-item rule");
+                    return;
+                }
+            }
+            catch (System.Exception e) { HandsAreHighPlugin.Report("Looting Bots lookup", e); }
+        }
+
+        // At most once a second per bot (its own timer does the rest).
+        internal static void Hold(EFT.BotOwner o, float seconds)
+        {
+            if (o == null) return;
+            Resolve();
+            if (_prevent == null) return;
+            float now = UnityEngine.Time.time;
+            if (Until.TryGetValue(o, out float u) && u - now > seconds - 1f) return;
+            Until[o] = now + seconds;
+            if (Until.Count > 64) Until.Clear();
+            try { Args[0] = o; Args[1] = seconds; _prevent.Invoke(null, Args); }
+            catch (System.Exception e) { HandsAreHighPlugin.Report("Looting Bots PreventBotFromLooting", e); }
+            finally { Args[0] = null; }
+        }
+
+        internal static void Reset() { Until.Clear(); _resolved = false; _prevent = null; }
+    }
+}

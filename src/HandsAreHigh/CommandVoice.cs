@@ -24,6 +24,8 @@ namespace HandsAreHigh
     //   Get down           GetInCover (approximate: "take cover") every voice but scav_6
     //   Stay there         HoldPosition; Stop                     HoldPosition BEAR/USEC; Stop every voice
     //   Get lost           GetBack; OnYourOwn; Gogogo             BEAR/USEC only; Scav voices silent
+    //   Hands on your head Stop (no fitting line)                 every voice
+    //   Turn around        Look (Attention); Stop                 every voice
     // Your own voice decides faction and language (bear_1 Russian, bear_1_eng English...).
     internal static class CommandVoice
     {
@@ -37,6 +39,11 @@ namespace HandsAreHigh
             { OrderKind.Stay, new[] { EPhraseTrigger.HoldPosition, EPhraseTrigger.Stop } },
             { OrderKind.Stand, new[] { EPhraseTrigger.GoForward, EPhraseTrigger.Gogogo } },   // BEAR/USEC only
             { OrderKind.Leave, new[] { EPhraseTrigger.GetBack, EPhraseTrigger.OnYourOwn, EPhraseTrigger.Gogogo } },
+            // 0.16.0: no voice has a "hands on your head" or "turn around" line; the nearest
+            // commands every voice has (Stop; Look = the Attention bank).
+            { OrderKind.HandsOnHead, new[] { EPhraseTrigger.Stop } },
+            { OrderKind.HandsUp, new[] { EPhraseTrigger.Stop } },
+            { OrderKind.TurnAround, new[] { EPhraseTrigger.Look, EPhraseTrigger.Stop } },
         };
 
         private static EPhraseTrigger _last = EPhraseTrigger.None;

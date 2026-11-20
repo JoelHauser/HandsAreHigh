@@ -48,6 +48,8 @@ namespace HandsAreHigh
                 if (Time.time - SurrenderRegistry.HistoryOf(captor).ShotAt < 1.5f) { kind = ai ? "his captor fires at someone else, behind him" : "you fire at someone else, behind him"; strength = 0.85f; clear = true; return false; }
                 if (captor.IsSprintEnabled) { kind = ai ? "his captor runs off behind him" : "you run off behind him"; strength = 0.85f; clear = true; return false; }
                 if (ai && captor.AIData?.BotOwner?.WeaponManager?.Selector?.IsChanging == true) { kind = "he hears his captor switch weapons"; strength = 0.8f; clear = true; return false; }
+                // 0.16.0: behind him, picking something up: heard (steps stopping, kit rustling).
+                if (ai && CaptorLoot.Busy(captor, out string busyBehind) && !busyBehind.StartsWith("walking")) { kind = $"he hears his captor {busyBehind}"; strength = 0.75f; clear = true; return false; }
                 return true;   // assumed covered
             }
             if (!(captor.HandsController is Player.FirearmController fc)) { kind = ai ? "his captor's gun isn't up" : "your gun isn't up"; strength = 1f; clear = true; return false; }
@@ -59,6 +61,8 @@ namespace HandsAreHigh
                 if (o == null || o.BotState != EBotState.Active) { kind = "his captor stopped moving"; strength = 0.9f; clear = true; return false; }
                 if (o.WeaponManager?.Selector?.IsChanging == true) { kind = "his captor switches weapons"; strength = 1f; clear = true; return false; }
                 if (captor.IsSprintEnabled) { kind = "his captor is running"; strength = 0.95f; clear = true; return false; }
+                // 0.16.0: his captor going for (or bent over) his gear: eyes and gun elsewhere.
+                if (CaptorLoot.Busy(captor, out string busy)) { kind = $"his captor is {busy}"; strength = busy.StartsWith("walking") ? 0.7f : 0.9f; clear = !busy.StartsWith("walking"); return false; }
             }
 
             // Only what he can see or hear: where the gun points, and gunfire (0.9.0: no longer

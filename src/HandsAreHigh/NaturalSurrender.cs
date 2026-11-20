@@ -394,7 +394,7 @@ namespace HandsAreHigh
         private static int Count(float factor) => factor >= ReasonFloor ? 1 : 0;
 
         // 0..1 from level (0 at 1, 1 at 40+) and difficulty (easy 0 .. impossible 1).
-        private static float Experience(Player bot, BotOwner owner)
+        internal static float Experience(Player bot, BotOwner owner)
         {
             int level = bot.Profile?.Info?.Level ?? 1;
             float lvl = Mathf.Clamp01((level - 1) / 39f);

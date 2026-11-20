@@ -318,6 +318,8 @@ namespace HandsAreHigh
             if (s.Phase != Phase.HandsUp) { why = $"now {s.Phase}"; return false; }
             if (s.Suspended) { why = "asleep"; return false; }
             if (s.Kneel != KneelPhase.Standing) { why = "kneeling"; return false; }   // the kneel owns body and arms
+            if (s.HandsOnHead || s.HeadHands > 0f) { why = "hands on his head"; return false; }   // 0.16.0: the hands-up gestures need hands up
+            if (s.Turning || s.TurnedAway) { why = "turned away"; return false; }
             if (s.WasHit) { why = "hit"; return false; }
             if (!s.ArmsUp || s.Progress < 1f) { why = "arms not fully up"; return false; }
             if (s.Moving) { why = "moving"; return false; }

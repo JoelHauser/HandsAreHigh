@@ -83,6 +83,8 @@ namespace HandsAreHigh
             if (Settings.KneelLoopKey.Value.IsDown()) DebugCommand("kneel loop", me);
             if (Settings.KneelInterruptKey.Value.IsDown()) DebugCommand("kneel interrupt", me);
             if (Settings.KneelUrgentKey.Value.IsDown()) DebugCommand("kneel urgent rise", me);
+            if (Settings.HandsOnHeadKey.Value.IsDown()) DebugCommand("hands", me);
+            if (Settings.TurnKey.Value.IsDown()) DebugCommand("turn around", me);
         }
 
         // Every debug key acts on exactly one bot: the one under the crosshair, resolved once
@@ -146,6 +148,8 @@ namespace HandsAreHigh
                     case "kneel loop": outcome = Kneel.DebugLoop(s, me); break;
                     case "kneel interrupt": outcome = Kneel.DebugInterrupt(s, me); break;
                     case "kneel urgent rise": outcome = Kneel.DebugUrgent(s, me); break;
+                    case "hands": outcome = Kneel.DebugOrder(s, OrderMenu.Resolve(s, OrderKind.HandsOnHead), me); break;
+                    case "turn around": outcome = Kneel.DebugOrder(s, OrderKind.TurnAround, me); break;
                     default: outcome = SurrenderRegistry.DebugLeave(s); break;
                 }
             }

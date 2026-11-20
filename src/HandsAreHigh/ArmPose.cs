@@ -30,6 +30,7 @@ namespace HandsAreHigh
             if (!s.ArmAxisOk[0] || !s.ArmAxisOk[1]) ArmPose.MeasureAxes(__instance, s);
             bool kneel = Kneel.Posing(s);
             bool look = Presence.Posing(s);
+            bool head = HandsPose.Posing(s);   // 0.16.0: hands on head, standing or kneeling
             if (s.Weight <= 0f && !kneel && !look) return;
             long t0 = Perf.Begin();
             // One owner per bone, in order: the kneel's body (pelvis, torso, legs), the torso's
@@ -53,9 +54,9 @@ namespace HandsAreHigh
                 try { Presence.ApplyHead(__instance, s); }
                 catch (System.Exception e) { HandsAreHighPlugin.Report("look head", e); }
             }
-            if (kneel)
+            if (kneel || head)
             {
-                try { Kneel.ApplyHands(__instance, s); Kneel.ApplyBrace(__instance, s); }
+                try { if (head) Kneel.ApplyHands(__instance, s); if (kneel) Kneel.ApplyBrace(__instance, s); }
                 catch (System.Exception e) { HandsAreHighPlugin.Report("kneel hands", e); }
             }
             Perf.End(Perf.Sec.Pose, t0);

@@ -3,6 +3,7 @@ using System.Text;
 using Comfort.Common;
 using DrakiaXYZ.BigBrain.Brains;
 using EFT;
+using EFT.InventoryLogic;
 using UnityEngine;
 
 namespace HandsAreHigh
@@ -120,6 +121,19 @@ namespace HandsAreHigh
         // his own reaction time.
         internal float ResistSeenAt = -1f;
 
+        // 0.16.0: what he has seen of the prisoner's weapons, and his judgement (Judgement.cs).
+        internal readonly HashSet<Item> SeenWeapons = new HashSet<Item>();
+        internal float NextWatchAt;
+        internal Item SawKept;              // a weapon he noticed still on him after a demand
+        internal bool Incomplete;           // he saw him keep something back (weighs the release decision)
+        internal int Repeats;               // demands repeated
+        internal bool Unsafe;               // let him go armed: keeps his distance, fetches nothing
+        internal bool ReleaseJudged;
+        internal float DemandSeen = -1f;    // the prisoner's last answered demand he has judged
+        internal float StepWaitSince = -1f; // a hands / turn order waiting for control
+        // 0.16.0: the prisoner's dropped gear (CaptorLoot.cs).
+        internal LootPlan Loot;
+
         internal bool Busy => Mode == CaptorMode.Engage;
     }
 
@@ -131,14 +145,14 @@ namespace HandsAreHigh
         // Surrenders the bot they were made to hasn't perceived yet: prisoner -> that bot.
         private static readonly Dictionary<SurrenderState, BotOwner> Pending = new Dictionary<SurrenderState, BotOwner>();
         private static readonly List<SurrenderState> PendingScratch = new List<SurrenderState>(8);
-        private static float _nextPending;
+        private static float _nextPending, _nextLater, _nextKillCheck;
 
         private const int MaxCoverMoves = 2;
         private const float CoverMoveLimit = 6f;
 
         internal static int Count => ByBot.Count;
         internal static int PendingCount => Pending.Count;
-        internal static bool Any => ByBot.Count > 0 || Pending.Count > 0;
+        internal static bool Any => ByBot.Count > 0 || Pending.Count > 0 || CaptorLoot.Count > 0 || Judgement.Watching;
 
         internal static bool TryGet(Player bot, out CaptorState cs) => ByBot.TryGetValue(bot, out cs);
 
@@ -167,6 +181,9 @@ namespace HandsAreHigh
 
             string notPractical = Impractical(o, s, out bool allied);
             float mercy = Restraint.Mercy(captor, SurrenderRegistry.HistoryOf(captor));
+            // 0.16.0: what this man did to him (his own memory of being hit) weighs on it.
+            float known = Judgement.MercyFactor(o, s, out string knownWhy);
+            if (known < 1f) { mercy *= known; log.Append($"knows: {knownWhy} (mercy x{known:0.00}); "); }
             if (notPractical == null)
             {
                 // Squadmates close by to back him make taking a prisoner a little more attractive.
@@ -223,6 +240,7 @@ namespace HandsAreHigh
                 return d > Settings.CaptorApproachFrom.Value ? $"{d:0} m away, too far to guard" : $"{d:0} m away, no way to walk up to him";
             if (!Perception.Recognises(o, s.Bot)) return "can't see him";
             if (Restraint.OtherThreat(o, s.Bot, out string threat)) return $"busy with {threat}";
+            if (Restraint.SquadDecidedToKill(o, s.Bot)) return "his squad decided to kill him";
             return null;
         }
 
@@ -309,6 +327,24 @@ namespace HandsAreHigh
             return null;
         }
 
+        // Debug scenarios (0.16.0): the captor's plan forced to these steps, in order (then Leave
+        // after the usual hold). Every step still goes through Orders.Give and its readiness checks.
+        internal static string DebugSteps(Player captor, string name, params OrderKind[] steps)
+        {
+            if (captor == null || !ByBot.TryGetValue(captor, out CaptorState cs)) return "isn't guarding anyone";
+            cs.Plan.Clear();
+            foreach (OrderKind k in steps) cs.Plan.Add(k);
+            if (cs.Plan.Count == 0 || cs.Plan[cs.Plan.Count - 1] != OrderKind.Leave) cs.Plan.Add(OrderKind.Leave);
+            cs.PlanName = $"debug: {name}";
+            cs.Step = 0;
+            cs.CloseDecided = true;
+            cs.Close = false;
+            cs.AwaitKneel = false;
+            cs.HoldUntil = Mathf.Max(cs.HoldUntil, Time.time + 30f + 5f * steps.Length);
+            HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: plan forced: {cs.PlanName} ({string.Join(", ", cs.Plan)}; holds him at least {cs.HoldUntil - Time.time:0} s)");
+            return null;
+        }
+
         // Debug scenarios: start one of the captor's own glances now (the real glance code picks
         // where he looks and for how long; the prisoner sees it as a real opening).
         internal static bool ForceGlance(Player captor, out string why)
@@ -337,6 +373,7 @@ namespace HandsAreHigh
                 NextGlanceAt = now + Dice.Range(4f, 9f)
             };
             BuildPlan(cs);
+            cs.DemandSeen = s.DemandDoneAt;   // 0.16.0: an earlier demand (someone else's) isn't his to judge
             ByBot[c] = cs;
             s.Custody = cs;
             s.Captor = c;
@@ -364,10 +401,17 @@ namespace HandsAreHigh
             if (pick < a) { cs.PlanName = "disarm and release"; cs.Plan.Add(OrderKind.Stay); cs.Plan.Add(OrderKind.DropWeapons); }
             else if (pick < a + b) { cs.PlanName = "hold and release"; cs.Plan.Add(Dice.Value < Settings.CaptorKneelChance.Value ? OrderKind.Kneel : OrderKind.Stay); }
             else { cs.PlanName = "disarm and hold"; cs.Plan.Add(OrderKind.DropWeapons); cs.Plan.Add(Dice.Value < Settings.CaptorKneelChance.Value ? OrderKind.Kneel : OrderKind.Stay); }
+            // 0.16.0: hands on his head (a kneel already brings them there) and turning him away,
+            // each by its own chance; they come after the disarming, before he is let go.
+            if (!cs.Plan.Contains(OrderKind.Kneel) && Settings.HandsOnHeadOrder.Value && Dice.Value < Settings.CaptorHandsOnHeadChance.Value)
+            { cs.Plan.Add(OrderKind.HandsOnHead); cs.PlanName += ", hands on head"; }
+            if (Settings.TurnOrder.Value && Dice.Value < Settings.CaptorTurnChance.Value)
+            { cs.Plan.Add(OrderKind.TurnAround); cs.PlanName += ", turned away"; }
             // Kneel (0.12.0): a held man is put on his knees; Leave later gets him up calmly.
             cs.Plan.Add(OrderKind.Leave);
             cs.Step = 0;
-            if (cs.PlanName == "disarm and release") cs.HoldUntil = Mathf.Min(cs.HoldUntil, Time.time + Settings.HoldMin.Value);
+            if (cs.PlanName.StartsWith("disarm and release")) cs.HoldUntil = Mathf.Min(cs.HoldUntil, Time.time + Settings.HoldMin.Value);
+            cs.HoldUntil = Mathf.Max(cs.HoldUntil, Time.time + 6f + 4f * (cs.Plan.Count - 1));
         }
 
         // ---- custody upkeep ------------------------------------------------------------
@@ -380,6 +424,16 @@ namespace HandsAreHigh
             {
                 _nextPending = now + 0.5f;
                 try { TickPending(); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor recognition", e); Pending.Clear(); }
+            }
+            if (Judgement.Watching && now >= _nextKillCheck)
+            {
+                _nextKillCheck = now + 0.5f;
+                try { Judgement.TickKills(now); } catch (System.Exception e) { HandsAreHighPlugin.Report("kill decision watch", e); }
+            }
+            if (CaptorLoot.Count > 0 && now >= _nextLater)
+            {
+                _nextLater = now + 0.25f;
+                try { CaptorLoot.TickLater(now); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after release", e); CaptorLoot.Clear(); }
             }
             if (ByBot.Count == 0) return;
             Scratch.Clear();
@@ -436,19 +490,27 @@ namespace HandsAreHigh
                 if (cs.ResistSeenAt < 0f)
                 {
                     if (!seesHim && now - s.PhaseSince < 2.5f) return;   // nothing visible yet (2.5 s at most)
-                    cs.ResistSeenAt = now + (seesHim ? Dice.Range(0.18f, 0.45f) : 0f);
+                    // 0.16.0: bent over the man's gear (or walking to it, eyes on it), he is slower to see it.
+                    bool fetching = CaptorLoot.Fetching(cs.Bot);
+                    cs.ResistSeenAt = now + (seesHim ? Dice.Range(0.18f, 0.45f) + (fetching ? Dice.Range(0.35f, 0.8f) : 0f) : 0f);
                     if (Settings.LogDecisions.Value)
                         HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {(seesHim ? $"sees {s.Name} {shown}" : $"{s.Name} is no longer where he held him")} ({s.Phase}, {now - s.PhaseSince:0.00} s after he decided)");
                 }
                 if (now < cs.ResistSeenAt) return;
                 // He resists: going for a weapon gets the urgent line, running a warning.
                 bool armed = s.Phase == Phase.Rearmed || s.Phase == Phase.Recovering || s.Phase == Phase.PickingUp;
+                // 0.17.0: a man running from his custody (not let go, unarmed) is a decision point of
+                // its own, made once, only if he saw it: let him run, or fire (Judgement.OnBolt).
+                // Going for a weapon is fought as before (Restraint.OnArmed).
+                if (!armed && seesHim && Judgement.OnBolt(cs, s)) return;
                 CaptorVoice.Say(cs.Bot, armed ? CaptorLine.Resist : CaptorLine.Warn);
                 End(cs, $"prisoner {s.Phase}");
                 return;
             }
             cs.ResistSeenAt = -1f;
             if (cs.Owner.BotState != EBotState.Active || s.Suspended) return;   // asleep: nothing, revalidated on wake
+            LootingBotsAdapter.Hold(cs.Owner, 10f);
+            Judgement.Watch(cs, s, now);
 
             ThreatLevel t = Assess(cs, now, out string why, out Vector3 at, out bool atKnown);
             switch (cs.Mode)
@@ -490,6 +552,14 @@ namespace HandsAreHigh
             // Guarding.
             if (t == ThreatLevel.Alert) { cs.AlertAt = at; cs.AlertSeenAt = now; }
             bool sees = Perception.Recognises(cs.Owner, s.Bot);
+            // 0.16.0: fetching the man's gear: the fetch has him (it ends on any threat, the man
+            // moving or the item gone); no walk-up or glances meanwhile.
+            if (CaptorLoot.Fetching(cs.Bot))
+            {
+                CaptorLoot.Step(cs, s, now, t);
+                if (CaptorLoot.Fetching(cs.Bot)) return;
+                cs.NextOrderAt = Mathf.Max(cs.NextOrderAt, now + Dice.Range(0.5f, 1.2f));
+            }
             Approach(cs, s, now, t, sees);
             if (!cs.Approaching) Glances(cs, s, now);
 
@@ -509,8 +579,20 @@ namespace HandsAreHigh
             if (cs.AwaitKneel) FollowKneel(cs, s, now);
             if (cs.Approaching || now < cs.NextOrderAt || !sees || now < cs.GlanceUntil) return;
             if (s.DropQueue.Count > 0 || s.ReportAt > 0f) return;   // his last order is still being carried out
-            OrderKind next = cs.Plan[cs.Step];
-            if (next == OrderKind.Leave && now < cs.HoldUntil && cs.PlanName != "disarm and release") return;
+            // 0.16.0: a Drop your weapons just answered: what did he see of it? (May demand again,
+            // or decide to fire.)
+            if (s.DemandDoneAt > 0f && s.DemandDoneAt > cs.DemandSeen)
+            {
+                cs.DemandSeen = s.DemandDoneAt;
+                Judgement.AfterDemand(cs, s, now);
+                if (!ByBot.ContainsKey(cs.Bot) || s.Custody != cs) return;
+                if (now < cs.NextOrderAt) return;
+            }
+            OrderKind next = cs.Plan[Mathf.Min(cs.Step, cs.Plan.Count - 1)];
+            // 0.16.0: his gear, once it is all on the ground and he is under control (a choice per
+            // item: now, later, never). Before he's let go too.
+            if (CaptorLoot.Step(cs, s, now, t)) return;
+            if (next == OrderKind.Leave && now < cs.HoldUntil && !cs.PlanName.StartsWith("disarm and release")) return;
             if (cs.AwaitKneel && next != OrderKind.Leave) return;   // the kneel is still being carried out
 
             // 0.15.0: closing in once the prisoner is under control (a contextual choice).
@@ -528,6 +610,11 @@ namespace HandsAreHigh
             }
 
             if (next == OrderKind.Kneel && !KneelReady(cs, s, now, out next)) return;
+            // 0.16.0: hands on head / turn around need his hands empty and up (and, to turn, not
+            // halfway up or down); waited for up to 10 s, else the step is skipped (logged).
+            if ((next == OrderKind.HandsOnHead || next == OrderKind.TurnAround) && !StepReady(cs, s, now, next)) return;
+            // 0.16.0: the plan is done: let him go, or his judgement says otherwise (once).
+            if (next == OrderKind.Leave && Judgement.AtRelease(cs, s)) return;
 
             if (Orders.Give(s, next, cs.Bot, human: false, out string whyNot))
             {
@@ -546,6 +633,29 @@ namespace HandsAreHigh
                 cs.NextOrderAt = now + 1f;
                 if (++cs.OrderFailures >= 8) End(cs, $"couldn't give orders ({whyNot})");
             }
+        }
+
+        // 0.16.0: Hands on head / Turn around only once his hands are empty and up; Turn around not
+        // mid-kneel. Not ready within 10 s: the step is dropped (never an impossible order repeated).
+        private static bool StepReady(CaptorState cs, SurrenderState s, float now, OrderKind next)
+        {
+            string wait = null;
+            if (next == OrderKind.HandsOnHead && s.HandsOnHead) { cs.Step++; return false; }   // already there
+            if (s.Weight < 0.95f || !s.ArmsUp) wait = "his hands aren't up";
+            else if (s.DropPending || s.HandsPending || !Arsenal.HandsEmpty(s.Bot)) wait = "his hands aren't empty yet";
+            else if (next == OrderKind.TurnAround && Facing.Unavailable(s) is string no) wait = no.ToLowerInvariant();
+            if (wait == null) { cs.StepWaitSince = -1f; return true; }
+            if (cs.StepWaitSince < 0f) cs.StepWaitSince = now;
+            if (now - cs.StepWaitSince < 10f)
+            {
+                WaitLog(cs, s, next, wait);
+                cs.NextOrderAt = now + 0.5f;
+                return false;
+            }
+            cs.StepWaitSince = -1f;
+            cs.Step++;
+            if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: drops the {next} order for {s.Name} ({wait} for 10 s)");
+            return false;
         }
 
         private static void WaitLog(CaptorState cs, SurrenderState s, OrderKind next, string why)
@@ -617,7 +727,7 @@ namespace HandsAreHigh
 
         private static bool MaybeCloseIn(CaptorState cs, SurrenderState s, float now)
         {
-            if (cs.Approaching || cs.CloseTries >= 2) return false;
+            if (cs.Approaching || cs.CloseTries >= 2 || cs.Unsafe) return false;
             if (cs.CloseDecided && !cs.Close) return false;
             // Control first: hands up and empty (the held gun on the ground), no order in progress.
             if (s.Weight < 0.95f || s.DropPending || s.HandsPending || !Arsenal.HandsEmpty(s.Bot) || Kneel.Active(s) || s.Order == Order.Follow) return false;
@@ -1000,6 +1110,7 @@ namespace HandsAreHigh
         {
             SurrenderState s = cs.Prisoner;
             ByBot.Remove(cs.Bot);
+            try { CaptorLoot.OnCustodyEnd(cs, released: false); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after custody", e); }
             OrbitAdapter.KeepAwake(cs.Owner, false, why);
             if (s != null && s.Custody == cs) s.Custody = null;
             if (s != null && cs.Group != null && s.Phase == Phase.HandsUp && !s.Dead)
@@ -1025,6 +1136,7 @@ namespace HandsAreHigh
         internal static void End(CaptorState cs, string why, bool released = false)
         {
             if (!ByBot.Remove(cs.Bot) && cs.Prisoner?.Custody != cs) return;
+            try { CaptorLoot.OnCustodyEnd(cs, released); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after custody", e); }
             SurrenderState s = cs.Prisoner;
             if (s != null && s.Custody == cs) s.Custody = null;
             OrbitAdapter.KeepAwake(cs.Owner, false, why);
@@ -1060,6 +1172,7 @@ namespace HandsAreHigh
             ByBot.Clear();
             Pending.Clear();
             PendingScratch.Clear();
+            CaptorLoot.Clear();
             OrbitAdapter.ReleaseAll();
         }
 
@@ -1072,6 +1185,8 @@ namespace HandsAreHigh
             prisoner = null;
             Player p = o?.GetPlayer;
             if (p == null || !Settings.Enabled.Value) return false;
+            // 0.16.0: fetching a released man's gear (custody already over).
+            if (CaptorLoot.WantsControl(p)) return true;
             if (ByBot.TryGetValue(p, out CaptorState cs))
             {
                 if (cs.Mode == CaptorMode.Engage || cs.Prisoner == null || cs.Prisoner.Suspended) return false;
@@ -1138,12 +1253,15 @@ namespace HandsAreHigh
             long t0 = Perf.Begin();
             try
             {
-                if (!Captors.WantsControl(BotOwner, out SurrenderState s) || s?.Bot == null) return;
+                if (!Captors.WantsControl(BotOwner, out SurrenderState s)) return;
                 if (Time.time >= _nextRelease)
                 {
                     _nextRelease = Time.time + 0.25f;
                     SainAdapter.ReleaseLayer(BotOwner, SurrenderRegistry.HistoryOf(BotOwner.GetPlayer));
                 }
+                // 0.16.0: walking to the prisoner's gear and picking it up.
+                if (CaptorLoot.TryJob(BotOwner.GetPlayer, out LootJob job)) { Fetch(job); return; }
+                if (s?.Bot == null) return;
                 Captors.TryGet(BotOwner.GetPlayer, out CaptorState cs);
                 if (cs != null && cs.Mode == CaptorMode.Cover) { MoveToCover(cs); return; }
                 if (cs != null && cs.Approaching) { WalkUp(cs, s); return; }
@@ -1226,6 +1344,48 @@ namespace HandsAreHigh
                 BotOwner.Mover.GoToByWay(way, 0.5f);
             }
             BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot));
+        }
+
+        // 0.16.0: one path to a point just short of the item, at a walk; eyes on the prisoner until
+        // close, then on the item; then still, looking down at it, for the game's pick-up.
+        private void Fetch(LootJob j)
+        {
+            if (Mathf.Abs(_pose - 1f) > 0.01f) { _pose = 1f; BotOwner.SetPose(1f); }
+            Player me = BotOwner.GetPlayer;
+            if (j.Stage == LootStage.Walk)
+            {
+                if (!j.PathIssued)
+                {
+                    j.PathIssued = true;
+                    if (!Perception.PathTo(me.Position, j.At, out Vector3[] corners, out _)) { j.ProgressSince = -1000f; return; }
+                    Vector3[] way = Captors.Shorten(corners, 0.8f);
+                    if (way.Length >= 2)
+                    {
+                        if (!_moving) Relink();
+                        _moving = true;
+                        _stopped = false;
+                        BotOwner.Sprint(false);
+                        BotOwner.SetTargetMoveSpeed(0.65f);
+                        BotOwner.MovementResume();
+                        BotOwner.Mover.GoToByWay(way, 0.4f);
+                    }
+                }
+                bool close = (me.Position - j.At).sqrMagnitude < 3f * 3f;
+                SurrenderState p = j.Prisoner;
+                if (!close && !j.AfterRelease && p?.Bot != null && Perception.Alive(p.Bot)) BotOwner.Steering.LookToPoint(Perception.Chest(p.Bot));
+                else BotOwner.Steering.LookToPoint(j.At + Vector3.up * 0.1f);
+                return;
+            }
+            if (_moving || !_stopped) { BotOwner.StopMove(); BotOwner.SetTargetMoveSpeed(0f); BotOwner.Sprint(false); _stopped = true; _moving = false; }
+            // As BotItemTaker.LookAndTakeItem: look at it, a little down.
+            Vector3 v = j.At - me.Position;
+            if (new Vector2(v.x, v.z).sqrMagnitude > 0.0225f)
+            {
+                v.Normalize();
+                if (v.y > -0.3f) { v.y = -0.3f; v.Normalize(); }
+                BotOwner.Steering.LookToDirection(v);
+            }
+            CaptorLoot.Settled(j, Time.time);
         }
 
         // As SurrenderLogic.Relink: the mover's last-good-link fields set to where he stands, so

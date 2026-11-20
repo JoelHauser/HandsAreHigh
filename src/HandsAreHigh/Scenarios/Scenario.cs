@@ -64,6 +64,28 @@ namespace HandsAreHigh
         internal string FailWhy;
         internal float SpawnedAt = -1f;
         internal float RequestedAt;
+        // 0.16.0 staging: each stage's time (Time.time, -1 = not yet), the profile held between the
+        // profile request and the activation, and test faults (labelled SIMULATED).
+        internal BotCreationData Data;
+        internal BotZone Zone;
+        internal int Core = -1;
+        internal bool ProfileReady, ActivationStarted;
+        internal float ProfileAt = -1f, CreatedAt = -1f, ActiveAt = -1f, BrainAt = -1f, ReleasedAt = -1f;
+        internal float ActivateAfter;       // test: activation held until (SIMULATED slow initialisation)
+        internal bool InjectFail;           // test: activation fails (SIMULATED)
+        internal string Stage()
+        {
+            if (Failed) return "failed";
+            if (ReleasedAt >= 0f) return "released";
+            if (BrainAt >= 0f) return "brain running (staged)";
+            if (ActiveAt >= 0f) return "active, brain not yet on the hold";
+            if (Spawned) return "placed, not active yet";
+            if (CreatedAt >= 0f) return "created, not placed yet";
+            if (ActivationStarted) return "activation asked, nothing created yet";
+            if (ProfileReady) return "profile ready, waiting to activate";
+            if (Requested) return "profile requested, no answer yet";
+            return "not requested";
+        }
         internal string ProfileId() => Player != null ? Player.ProfileId : "-";
         internal readonly HashSet<Item> Items = new HashSet<Item>();   // tracked by identity
         internal OnPlayerDeadOrUnspawn DeathHandler;
@@ -118,6 +140,8 @@ namespace HandsAreHigh
         internal readonly Dictionary<string, BotsGroup> Groups = new Dictionary<string, BotsGroup>();
         internal readonly Dictionary<string, BotZone> Zones = new Dictionary<string, BotZone>();
         internal bool KeepTruce;            // the truce between participants lasts the whole scenario
+        internal float CancelAt;            // test: cleaned up mid-spawn at this time (0: never)
+        internal bool Validated;
         internal readonly List<KeyValuePair<string, string>> KeptTruces = new List<KeyValuePair<string, string>>();   // or only these pairs (both ways)
         internal bool TruceLifted;
         internal readonly List<string> Forced = new List<string>();

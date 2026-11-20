@@ -330,18 +330,26 @@ namespace HandsAreHigh
             if (FindSquadmate(s, eye, out Vector3 mate)) { wS = M(d.Squad); pS = mate; }
             if (known)
             {
-                Vector3 away = bot.Position - captor; away.y = 0f;
-                if (away.sqrMagnitude < 0.01f) away = -bot.Transform.Original.forward;
-                away.Normalize();
-                float ang = Dice.Range(35f, 110f) * (Dice.Value < 0.5f ? -1f : 1f);
-                pE = eye + Quaternion.AngleAxis(ang, Vector3.up) * away * 6f;
+                // 0.17.0: a way out to his side, 40-70 deg off the way his body faces. 0.16 aimed
+                // 35-110 deg off "away from the captor", i.e. mostly behind him: every such glance
+                // ran the neck and the upper back to their limits (the wound-up torso in Joel's
+                // screenshots).
+                Vector3 bf = BodyFwd(bot, s);
+                if (bf.sqrMagnitude < 1e-4f) { bf = bot.Transform.Original.forward; bf.y = 0f; bf.Normalize(); }
+                float ang = Dice.Range(40f, 70f) * (Dice.Value < 0.5f ? -1f : 1f);
+                pE = eye + Quaternion.AngleAxis(ang, Vector3.up) * bf * 6f;
                 wE = M(d.Escape);
             }
             if (s.Kneel == KneelPhase.Down || s.Look.Demeanor == DemeanorKind.Frightened)
             {
-                Vector3 fwd = bot.Transform.Original.forward; fwd.y = 0f;
-                pD = bot.Position + fwd.normalized * 1.1f;
-                wD = M(d.Down) * (s.Kneel == KneelPhase.Down ? 1.5f : 0.7f);
+                // 0.16.0: eyes down, not the head bowed onto the chest: a point on the ground 2.5 m
+                // ahead (0.15.0 used 1.1 m, ~44 deg below his eyes on his knees: the head hung
+                // forward between his arms, as if his hands pulled it down). With his hands on his
+                // head it is rarer still; the pitch limit (Smooth) bounds it either way.
+                Vector3 fwd = BodyFwd(bot, s);
+                if (fwd.sqrMagnitude < 1e-4f) { fwd = bot.Transform.Original.forward; fwd.y = 0f; fwd.Normalize(); }
+                pD = bot.Position + fwd * 2.5f;
+                wD = M(d.Down) * (s.Kneel == KneelPhase.Down ? 1.2f : 0.7f) * (1f - 0.6f * Kneel.HandsWeight(s));
             }
             float total = wW + wT + wS + wE + wD;
             if (total <= 0f) return;
@@ -593,14 +601,20 @@ namespace HandsAreHigh
                 if (d.sqrMagnitude > 0.01f) pitch = -Mathf.Asin(Mathf.Clamp(d.normalized.y, -1f, 1f)) * Mathf.Rad2Deg;
             }
             DemeanorProfile prof = Of(s);
-            pitch += prof.Pitch * K * (onCaptor ? 1f : 0.3f);
+            // 0.16.0: hands clasped on his head carry a bowed head with them: the demeanor's tilt is
+            // halved there (a frightened man still lowers his eyes, not his whole head).
+            float hands = Kneel.HandsWeight(s);
+            pitch += prof.Pitch * K * (onCaptor ? 1f : 0.3f) * (1f - 0.5f * hands);
             // 0.15.0 limits, measured from his planted body (BodyFwd): the torso's share
             // (TorsoMax) plus the head's turn from the chest (HeadShare) is all he can turn.
-            float hands = Kneel.HandsWeight(s);
+            // 0.16.0: with his hands on his head (standing or kneeling) the neck bows and lifts only
+            // within Head down/up max with hands on head: the root cause of the head hanging
+            // forward was a 35 deg limit (and a 44 deg Down glance) applied as if his hands were up.
             float reach = Reach(s);
-            float maxUp = Mathf.Lerp(Settings.HeadMaxUp.Value, 12f, hands);
+            float maxUp = Mathf.Lerp(Settings.HeadMaxUp.Value, Settings.HandsOnHeadUp.Value, hands);
+            float maxDown = Mathf.Lerp(Settings.HeadMaxDown.Value, Settings.HandsOnHeadDown.Value, hands);
             now = Time.time;
-            if (onCaptor && Kneel.Active(s))
+            if (onCaptor && Planted(s))
             {
                 // His captor behind him (out of view: the layer's CaptorInView, or the last place
                 // he had him now beyond his reach): he loses him. No stare from a neck at its
@@ -627,8 +641,9 @@ namespace HandsAreHigh
                         p.BehindUntil = now + Dice.Range(0.6f, 1.1f);
                         p.NextBehindAt = p.BehindUntil + Dice.Range(4f, 9f) * M(prof.GlanceEvery);
                     }
-                    yaw = now < p.BehindUntil ? p.LostSide * reach : p.LostSide * Mathf.Min(10f, reach * 0.2f);
-                    pitch = Mathf.Max(pitch, 0f) * 0.5f + 8f;
+                    // Over the shoulder: as far as is comfortable (0.8 of his reach), never the limit.
+                    yaw = now < p.BehindUntil ? p.LostSide * reach * 0.8f : p.LostSide * Mathf.Min(10f, reach * 0.2f);
+                    pitch = Mathf.Max(pitch, 0f) * 0.5f + 8f * (1f - 0.5f * hands);
                 }
                 else if (Mathf.Abs(yaw) > reach)
                 {
@@ -641,8 +656,13 @@ namespace HandsAreHigh
                 p.Lost = false;
                 if (Mathf.Abs(yaw) > reach + 12f) { yaw = Mathf.Sign(yaw) * reach * 0.85f; pitch += 6f; }
             }
-            yaw = Mathf.Clamp(yaw, -reach, reach);
-            pitch = Mathf.Clamp(pitch, -maxUp, Settings.HeadMaxDown.Value);
+            // 0.17.0: a glance (anything but his captor) stays within a comfortable 0.75 of his reach:
+            // a look further round is a turn of the body (TurnDriver) or nothing, never neck and spine
+            // wound to their stops. Following his captor may use the whole reach (kneeling, until he
+            // loses him; standing, his body turns to the man).
+            float lim = onCaptor ? reach : reach * 0.75f;
+            yaw = Mathf.Clamp(yaw, -lim, lim);
+            pitch = Mathf.Clamp(pitch, -maxUp, maxDown);
             float speed = Settings.HeadSpeed.Value * M(prof.Speed);
             float smooth = p.Glance == GlanceKind.Captor ? 0.22f : 0.12f;
             p.Yaw = Mathf.SmoothDamp(p.Yaw, yaw, ref p.YawVel, smooth / M(prof.Speed), speed, dt);
@@ -653,7 +673,12 @@ namespace HandsAreHigh
         // max (55) kneeling; the hands behind the head go round with it (Kneel.ApplyHands follows
         // HeadDelta). The torso's: Torso turn max standing, Kneeling torso turn max (12) kneeling.
         private static float HeadShare(SurrenderState s) =>
-            Kneel.Active(s) ? Mathf.Min(Settings.KneelHeadYaw.Value, Settings.HeadMaxYaw.Value) : Settings.HeadMaxYaw.Value;
+            Kneel.Active(s) ? Mathf.Min(Settings.KneelHeadYaw.Value, Settings.HeadMaxYaw.Value)
+            : Mathf.Lerp(Settings.HeadMaxYaw.Value, Mathf.Min(Settings.HandsOnHeadYaw.Value, Settings.HeadMaxYaw.Value), Kneel.HandsWeight(s));
+
+        // 0.16.0: his body doesn't turn after his captor: kneeling (planted knees), or turned away
+        // on an order. Then a captor beyond what he can turn his head to is out of view.
+        internal static bool Planted(SurrenderState s) => Kneel.Active(s) || Facing.Away(s);
 
         private static float TorsoMax(SurrenderState s) =>
             Kneel.Active(s) ? Settings.KneelTorsoYaw.Value : Settings.TorsoAssist.Value;
@@ -669,7 +694,7 @@ namespace HandsAreHigh
         // the corner of his eye, measured from the way his knees point.
         internal static bool InView(SurrenderState s, Vector3 point)
         {
-            if (s?.Bot == null || !Kneel.Active(s)) return true;
+            if (s?.Bot == null || !Planted(s)) return true;
             Vector3 bodyF = BodyFwd(s.Bot, s);
             Vector3 d = point - Perception.Eye(s.Bot); d.y = 0f;
             if (bodyF.sqrMagnitude < 1e-4f || d.sqrMagnitude < 0.04f) return true;
@@ -710,6 +735,14 @@ namespace HandsAreHigh
                 // his body). Measured once per bot; no assumption about the rig's axes. Not on a
                 // frame whose torso we already turned or hunched (the measurement would keep it).
                 if (Kneel.Posing(s) || Mathf.Abs(p.Assist) > 0.5f || fl > 0.01f) return;
+                // 0.16.1: only on a frame where his look, his hips and the horizon agree. The animator
+                // turns the upper body (and head) towards the look by up to 45 deg off the hips, and
+                // tilts it with the aim pitch: a measurement taken during that twist (typically the
+                // first frame of a surrender, still aiming) left the head off by that much for the
+                // rest of the raid: he looked the wrong way at his captor.
+                Vector3 lk = pl.LookDirection, rf = pl.Transform.Original.forward;
+                Vector3 lkf = lk; lkf.y = 0f; rf.y = 0f;
+                if (lkf.sqrMagnitude < 1e-4f || rf.sqrMagnitude < 1e-4f || Vector3.Angle(lkf, rf) > 4f || Mathf.Abs(lk.normalized.y) > 0.08f) return;
                 Vector3 bf = pl.Transform.Original.forward;
                 p.HeadFwdLocal = Quaternion.Inverse(head.rotation) * bf;
                 p.HeadAxisOk = true;

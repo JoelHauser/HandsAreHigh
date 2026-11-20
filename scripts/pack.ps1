@@ -55,14 +55,20 @@ Write-Host "Version $version" -ForegroundColor Cyan
 # ---- config keys -----------------------------------------------------------------
 # BepInEx throws on = \ " ' [ ] in a section or key name, and a throw in Awake kills the
 # whole plugin without a line in LogOutput.log (0.0.2-0.1.0 shipped "You've left beyond").
-$settings = Join-Path $root 'src\HandsAreHigh\Settings.cs'
+# 0.16.0: every Settings*.cs (Settings.Realism.cs holds the newer sections), and section names
+# written inline in a Bind call too.
 $badChars = '[=\\"''\[\]\t]'
 $bad = @()
-foreach ($m in [regex]::Matches((Get-Content $settings -Raw), 'c\.Bind\(\s*(\w+)\s*,\s*"((?:[^"\\]|\\.)*)"')) {
-    if ($m.Groups[2].Value -match $badChars) { $bad += $m.Groups[2].Value }
-}
-foreach ($m in [regex]::Matches((Get-Content $settings -Raw), 'const string \w+ = "((?:[^"\\]|\\.)*)"')) {
-    if ($m.Groups[1].Value -match $badChars) { $bad += $m.Groups[1].Value }
+foreach ($settings in Get-ChildItem (Join-Path $root 'src\HandsAreHigh') -Filter 'Settings*.cs') {
+    $text = Get-Content $settings.FullName -Raw
+    foreach ($m in [regex]::Matches($text, 'c\.Bind\(\s*(\w+|"(?:[^"\\]|\\.)*")\s*,\s*"((?:[^"\\]|\\.)*)"')) {
+        if ($m.Groups[2].Value -match $badChars) { $bad += $m.Groups[2].Value }
+        $sec = $m.Groups[1].Value
+        if ($sec.StartsWith('"') -and $sec.Trim('"') -match $badChars) { $bad += $sec }
+    }
+    foreach ($m in [regex]::Matches($text, 'const string \w+ = "((?:[^"\\]|\\.)*)"')) {
+        if ($m.Groups[1].Value -match $badChars) { $bad += $m.Groups[1].Value }
+    }
 }
 if ($bad) { throw "Config names BepInEx rejects: $($bad -join ' | ')" }
 

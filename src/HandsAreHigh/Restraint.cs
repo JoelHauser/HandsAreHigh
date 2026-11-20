@@ -47,6 +47,7 @@ namespace HandsAreHigh
         internal int Situation;         // what the prisoner was doing: 0 hands up, 1 running unarmed
         internal float WatchUntil;      // squadmate: stands and watches him until then (when idle)
         internal EnemyInfo Flagged;     // the EnemyInfo whose ignore flag we set (cleared on release)
+        internal bool Final;            // 0.16.0: a deliberate lethal decision (Judgement): kept, never re-rolled
         internal bool Holds => Kind != RestraintKind.Reject;
     }
 
@@ -63,6 +64,16 @@ namespace HandsAreHigh
         internal static int EntryCount;
 
         // ---- queries (patches) ---------------------------------------------------------
+
+        // 0.17.0: a bot of this group decided to kill him (Judgement.Escalate): no one of that squad
+        // takes custody of him afterwards (which would ask the killer to hold fire again).
+        internal static bool SquadDecidedToKill(BotOwner o, Player prisoner)
+        {
+            if (o?.BotsGroup == null || prisoner == null || !ByPrisoner.TryGetValue(prisoner, out var map)) return false;
+            foreach (RestraintEntry e in map.Values)
+                if (e.Final && e.Owner != null && (e.Owner == o || e.Owner.BotsGroup == o.BotsGroup)) return true;
+            return false;
+        }
 
         internal static bool HoldsFire(Player observer, IPlayer prisoner)
         {
@@ -111,6 +122,15 @@ namespace HandsAreHigh
                 e = new RestraintEntry { Observer = observer, Owner = owner };
                 map[observer] = e;
                 EntryCount++;
+            }
+            else if (e.Final && kind != RestraintKind.Reject)
+            {
+                // 0.17.0: his own decision to kill this man stands. Before, a squadmate taking custody
+                // afterwards (InformSquad -> SquadDecision) set him back to holding fire: the
+                // ceasefire came back on its own and the decision was never carried out.
+                if (Settings.LogRestraint.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"Restraint: {Name(observer)} keeps his decision to kill {s.Name} (asked to {Verb(kind)} him: {why})");
+                return e;
             }
             bool was = e.Holds && e.DecidedAt > 0f;
             e.Kind = kind;
@@ -267,7 +287,7 @@ namespace HandsAreHigh
             if (s?.Bot == null || !ByPrisoner.TryGetValue(s.Bot, out var map)) return;
             int now = SituationOf(s);
             foreach (RestraintEntry e in map.Values)
-                if (e.Situation != now) e.Until = 0f;   // the scan re-decides (next pass)
+                if (e.Situation != now && !e.Final) e.Until = 0f;   // the scan re-decides (next pass)
         }
 
         // Every hit on a held bot: who fired, and was that a decision or a leak?
@@ -333,7 +353,8 @@ namespace HandsAreHigh
                 EnemyInfo info = Perception.InfoAbout(o, s.Bot);
                 if (info == null) continue;
 
-                if (TryGet(s.Bot, p, out RestraintEntry e) && now < e.Until)
+                if (TryGet(s.Bot, p, out RestraintEntry e) && e.Final) { e.Until = now + Settings.RestraintMemory.Value; continue; }
+                if (e != null && now < e.Until)
                 {
                     if (e.Holds) Flag(s, e);   // an EnemyInfo made after the decision gets the flag too
                     continue;
@@ -563,7 +584,7 @@ namespace HandsAreHigh
         // anyone holds fire): tells a round fired before a decision from an attack after it.
         private static readonly Dictionary<Player, float> ShotAt = new Dictionary<Player, float>();
         internal static void NoteShot(Player shooter) { if (ShotAt.Count > 256) ShotAt.Clear(); ShotAt[shooter] = Time.time; }
-        private static float LastShot(Player shooter) => shooter != null && ShotAt.TryGetValue(shooter, out float t) ? t : -1f;
+        internal static float LastShot(Player shooter) => shooter != null && ShotAt.TryGetValue(shooter, out float t) ? t : -1f;
 
         // A restrained bot pressing the trigger with his aim on a prisoner he holds fire at.
         internal static bool AimedAtRestrained(Player shooter, out Player prisoner)

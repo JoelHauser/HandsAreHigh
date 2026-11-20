@@ -12,7 +12,11 @@ namespace HandsAreHigh
         OrderStay, OrderDrop, OrderFollow, OrderKneel, OrderLeave,
         CaptorOrderStay, CaptorOrderDrop,
         ForceRun, ForceGrab, PretendLeft, Wiggle, Finger,
-        SurrenderToYou, SurrenderToEnemy
+        SurrenderToYou, SurrenderToEnemy,
+        // 0.16.0
+        OrderHands, OrderTurn, CaptorOrderHands, CaptorOrderTurn, DrawKept, CaptorWasHit,
+        // 0.17.0
+        CaptorKillsNow, CaptorLetsGo
     }
 
     // Controlled events against ONE selected participant. Each says what it is:
@@ -53,6 +57,14 @@ namespace HandsAreHigh
                 case ScenarioEvent.Wiggle: return "Wiggle window (FORCED start, real conditions)";
                 case ScenarioEvent.Finger: return "Middle finger window (FORCED start, real conditions)";
                 case ScenarioEvent.SurrenderToYou: return "Surrender to you (FORCED)";
+                case ScenarioEvent.OrderHands: return "Your order: Hands on head / Hands up (from where you stand)";
+                case ScenarioEvent.OrderTurn: return "Your order: Turn around (from where you stand)";
+                case ScenarioEvent.CaptorOrderHands: return "His bot captor orders: Hands on head";
+                case ScenarioEvent.CaptorOrderTurn: return "His bot captor orders: Turn around";
+                case ScenarioEvent.DrawKept: return "Draw the weapon he kept (FORCED, no roll)";
+                case ScenarioEvent.CaptorWasHit: return "His captor remembers being shot by him (SIMULATED memory)";
+                case ScenarioEvent.CaptorKillsNow: return "His captor decides to kill him now (FORCED decision only)";
+                case ScenarioEvent.CaptorLetsGo: return "His captor lets him go now (his real Leave order)";
                 default: return "Surrender to the bot he fights (FORCED)";
             }
         }
@@ -63,7 +75,9 @@ namespace HandsAreHigh
             {
                 case ScenarioEvent.Opening: case ScenarioEvent.Suppress: case ScenarioEvent.PretendLeft: return TL.Simulated;
                 case ScenarioEvent.Glance: case ScenarioEvent.ForceRun: case ScenarioEvent.ForceGrab: case ScenarioEvent.Wiggle:
-                case ScenarioEvent.Finger: case ScenarioEvent.SurrenderToYou: case ScenarioEvent.SurrenderToEnemy: return TL.Forced;
+                case ScenarioEvent.Finger: case ScenarioEvent.SurrenderToYou: case ScenarioEvent.SurrenderToEnemy:
+                case ScenarioEvent.DrawKept: case ScenarioEvent.CaptorKillsNow: return TL.Forced;
+                case ScenarioEvent.CaptorWasHit: return TL.Simulated;
                 default: return TL.Real;
             }
         }
@@ -83,7 +97,15 @@ namespace HandsAreHigh
                 case ScenarioEvent.Wiggle: case ScenarioEvent.Finger:
                 case ScenarioEvent.OrderStay: case ScenarioEvent.OrderDrop: case ScenarioEvent.OrderFollow:
                 case ScenarioEvent.OrderKneel: case ScenarioEvent.OrderLeave:
+                case ScenarioEvent.OrderHands: case ScenarioEvent.OrderTurn:
                     return handsUp ? null : "isn't holding his hands up";
+                case ScenarioEvent.CaptorOrderHands: case ScenarioEvent.CaptorOrderTurn: case ScenarioEvent.CaptorWasHit:
+                case ScenarioEvent.CaptorKillsNow: case ScenarioEvent.CaptorLetsGo:
+                    if (!handsUp) return "isn't holding his hands up";
+                    return s.Custody == null ? "no bot has custody of him" : null;
+                case ScenarioEvent.DrawKept:
+                    if (!handsUp) return "isn't holding his hands up";
+                    return Arsenal.GunOnBody(t.Player) == null && !Arsenal.HasMelee(t.Player) ? "has nothing on him to draw" : null;
                 case ScenarioEvent.ForceGrab:
                     if (!handsUp) return "isn't holding his hands up";
                     return s.DroppedWeapon == null ? "dropped no gun" : null;
@@ -183,6 +205,30 @@ namespace HandsAreHigh
                     return $"middle finger may start within {Settings.DefiantWindow.Value:0} s if its own conditions hold";
                 case ScenarioEvent.SurrenderToYou:
                     return ScenarioOps.Surrender(sc, t, me, true, "event") ?? "surrenders to you";
+                case ScenarioEvent.OrderHands: return OrderAny(s, OrderMenu.Resolve(s, OrderKind.HandsOnHead), me);
+                case ScenarioEvent.OrderTurn: return OrderAny(s, OrderKind.TurnAround, me);
+                case ScenarioEvent.CaptorOrderHands: return Order(s, OrderKind.HandsOnHead, s.Custody.Bot, false);
+                case ScenarioEvent.CaptorOrderTurn: return Order(s, OrderKind.TurnAround, s.Custody.Bot, false);
+                case ScenarioEvent.DrawKept:
+                    s.ForceDraw = Arsenal.GunOnBody(t.Player) != null;
+                    if (!s.ForceDraw) { s.EscalateAt = Time.time; return "goes for his knife now (the real draw path)"; }
+                    return "draws his gun on the next check (the real draw path; the game's readiness rules apply)";
+                case ScenarioEvent.CaptorKillsNow:
+                    return Judgement.ForceKillNow(s.Custody.Bot) is string no2 ? $"refused: {no2}" : $"{s.Custody.Name} decided (forced); restraint, target and fire are the real ones: watch 'opens fire' / 'KILL DECISION ...'";
+                case ScenarioEvent.CaptorLetsGo:
+                {
+                    CaptorState cs0 = s.Custody;
+                    if (!Orders.Give(s, OrderKind.Leave, cs0.Bot, false, out string why0)) return $"refused: {why0}";
+                    Captors.End(cs0, "let him go (scenario event)", released: true);
+                    return $"{cs0.Name} lets him go";
+                }
+                case ScenarioEvent.CaptorWasHit:
+                {
+                    EnemyInfo info = Perception.InfoAbout(s.Custody.Owner, t.Player);
+                    if (info == null) return "refused: his captor has no memory of him as an enemy to mark";
+                    info.LastGetHitTime = Time.time;
+                    return $"{s.Custody.Name}'s EnemyInfo for him now says he hit him just now (LastGetHitTime); nothing was fired";
+                }
                 default:
                 {
                     Player foe = Perception.PlayerOf(t.Owner2.Memory.GoalEnemy.Person);
@@ -190,6 +236,10 @@ namespace HandsAreHigh
                 }
             }
         }
+
+        // Your order from wherever you stand (the debug path: no range check), labelled so.
+        private static string OrderAny(SurrenderState s, OrderKind k, Player me) =>
+            Orders.Give(s, k, me, true, out string why, debug: true) ? "given by you (from any distance: test path)" : $"refused: {why}";
 
         private static string Order(SurrenderState s, OrderKind k, Player by, bool human) =>
             Orders.Give(s, k, by, human, out string why) ? $"given by {(human ? "you" : Restraint.Name(by))}" : $"refused: {why}";

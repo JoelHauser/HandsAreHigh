@@ -102,6 +102,9 @@ namespace HandsAreHigh
             Captors.Clear();
             CaptorVoice.Clear();
             Voice.ClearChecks();
+            Compliance.Clear();
+            Judgement.Clear();
+            ScenarioStaging.Clear();
             OrbitAdapter.ReleaseAll();
             Runtime.Menu.Reset();   // nothing bound to the old raid's bots, no key blocked
             UnhookAll();
@@ -114,6 +117,7 @@ namespace HandsAreHigh
             // start, not in the frame of the first surrender check.
             if (world != null) HandsAreHighPlugin.Try("prewarm", SainAdapter.Prewarm);
             if (world != null) HandsAreHighPlugin.Try("prewarm orbit", OrbitAdapter.Prewarm);
+            if (world != null) HandsAreHighPlugin.Try("prewarm looting bots", () => { bool _ = LootingBotsAdapter.Present; });
         }
 
         internal static BotHistory HistoryOf(Player bot)
@@ -226,6 +230,7 @@ namespace HandsAreHigh
             s.HitHandler = (info, part, absorbed) =>
             {
                 s.WasHit = true;
+                try { s.LastHitBy = Perception.PlayerOf(info.Player?.iPlayer); s.LastHitAt = Time.time; } catch { }
                 // A man shot while escaping from his knees runs: hits are never reconsidered
                 // (ReassessEscape would otherwise call off the bolt if his captor covered him).
                 s.KneelEscape = false;
@@ -357,7 +362,7 @@ namespace HandsAreHigh
                     },
                     onThrown: ok =>
                     {
-                        if (ok) s.TThrown = Time.realtimeSinceStartup;
+                        if (ok) { s.TThrown = Time.realtimeSinceStartup; if (s.DroppedWeapon != null) Compliance.NoteDropped(s, s.DroppedWeapon); }
                         else HandsAreHighPlugin.Log.LogWarning($"{s.Name}: the game refused to throw his gun; it went back on his body");
                     });
                 if (dropped != null)
@@ -494,7 +499,8 @@ namespace HandsAreHigh
                 {
                     if (s.Phase == Phase.HandsUp)
                     {
-                        HandsAreHighPlugin.Log.LogInfo($"{s.Name}: killed with his hands up");
+                        // 0.16.0: who killed him, and whether that was a decision or a leak.
+                        HandsAreHighPlugin.Log.LogInfo($"{s.Name}: killed with his hands up{Judgement.DeathReport(s)}");
                         Witness(s.LastPosition, bot, "a surrendered man killed");
                     }
                     Finished.Add(bot);
@@ -521,6 +527,7 @@ namespace HandsAreHigh
                     try { Restraint.OnArmed(s, what); } catch (System.Exception e) { HandsAreHighPlugin.Report("restraint armed", e); }
                 }
                 try { Kneel.Update(s, dt); } catch (System.Exception e) { HandsAreHighPlugin.Report("kneel", e); }
+                try { HandsPose.Update(s, dt); Facing.Update(s, dt); } catch (System.Exception e) { HandsAreHighPlugin.Report("hands and facing", e); }
                 try { Presence.Update(s, dt); } catch (System.Exception e) { HandsAreHighPlugin.Report("presence", e); }
                 try { Gestures.Update(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("gestures", e); }
 
@@ -627,6 +634,7 @@ namespace HandsAreHigh
         private static void Release(SurrenderState s, string why)
         {
             HandsAreHighPlugin.Try("release gesture", () => Gestures.Cancel(s, why));
+            HandsAreHighPlugin.Try("release turn", () => TurnDriver.Stop(s));   // 0.17.0: the game's trunk limit back
             s.PendingVoice = null;
             s.VerifyAt = -1f;
             s.VerifyClip = null;
@@ -677,6 +685,10 @@ namespace HandsAreHigh
             Captors.Clear();
             CaptorVoice.Clear();
             Voice.ClearChecks();
+            Compliance.Clear();
+            Judgement.Clear();
+            ScenarioStaging.Clear();
+            LootingBotsAdapter.Reset();
             OrbitAdapter.ReleaseAll();
             States.Clear();
             Finished.Clear();

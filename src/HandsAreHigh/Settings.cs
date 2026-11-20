@@ -6,7 +6,7 @@ namespace HandsAreHigh
     // Every tuning value, in numbered F12 sections. All of it applies live except the
     // layer priority, which BigBrain only reads once at startup.
     // Section and key names must never contain = \ " ' [ ] (BepInEx throws; pack.ps1 checks).
-    internal static class Settings
+    internal static partial class Settings
     {
         private const string General = "01. General";
         private const string NerveSec = "02. Nerve";
@@ -808,6 +808,7 @@ namespace HandsAreHigh
                 "Turns the bracing hand over (180 deg about the fingers). Only if the palm shows the back of the hand on the thigh: which side of the rig's palm bone faces down was inferred from the thumb root, not seen in game.");
             BindKneel(c);
             BindScenarios(c);
+            BindRealism(c);
         }
 
         private static void BindKneel(ConfigFile c)

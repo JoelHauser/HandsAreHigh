@@ -22,7 +22,9 @@ namespace HandsAreHigh
     // BotSpawner.GetGroupAndSetEnemies builds one (enemies list, SetBotAsEnemy, Groups.AddNoKey);
     // later members join it the way that method's TryGetValue branch does (SetBotAsEnemy, same
     // group). So a scenario squad is a real BotsGroup and never joins a random raid group.
-    // Squad members are requested one after another (the next after the previous one's callback).
+    // 0.16.0: every profile is requested at launch (in parallel); each bot is activated by the
+// scenario tick once his profile is here (a squad's first member first: he makes the group) and
+// held (ScenarioStaging) from creation until all are ready.
     //
     // Remove: BotLeaveData.RemoveFromMap (the game's path for a bot leaving the map: Deactivate,
     // Dispose, IBotGame.BotDespawn), only for living bots this scenario spawned. Dead ones stay
@@ -143,10 +145,13 @@ namespace HandsAreHigh
             return false;
         }
 
+        // 0.16.0: the profile only (BotCreationData.Create: the server round trip, seconds), for
+        // every participant at launch, in parallel. Activation is the scenario tick's (Activate),
+        // squad by squad, once the profile is here: nothing in the world exists before that.
         internal static void Request(Scenario sc, Participant p)
         {
-            // One request per participant: a second one (a repeated RequestNext, a retry racing
-            // the first answer) would spawn a second bot for the same slot.
+            // One request per participant: a second one (a repeated launch, a retry racing the
+            // first answer) would spawn a second bot for the same slot.
             if (p.Requested && !p.Failed)
             {
                 HandsAreHighPlugin.Log.LogWarning($"Scenario {sc.Title}: {p.Tag}: spawn already requested {Time.time - p.RequestedAt:0.0} s ago; second request ignored");
@@ -159,8 +164,8 @@ namespace HandsAreHigh
             p.SpawnedAt = -1f;
             p.RequestedAt = Time.time;
             p.Raid = Scenarios.RaidSerial;
-            sc.Note(TL.Real, $"{p.Tag}: spawn requested ({p.Role}, {p.Side}, squad {p.Squad}) at {p.Spot} ({Vector3.Distance(sc.Anchor, p.Spot):0} m from the centre)");
-            RequestAsync(sc, p);
+            sc.Note(TL.Real, $"{p.Tag}: profile requested ({p.Role}, {p.Side}, squad {p.Squad}) for {p.Spot} ({Vector3.Distance(sc.Anchor, p.Spot):0} m from the centre)");
+            ProfileAsync(sc, p);
         }
 
         // The side to ask the profile cache for. SPT's server sends every PMC (Bear/Usec) with
@@ -183,25 +188,22 @@ namespace HandsAreHigh
             return null;
         }
 
-        private static async void RequestAsync(Scenario sc, Participant p)
+        private static async void ProfileAsync(Scenario sc, Participant p)
         {
-            BotSpawner sp = null;
-            bool counted = false, answered = false;
             string stage = "checks";
             try
             {
-                // Prerequisites, checked again here (the menu checked them at launch; a squad's
-                // later members are requested seconds after).
+                // Prerequisites, checked again here.
                 if (!Ready(out string notReady)) { Fail(sc, p, notReady); return; }
                 IBotGame game = Singleton<IBotGame>.Instance;
-                sp = game.BotsController.BotSpawner;
+                BotSpawner sp = game.BotsController.BotSpawner;
                 if (sp._gameEnd) { Fail(sc, p, "the raid is ending (the game stopped spawning)"); return; }
                 string stale = Stale(sc, p);
                 if (stale != null) { Fail(sc, p, $"not requested: {stale}"); return; }
-                int core = NearestCorePoint(game.BotsController, p.Spot);
-                if (core < 0) { Fail(sc, p, "no AI core point near the spot"); return; }
-                BotZone zone = sp.GetClosestZone(p.Spot, out _);
-                if (zone == null) { Fail(sc, p, "no bot zone near the spot"); return; }
+                p.Core = NearestCorePoint(game.BotsController, p.Spot);
+                if (p.Core < 0) { Fail(sc, p, "no AI core point near the spot"); return; }
+                p.Zone = sp.GetClosestZone(p.Spot, out _);
+                if (p.Zone == null) { Fail(sc, p, "no bot zone near the spot"); return; }
 
                 stage = "profile";
                 EPlayerSide ask = RequestSide(p.Role, p.Side);
@@ -216,19 +218,72 @@ namespace HandsAreHigh
                     return;
                 }
                 if (data == null || data.Count == 0) { Fail(sc, p, $"the server returned no {p.Role} profile (asked as side {ask}, difficulty normal)"); return; }
-                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"Scenario {sc.Title}: {p.Tag}: profile ready after {Time.time - p.RequestedAt:0.0} s");
-                data.AddPosition(p.Spot, core);
-                if (!sc.Groups.ContainsKey(p.Squad)) sc.Zones[p.Squad] = zone;
-                else if (sc.Zones.TryGetValue(p.Squad, out BotZone z0) && z0 != null) zone = z0;
+                data.AddPosition(p.Spot, p.Core);
+                p.Data = data;
+                p.ProfileReady = true;
+                p.ProfileAt = Time.time;
+                sc.Note(TL.Info, $"{p.Tag}: profile ready after {p.ProfileAt - p.RequestedAt:0.0} s");
+            }
+            catch (Exception e)
+            {
+                Fail(sc, p, Diagnose(stage, p, e));
+                HandsAreHighPlugin.Report("scenario profile", e);
+            }
+        }
+
+        // The scenario tick: may this one be activated now? The first of a squad makes its group;
+        // the others join it once it exists (two at once would make two groups).
+        internal static string ActivationBlock(Scenario sc, Participant p)
+        {
+            if (!p.ProfileReady || p.ActivationStarted || p.Failed) return "not ready";
+            if (Time.time < p.ActivateAfter) return "held (SIMULATED slow start)";
+            Participant first = null;
+            foreach (Participant q in sc.People) if (q.Squad == p.Squad && q.Existing == null) { first = q; break; }
+            if (first != null && first != p)
+            {
+                if (first.Failed) return "squad lead failed";
+                if (!sc.Groups.ContainsKey(p.Squad)) return "waits for his squad's group";
+            }
+            return null;
+        }
+
+        internal static void Activate(Scenario sc, Participant p)
+        {
+            p.ActivationStarted = true;
+            ActivateAsync(sc, p);
+        }
+
+        private static async void ActivateAsync(Scenario sc, Participant p)
+        {
+            BotSpawner sp = null;
+            bool counted = false, answered = false;
+            string stage = "activation";
+            try
+            {
+                string stale = Stale(sc, p);
+                if (stale != null) { Fail(sc, p, $"not activated: {stale}"); return; }
+                if (p.InjectFail) { Fail(sc, p, "SIMULATED failure at activation (test)"); return; }
+                IBotGame game = Singleton<IBotGame>.Instance;
+                sp = game?.BotsController?.BotSpawner;
+                if (sp == null || sp._gameEnd) { Fail(sc, p, "the raid is ending (the game stopped spawning)"); return; }
+                BotZone zone = p.Zone;
+                if (sc.Zones.TryGetValue(p.Squad, out BotZone z0) && z0 != null) zone = z0;
+                else sc.Zones[p.Squad] = zone;
+                BotCreationData data = p.Data;
 
                 // The game's bookkeeping, as BotSpawner.method_7 does it: ++ here, -- in
                 // ActivateBotCallback. ActivateBot can finish without ever calling back
                 // (cancelled, SpawnStopped, no position, player creation failed); the count is
                 // then given back below, or the raid's bot cap (AllBotsWithLoaded) stays lowered.
-                stage = "activation";
                 sp._inSpawnProcess++;
                 counted = true;
-                Func<BotOwner, BotZone, BotsGroup> groupAction = (bot, z) => { p.Created = bot; return GroupFor(sc, p, sp, bot, z); };
+                Func<BotOwner, BotZone, BotsGroup> groupAction = (bot, z) =>
+                {
+                    p.Created = bot;
+                    p.CreatedAt = Time.time;
+                    ScenarioStaging.Add(sc, p, bot);   // held from before his first brain update
+                    return GroupFor(sc, p, sp, bot, z);
+                };
                 await sp._botCreator.ActivateBot(data, zone, false, groupAction,
                     bot => { answered = true; sp.ActivateBotCallback(bot, data, b => Spawned(sc, p, b), false, new System.Diagnostics.Stopwatch()); },
                     sp.GetCancelToken());
@@ -236,6 +291,7 @@ namespace HandsAreHigh
                 {
                     sp._inSpawnProcess--;
                     counted = false;
+                    if (p.Created != null) { ScenarioStaging.Drop(p.Created); RemoveHalfMade(p.Created); p.Created = null; }
                     Fail(sc, p, data.SpawnStopped ? "the game stopped this spawn (SpawnStopped)" : "the game's bot creator finished without a bot (cancelled or the player couldn't be created)");
                 }
             }
@@ -246,6 +302,7 @@ namespace HandsAreHigh
                 string cleanup = "";
                 if (p.Created != null && !p.Spawned)
                 {
+                    ScenarioStaging.Drop(p.Created);
                     cleanup = $"; the half-made bot: {RemoveHalfMade(p.Created)}";
                     p.Created = null;
                 }
@@ -287,8 +344,8 @@ namespace HandsAreHigh
         {
             if (p.Failed || p.Spawned) return;
             p.Failed = true;
-            p.FailWhy = why;
-            sc.Note(TL.ExecFail, $"{p.Tag}: spawn failed: {why}");
+            p.FailWhy = $"{why} (stage: {p.Stage()})";
+            sc.Note(TL.ExecFail, $"{p.Tag}: spawn failed: {p.FailWhy}");
         }
 
         private static BotsGroup GroupFor(Scenario sc, Participant p, BotSpawner sp, BotOwner bot, BotZone zone)
@@ -329,7 +386,7 @@ namespace HandsAreHigh
             {
                 p.Created = null;
                 if (bot == null) { Fail(sc, p, "the game returned no bot"); return; }
-                if (p.Spawned) { HandsAreHighPlugin.Log.LogWarning($"Scenario {sc.Title}: {p.Tag}: a second bot arrived for one request; removed: {RemoveHalfMade(bot)}"); return; }
+                if (p.Spawned) { ScenarioStaging.Drop(bot); HandsAreHighPlugin.Log.LogWarning($"Scenario {sc.Title}: {p.Tag}: a second bot arrived for one request; removed: {RemoveHalfMade(bot)}"); return; }
                 p.Owner2 = bot;
                 p.Player = bot.GetPlayer;
                 p.Spawned = true;
@@ -338,6 +395,7 @@ namespace HandsAreHigh
                 if (stale != null)
                 {
                     // Not registered with a scenario that is gone: removed on arrival.
+                    ScenarioStaging.Drop(bot);
                     string what = Despawn(p);
                     if (p.Raid == Scenarios.RaidSerial) sc.Note(TL.Info, $"{p.Tag}: arrived after {stale}: {what}");
                     return;
@@ -348,8 +406,8 @@ namespace HandsAreHigh
                 EPlayerSide got = p.Player.Profile?.Info?.Side ?? EPlayerSide.Savage;
                 string sideNote = got != p.Side ? $" (side {got}, expected {p.Side})" : "";
                 sc.Note(TL.Real, $"{p.Tag} spawned after {Time.time - p.RequestedAt:0.0} s: {p.Player.Profile?.Nickname} ({p.ProfileId()}, {p.Role}, {got}){sideNote}, group {bot.BotsGroup?.Id}, " +
-                    $"{Vector3.Distance(p.Spot, p.Player.Position):0.0} m from the validated spot, {Vector3.Distance(sc.Anchor, p.Player.Position):0} m from the centre, state {bot.BotState}");
-                Scenarios.RequestNext(sc, p.Squad);
+                    $"{Vector3.Distance(p.Spot, p.Player.Position):0.0} m from the validated spot, {Vector3.Distance(sc.Anchor, p.Player.Position):0} m from the centre, state {bot.BotState}" +
+                    $"{(ScenarioStaging.Holds(bot) ? ", held until everyone is ready" : "")}");
             }
             catch (Exception e)
             {
@@ -363,6 +421,7 @@ namespace HandsAreHigh
         internal static string Despawn(Participant p)
         {
             if (p.Existing != null) return "an existing raid bot: left alone";
+            ScenarioStaging.Drop(p.Owner2);
             if (p.Removed) return "already removed";
             BotOwner o = p.Owner2;
             Player pl = p.Player;

@@ -6,6 +6,218 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.17.0 (2026-11-20): facing/turning via the game's stepping turn, lethal path made reachable and
+watched, committed retreats, compact menu. Packed (dist/HandsAreHigh-0.17.0.zip) and installed in
+H:\SPT4.1.X. Committed and pushed to main with 0.16.0/0.16.1 (2026-11-20, no tag/release). NEVER RUN IN
+GAME (0.16.1 was never installed; the 11:21 log is 0.16.0).**
+
+From the 0.16.0 log (2026-11-20 11:21, 13 scenarios): every lethal roll was a compliant prisoner at
+release (3-7%), none hit; resistance was fought ("shot ... as decided" x2); every release ended in a
+short sprint and "got away", often followed by "going for <his own gun> 23-26 m away"; the gear
+weighing, staging and kept-weapon presets ran (kit "Keeps sidearm" had no sidearm in that seed).
+
+Root causes and what changed:
+- Turning: player_anim_controller (read with UnityPy) goes Idle_Aim -> Turn_Left/Right_90_Aim when
+  DeltaRotation < -45 / > 45; the clip steps the feet and its root motion turns the root
+  (MovementState.ProcessAnimatorMovement applies AnimatorDeltaRotation). A bot's root is snapped to
+  exactly TrunkRotationLimit 45 (ProcessUpperbodyRotation, AI branch), so DeltaRotation never passes
+  45: bots spin. 0.16 rotated the root itself (ApplyRotation) with the look 25 deg ahead.
+  TurnDriver.cs: turns over 70 deg raise the prisoner's own TrunkRotationLimit to 80 (the game sets it
+  per player too, e.g. 25 prone) and lead the look by 60: the game's clip turns him. Restored when
+  the step ends, on any stop, release, phase change, teardown (TurnDriver.Stop). No root turn seen
+  within 0.9 s -> that bot pivots from then on (warning). Smaller turns: pivot (ApplyRotation) with
+  the look <= 35 ahead (never a clip). Used for Turn around, facing the captor (hysteresis 15 deg),
+  the pre-kneel turn (Kneel.TurnRoot no longer called). Setting 19 "Turn with stepping feet".
+- Head/torso: glances capped at 0.75 of his reach; the way-out glance is 40-70 deg off his body
+  (0.16 aimed 35-110 deg off "away from the captor": behind him, neck and spine at their stops);
+  over-the-shoulder at 0.8 reach. Captor tracking keeps the full reach; beyond it a kneeling man loses
+  him, a standing one turns his body.
+- Lethal: (1) an unarmed bolt from custody had no decision (squad rule always LetGo for the captor
+  himself): Judgement.OnBolt, once, if he saw it, "Fires at a prisoner who runs" 0.3 x aggression x
+  he-shot-me x kept-back x discipline. (2) a kill decision could be undone: a squadmate taking custody
+  afterwards ran InformSquad -> SquadDecision -> Set(Respect) over the killer's entry. Now Final
+  entries can't be overwritten with hold-fire, and Captors.Impractical refuses custody for a squad
+  that decided to kill (Restraint.SquadDecidedToKill). (3) execution watch (Judgement.TickKills,
+  0.5 s): logs "opens fire ... s after deciding", "KILL DECISION CARRIED OUT", or after 10 s "KILL
+  DECISION NOT CARRIED OUT: layer, target, hands, sight, restraint, shield"; re-sets the target at
+  most 3 times if it drifted while he sees the man. No health is touched.
+- Retreat: RetreatPoint scored any hidden spot +100 regardless of distance and ignored where he was
+  held. Perception.FleePoint: destination outside "Leaves the captivity area (m)" 40 of HeldAt (set
+  in MarkFlight when he leaves his hands-up), complete route that never gets closer to the threat
+  than he is (PassesNear), scored by concealment, separation, route length; else a leg through cover
+  gaining >= 8 m. Arrival inside the area -> next leg (max 5 legs); replan (<= 2/leg) if the captor
+  he sees is within 10 m of the destination. Logged: destination, legs, "retreat ends (...): X m
+  from where he was held, Y m covered in Z s". "No going back for a gun for (s)" 60: guns in the area
+  he fled are not recovery targets until then (a gun he carries is still drawn).
+- Menu: fixed number per order (1 Drop weapons, 2 Drop kit, 3 Armour off, 4 Follow me, 5 Get down /
+  Stand up, 6 Hands on head / Hands up, 7 Turn around, 8 Stay, 9 Let go); config-disabled orders
+  leave their number unused, unavailable ones stay greyed with the reason. One-line header (name,
+  side, state), 23 px rows (was 30), 16 px badges, short footer. InputGuard unchanged (the closing
+  press is latched, verified in code).
+- New presets: Captor execution check (Kill now = FORCED decision only; or a forced bolt with the
+  captor's own roll / forced lethal), Retreat from captivity (let go or bolt, mercy forced). Events:
+  "His captor decides to kill him now", "His captor lets him go now".
+- Config keys: two new names first had apostrophes (would have killed the plugin at load); caught by
+  the offline check, renamed. pack.ps1 checks every Settings*.cs.
+
+### In-game test plan (0.17.0)
+1. Turn around standing, several angles: feet step (the game's turn clip), log "stepped round N deg
+   with the game's turn animation"; a "no stepping turn ... pivots" warning means the clip didn't play.
+   Walk round him afterwards: no turn back. Kneeling: up, step round, down.
+2. Captor circling a standing prisoner (Captor closes in preset, or walk round yourself): small moves
+   = head only, beyond ~15 deg a short pivot, beyond 70 a step turn; no wound-up trunk. Kneeling: head
+   and a little torso, then "loses sight of his captor". Hands on head while doing it.
+3. Captor execution check: Kill now (each posture, squad 1 and 3): "opens fire", "CARRIED OUT",
+   squadmates still "holds fire"; zero RESTRAINT LEAK. He bolts (own roll) several times, Wreckless vs
+   Timmy captor: some "lets him run", some "DECIDES TO KILL".
+4. Retreat from captivity in the open, inside a building, in a dead end: "flees to ... m from where
+   he was held", legs, "retreat ends ... >= 40 m", no "going for <his gun>" in the area within 60 s.
+5. Menu at 1080p / 1440p and Menu size 0.6 / 1.5: readable, digits 1-9 fixed, greyed rows, the
+   closing 0 or a submitting digit never switches your weapon.
+
+**0.16.1 (2026-11-20): facing fix from Joel's screenshot (standing, hands on head, chest twisted,
+head looking away from him). Packed (dist/HandsAreHigh-0.16.1.zip), NOT installed (game was
+running); superseded by 0.17.0, which includes it. Unrun.**
+- Standing facing set only the look (SurrenderLogic.Face); the game turns a bot's root only past 45
+  deg and then to 45 deg short, so after any big turn he stood with his trunk twisted up to 45 deg
+  (the 0.15.0 kneel finding, never fixed standing). Facing.FaceRoot turns the root to the look
+  target (ApplyRotation, 3 deg dead zone, Turn speed eased) whenever he faces his captor standing
+  still.
+- Presence measured the head's forward once per bot on the first frame, against the root: during
+  that 45 deg twist (or aiming up/down) the head stayed that far off for the raid. Now measured only
+  when look and root agree within 4 deg and the look is level.
+
+**0.16.0 (2026-11-20, home PC): realism and polish pass: captors take surrendered gear, Turn
+around and Hands on head orders (player and bot captors), head pose fix, partial compliance with
+Drop your weapons, captor judgement (warn / repeat / release / lethal) with explicit decision
+points, staged scenario spawns. Release build packed (dist/HandsAreHigh-0.16.0.zip) and installed in
+H:\SPT4.1.X 2026-11-20 (0.15.0 DLL backed up in that session's scratchpad). Ran in game 2026-11-20
+(log 11:21, 13 scenarios; findings under 0.17.0).**
+
+From Joel's 0.15.0 log (LogOutput.log 2026-11-20 08:53): 5 scenarios. #1 (PMC squad): Prisoner
+active +4.7 s, PMC-1 +9.9 s, PMC-2 only requested then (squad members one after another), cleaned
+up at +21 s with PMC-2's profile still on its way. Every bot captor's plan was "disarm and release"
+or "hold and release" and every custody ended `ordered Leave`; nobody was ever killed by a captor.
+A frightened kneeler picked the Down glance 4 times in a row (weight 2.4 vs <= 0.7 for the rest).
+
+Root causes:
+- Mercy: after custody there was NO lethal decision point at all: every plan ended with Leave,
+  every custody ending (busy, lost sight, captor down) is non-lethal by design, and scenarios use
+  ForceAccept (skips Decide), so the only lethal paths were the initial refusal ((1-0.65m)(1-0.75m)
+  ~9% at mercy 1, never in a forced scenario), a squadmate's 2% refusal, and an observed draw.
+- Head bowed between the hands: kneeling, the Down glance looked at the ground 1.1 m ahead (~44 deg
+  below the eyes), clamped only by Head down max 35, and the frightened demeanor added 9 deg; the
+  hands follow HeadDelta (correct), so the head hung forward with the hands on it. No IK feedback
+  (the animator rewrites the bones every frame; hands follow the head, never the reverse), no
+  spine/neck compensation, targets not low (palm centre at skull height, 0.11 m behind it).
+- Scenario start: ScenarioSpawner requested squad members one at a time and every bot acted the
+  moment it was active (no hold).
+
+Engine facts used (0.16.9 decompile, scratchpad eftfull; BigBrain 1.5.0 decompiled too):
+- Bot pick-up = BotItemTaker: claim check `ItemTaker._itemToTake` of squadmates (SomebodyTargetItem),
+  room = GetItemAddress (InventoryController.FindSlotToPickUp: only an EMPTY equipment slot that
+  takes it; else FindGridToPickUp, never for a Weapon), then `CurrentManagedState.Pickup(true, cb)`
+  (only IdlePlayerState overrides it -> PickUpState fires cb after 0.6 s, exits by itself after 5 s),
+  in cb ItemManipulator.QuickFindAppropriatePlace(simulate) + StrictCheckMagazine +
+  InventoryController.RunNetworkTransaction, then Pickup(false). CaptorLoot mirrors it exactly; no
+  idle state within 1.5 s or no callback in 4 s -> the same transaction without the animation.
+- EnemyInfo.LastGetHitTime: set by BotOwner.GetHit for the enemy that hit him = "he shot me".
+- MovementContext.ApplyRotation feeds DeltaRotation (look minus root) to the body animator; the
+  game snaps a bot's root past TrunkRotationLimit 45. Human turn-in-place states exist
+  (Turn_Left/Right_90_Aim) but no code drives them for bots: whether the animator steps on a
+  root turn is UNVERIFIED (look at it in game).
+- BigBrain CustomLayerWrapper.Name() = GetName(); Brain.ActiveLayerName() reports our layers.
+
+What changed (files): HandsPose.cs, Facing.cs, Compliance.cs, Judgement.cs, CaptorLoot.cs,
+Settings.Realism.cs (sections 19-22, two keys in 17), Scenarios/ScenarioStaging.cs; edits in
+Orders, OrderMenu, Captors, SurrenderLayer, SurrenderState, SurrenderRegistry, Kneel, Presence,
+ArmPose, Decisions, Restraint, Gestures, CommandVoice, CaptorVoice, Runtime, Compat (Looting Bots
+adapter), Scenario*.cs; pack.ps1 checks every Settings*.cs.
+- Hands on head (HandsPose): its own order (HandsOnHead / HandsUp; menu slot 9, label flips),
+  posture untouched. Only empty hands move (drop still under way -> waits). Kneel.ApplyHands runs
+  standing too, weight HeadHands x arms weight. Get down still puts the hands on the head unless
+  Hands up was ordered this surrender (19. "Get down puts hands on head"); the descent's own hand
+  window keeps its timing; a compliant rise with the order kept keeps them there and never braces.
+  Arm IK target clamped to an elbow of 25-160 deg (Kneel.ClampReach): the hand stops short instead
+  of locking the elbow. Gestures off while the hands are on the head or he is turned away.
+- Head (Presence): with the hands on the head pitch is limited to 19. Head down/up max with hands on
+  head (12 / 16), standing yaw to 50; demeanor pitch halved; Down glance 2.5 m ahead and x0.4 with
+  hands on head. Head not frozen: glances, looking up, the over-the-shoulder glance all remain.
+- Turn around (Facing): direction fixed at the order (back to where the issuer stood); root turned
+  at 110 deg/s eased (ApplyRotation), look leading by up to 25 deg; room for raised hands checked
+  (0.32 m sphere cast) or refused; from his knees: compliant rise, turn, kneel again facing away
+  (19. "Turn around from his knees"; off = refused); refused while getting up/down. Afterwards the
+  layer doesn't face the captor (SurrenderLogic asks Facing.Look first), Presence treats him as
+  planted (captor behind = out of view, over-the-shoulder glances, no turn back). Ends on Follow,
+  phase change, new surrender, another Turn around. Menu: 10th row (no number key; wheel / next).
+- Partial compliance (Compliance): Drop your weapons covers slung/holstered guns and the knife
+  (the gun in hand went at the surrender). One decision per accepted demand: first demand drop all
+  or keep one back (holster > knife > slung; his only weapon only if pistol/knife), repeated demand
+  comply / refuse / escalate (a real draw after his reaction time). Real items only; the report line
+  reads back his equipment: "disarmed" only when his weapon slots are empty. On screen: what you can
+  see, never what he kept. Kept on purpose: draw weight x1.3 at a later real opening (never certain).
+- Captor notice (Judgement.AfterDemand, once per answered demand): a slung gun he can see, a
+  holstered pistol within 4 m with a line, a gun he saw earlier that didn't land (SeenWeapons);
+  never a knife or bag contents. Noticed -> demand again (at most 2, warning line), then Refusal:
+  lethal roll, else last warning + let go soon (Unsafe: no close-in, no fetching, no second roll).
+- Release decision (Judgement.AtRelease, once per custody): kill instead of letting go, chance
+  0.04 x aggression x he-shot-me 2.5 x kept-back 1.8 x discipline, cap 0.6. Lethal = Reject on that
+  captor only, entry Final (never re-rolled when the man runs), captor's target set, custody ended;
+  his squad's restraint stays. Death line: `killed with his hands up by X: as decided (...)` /
+  `RESTRAINT LEAK` / `no decision about him`. Decide: known violence x0.63 on mercy.
+- Gear (CaptorLoot): per item once: value (handbook incl. contents), gap (empty slot), room (game's
+  address), appetite roll (0.6 x greed: Rat 1.5 .. Coward 0.7), risk (0.5 x by his feet 1.6 x weapon
+  seen on him 2.2 x kneeling 0.55 x turned away 0.5 x hands on head 0.8 x squadmate covering 0.35 x
+  hurt x caution x experience) vs 21. Risk he accepts 0.5: take / later / leave. Later: re-weighed
+  only when the situation changes (kneels, turns, cover), a Turn around ordered first (once), or
+  fetched after the release once the man is > 15 m or out of sight (leaves it beyond 25 m). Fetch:
+  walk 0.65, eyes on the prisoner until 3 m, then on the item; still and looking down for the
+  pick-up. Prisoner sees `his captor is picking up his X` (clear, 0.9) or `walking over to` (0.7);
+  behind him he hears it; other guards he can see still cover him. Captor sees resistance 0.35-0.8 s
+  later while fetching. Ends on any threat, the man moving 1.5 m, item gone, 20 s, stuck.
+- Staging (ScenarioStaging, BigBrain layer at priority +3 = 98, only bots in Held): every profile
+  requested at launch in parallel; activation per squad from the scenario tick (first member makes
+  the group); each bot held from the group action (before his first brain update) until all are
+  active and their brain runs the hold; then Validate (spot <= 3 m, one group per squad, enemies,
+  sight/distance per preset NeedSight/MaxStart) and all released together, stage timings logged.
+  Failure / timeout / cancel: cleanup with each participant's stage; stale profiles and late
+  arrivals create nothing / are removed; hard release limit spawn timeout + 15 s.
+- Looting Bots (not installed here, API unverified): PreventBotFromLooting(BotOwner, float) called
+  only on an exact signature match, for captors while they guard or fetch.
+- Debug keys (14. Debug keys on): Ctrl+J hands on head / up, Ctrl+T turn around (Ctrl+H is
+  EFT's headlight switch). Scenario events: your/captor Hands, Turn, Draw what he kept (FORCED),
+  Captor was hit by him (SIMULATED EnemyInfo). Presets: Captor disarms and takes the gear,
+  Prisoner keeps a weapon back, Turn around and hands on head, Captor judgement, Spawn staging test.
+
+Offline checks done: Release 0 warnings; DLL loaded in PowerShell 5.1: 23 presets build, every
+param wraps/clamps; ClampReach over 4000 random targets keeps the elbow 25-160 deg; 41 new config
+keys clean; OrderKind order keeps menu digits 1-8.
+
+### In-game test plan (0.16.0)
+
+Log decisions, Log gear decisions, Log judgement, Log kneeling on (Verbose for staging details).
+1. Staging: "Spawn staging test" each mode. Normal: `profile requested` for all at +0.0, `held
+   until everyone is ready`, `everyone ready after ... released together; stage timings`; nobody
+   moves before. Slow: same, 8 s later. Fails / cancel: `setup failed ... (stage: ...)`, report
+   `spawn stages`, no bot left standing frozen, nothing spawns afterwards. Then "PMC squad captures
+   a bot": all three PMCs present before the prisoner gives up.
+2. Gear: "Captor disarms and takes the gear", each answer, squad 1 and 2, turn Yes/No: the weigh
+   lines (value, slot/bag, risk), `goes to take`, pick-up animation, `took ... into his ... slot`
+   (check his kit), or later / leaves; nothing of his own dropped; with squad 2 more "takes it now".
+3. Kept weapon: "Prisoner keeps a weapon back": holster (captor notices only close), slung (notices),
+   knife (never); `demands it again`, the told-again choice; during a fetch the prisoner's
+   `opening (his captor is picking up ...)` and, sometimes, `draw ... (kept back for this)`.
+4. Turn / hands: "Turn around and hands on head", You and PMC bot, standing and kneeling, each
+   order sequence. Walk round him: no turn back; head glances over his shoulder; kneeling turn =
+   up, turn, down. Hands on head standing and kneeling: head no longer bowed onto the hands; look
+   up at a captor standing over him (up to 16 deg).
+5. Judgement: "Captor judgement" each situation with Own roll, then Force mercy / lethal: decision
+   lines with every input; lethal -> `DECIDES TO KILL`, `killed with his hands up by ...: as
+   decided`, squadmates' restraint unchanged; zero RESTRAINT LEAK.
+6. Natural play: bot-vs-bot surrenders over a raid: some prisoners let go, some gear taken, rare
+   lethal endings (more with Wreckless/GigaChad captors or after being shot), none from custody
+   simply ending.
+
 **0.15.0 (2026-11-19, home PC): kneel twist at its source, facing/attention rules, bot captors
 close in and kneel prisoners, observable resistance. Built (Release, 0 warnings) and installed in
 H:\SPT4.1.X 2026-11-20 with `dotnet build -c Release -p:DeployToSPT=true` (no dist zip, no GitHub

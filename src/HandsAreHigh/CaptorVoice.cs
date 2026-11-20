@@ -112,6 +112,9 @@ namespace HandsAreHigh
                 case OrderKind.Follow: return CaptorLine.Follow;
                 case OrderKind.Kneel: return CaptorLine.Kneel;
                 case OrderKind.Leave: return CaptorLine.Leave;
+                case OrderKind.HandsOnHead:
+                case OrderKind.HandsUp:
+                case OrderKind.TurnAround: return CaptorLine.Demand;   // Stop / Look: nothing closer in any voice
                 default: return CaptorLine.Stay;
             }
         }

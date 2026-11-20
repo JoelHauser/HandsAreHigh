@@ -66,8 +66,27 @@ namespace HandsAreHigh
             switch (order)
             {
                 case OrderKind.DropWeapons:
-                    QueueDrop(s, Arsenal.ItemsFor(s.Bot, Arsenal.WeaponSlots, false), "drop your weapons", human);
+                {
+                    // 0.16.0: one decision per accepted demand (Compliance): all of it, all but one
+                    // he keeps back, or (told again) a refusal; never a weapon he doesn't carry.
+                    var all = Arsenal.ItemsFor(s.Bot, Arsenal.WeaponSlots, false);
+                    if (all.Count == 0) { QueueDrop(s, all, "drop your weapons", human); break; }
+                    var drop = Compliance.OnDemand(s, by, human, all, out string outcome);
+                    if (drop == null)
+                    {
+                        // Refused or escalating: nothing dropped this time (the escalation, if any,
+                        // is the layer's real draw on its next check).
+                        s.DropQueue.Clear();
+                        s.Ordered.Clear();
+                        s.OrderName = "drop your weapons";
+                        s.DemandDoneAt = Time.time;   // answered (nothing dropped): his captor judges it
+                        if (human) OrderMenu.Notify($"{s.Name} {outcome}", NoteKind.Error);
+                        Answer(s, VoiceEvent.Refuse);
+                        break;
+                    }
+                    QueueDrop(s, drop, "drop your weapons", human, all.Count);
                     break;
+                }
                 case OrderKind.DropKit:
                     QueueDrop(s, Arsenal.ItemsFor(s.Bot, Arsenal.KitSlots, false), "drop your kit", human);
                     break;
@@ -76,7 +95,8 @@ namespace HandsAreHigh
                     break;
                 case OrderKind.Follow:
                     s.Order = Order.Follow;
-                    if (human) OrderMenu.Notify($"{s.Name} follows you, hands up", NoteKind.Success);
+                    Facing.Clear(s);   // he walks after you, facing where he goes
+                    if (human) OrderMenu.Notify($"{s.Name} follows you, {(s.HandsOnHead ? "hands on his head" : "hands up")}", NoteKind.Success);
                     Answer(s, VoiceEvent.Acknowledge);
                     break;
                 case OrderKind.Kneel:
@@ -84,6 +104,10 @@ namespace HandsAreHigh
                     // Kneel.Update does the rest; asking again while he's going down or down
                     // changes nothing, asking while he rises sends him back down from there.
                     s.Order = Order.Kneel;
+                    s.TurnReKneel = false;
+                    // 0.16.0: posture and hands are separate orders. Get down still means hands on
+                    // the head by default, unless he was told Hands up this surrender.
+                    if (Settings.KneelHandsOnHead.Value && !s.HandsOrdered) HandsPose.Set(s, true, "comes with Get down");
                     string note = Kneel.Request(s, by, out bool ok);
                     if (human) OrderMenu.Notify(note, ok ? NoteKind.Success : NoteKind.Error);
                     Answer(s, VoiceEvent.Acknowledge);
@@ -96,9 +120,30 @@ namespace HandsAreHigh
                         break;
                     }
                     s.Order = Order.None;
-                    if (human) OrderMenu.Notify($"{s.Name} gets back on his feet, hands up", NoteKind.Success);
+                    s.TurnReKneel = false;
+                    if (human) OrderMenu.Notify($"{s.Name} gets back on his feet, {(s.HandsOnHead ? "hands on his head" : "hands up")}", NoteKind.Success);
                     Answer(s, VoiceEvent.Acknowledge);
                     break;
+                case OrderKind.HandsOnHead:
+                case OrderKind.HandsUp:
+                {
+                    // Where his hands go; his posture stays as it is (standing, kneeling, getting
+                    // up or down). With something still in his hands the drop finishes first: the
+                    // pose only moves empty hands (HandsPose).
+                    bool on = order == OrderKind.HandsOnHead;
+                    s.HandsOrdered = true;
+                    string note = HandsPose.Set(s, on, human ? "your order" : $"{Restraint.Name(by)}'s order");
+                    if (human) OrderMenu.Notify(note, NoteKind.Success);
+                    Answer(s, VoiceEvent.Acknowledge);
+                    break;
+                }
+                case OrderKind.TurnAround:
+                {
+                    string note = Facing.Request(s, by, out bool ok);
+                    if (human) OrderMenu.Notify(note, ok ? NoteKind.Success : NoteKind.Error);
+                    Answer(s, ok ? VoiceEvent.Acknowledge : VoiceEvent.Refuse);
+                    break;
+                }
                 case OrderKind.Stay:
                     // Stops a follow; a man on his knees stays on his knees.
                     if (s.Order != Order.Kneel) s.Order = Order.None;
@@ -120,7 +165,9 @@ namespace HandsAreHigh
             if (Settings.Acknowledge.Value) Voice.Say(s, e, Voice.AckDelay());
         }
 
-        private static void QueueDrop(SurrenderState s, List<KeyValuePair<EquipmentSlot, Item>> items, string name, bool human)
+        // covered: how many items the order asked for (Drop your weapons may drop fewer: Compliance);
+        // the note on screen only says what you can see him do, never what he kept back.
+        private static void QueueDrop(SurrenderState s, List<KeyValuePair<EquipmentSlot, Item>> items, string name, bool human, int covered = -1)
         {
             s.DropQueue.Clear();
             s.Ordered.Clear();
@@ -137,7 +184,11 @@ namespace HandsAreHigh
                 s.Ordered.Add(kv);
             }
             s.NextDropAt = Time.time + 0.3f;
-            if (human) OrderMenu.Notify($"{s.Name}: {name} ({items.Count} item{(items.Count == 1 ? "" : "s")})", NoteKind.Success);
+            // 0.16.0: Drop your weapons says what it covers, never how many he is really dropping
+            // (that would tell you about anything he keeps back).
+            if (human) OrderMenu.Notify(name == "drop your weapons"
+                ? $"{s.Name}: told to drop his weapons ({Compliance.Covers})"
+                : $"{s.Name}: {name} ({items.Count} item{(items.Count == 1 ? "" : "s")})", NoteKind.Success);
             Answer(s, VoiceEvent.Acknowledge);
         }
     }

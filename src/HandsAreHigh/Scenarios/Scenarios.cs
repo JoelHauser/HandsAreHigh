@@ -131,20 +131,40 @@ namespace HandsAreHigh
                 $"params: {sc.Values.Describe()}{(sc.Seed > 0 ? $"; seed {sc.Seed} (mod rolls only; the game is not deterministic)" : "")}");
             if (sc.ShieldWanted) sc.Overrides.Add("observer override: participants don't target you");
 
-            var squads = new HashSet<string>();
+            // 0.16.0: every profile at once (in parallel); activation follows per squad as each
+            // profile arrives (PumpActivations); everyone is held until all are ready (staging).
+            Participant last = null;
+            foreach (Participant p in sc.People) if (p.Existing == null) last = p;
+            if (last != null && Settings.ScenarioSlowSpawn.Value > 0f)
+            {
+                last.ActivateAfter = Time.time + Settings.ScenarioSlowSpawn.Value;
+                sc.Note(TL.Simulated, $"{last.Tag}: activation held {Settings.ScenarioSlowSpawn.Value:0} s (test: slow initialisation)");
+            }
             foreach (Participant p in sc.People)
             {
                 if (p.Existing != null) { Register(sc, p); continue; }
-                if (squads.Add(p.Squad)) ScenarioSpawner.Request(sc, p);
+                ScenarioSpawner.Request(sc, p);
             }
             return $"launched {sc.Title}: spawning {spawning} bot(s) {sc.Placement}";
         }
 
-        // The next member of a squad, after the previous one arrived.
-        internal static void RequestNext(Scenario sc, string squad)
+        // Each tick: participants whose profile is here are activated (a squad's first one first).
+        private static void PumpActivations(Scenario sc)
         {
             foreach (Participant p in sc.People)
-                if (p.Squad == squad && p.Existing == null && !p.Requested) { ScenarioSpawner.Request(sc, p); return; }
+            {
+                if (p.Existing != null || !p.ProfileReady || p.ActivationStarted || p.Failed) continue;
+                string block = ScenarioSpawner.ActivationBlock(sc, p);
+                if (block == "squad lead failed")
+                {
+                    p.Failed = true;
+                    p.FailWhy = "his squad's first member failed to spawn (stage: profile ready, never activated)";
+                    sc.Note(TL.ExecFail, $"{p.Tag}: spawn failed: {p.FailWhy}");
+                    continue;
+                }
+                if (block != null) continue;
+                ScenarioSpawner.Activate(sc, p);
+            }
         }
 
         internal static void Register(Scenario sc, Participant p)
@@ -217,6 +237,7 @@ namespace HandsAreHigh
             SpawnQuiet.Tick();
             if (Running.Count == 0) return;
             ScenarioShield.Tick();
+            ScenarioStaging.Tick();
             Scratch.Clear();
             Scratch.AddRange(Running);
             bool diff = Time.time >= _nextDiff;
@@ -233,31 +254,37 @@ namespace HandsAreHigh
         private static void Advance(Scenario sc, bool slow)
         {
             float now = Time.time;
+            if (sc.Stage != Stage.Ended) PumpActivations(sc);
             switch (sc.Stage)
             {
                 case Stage.Spawning:
                 {
+                    if (sc.CancelAt > 0f && now >= sc.CancelAt) { Cleanup(sc, $"test: cancelled mid-spawn ({StageReport(sc)})"); return; }
+                    bool staging = Settings.ScenarioStaging.Value;
                     bool all = true;
                     foreach (Participant p in sc.People)
                     {
-                        if (p.Failed) { Cleanup(sc, $"setup failed: {p.Tag} {p.FailWhy}"); return; }
-                        if (p.Dead) { Cleanup(sc, $"setup failed: {p.Tag} died before the start"); return; }
-                        if (!p.Active) all = false;
+                        if (p.Failed) { Cleanup(sc, $"setup failed: {p.Tag}: {p.FailWhy}; others: {StageReport(sc)}"); return; }
+                        if (p.Dead) { Cleanup(sc, $"setup failed: {p.Tag} died before the start ({StageReport(sc)})"); return; }
+                        if (p.Active && p.ActiveAt < 0f) p.ActiveAt = now;
+                        if (p.Active && p.BrainAt < 0f && (p.Existing != null || !staging || ScenarioStaging.BrainReady(p.Owner2))) p.BrainAt = now;
+                        if (!p.Active || p.BrainAt < 0f) all = false;
                     }
                     if (!all)
                     {
                         if (now - sc.LaunchedAt > Settings.ScenarioSpawnTimeout.Value)
-                        {
-                            var late = new List<string>();
-                            foreach (Participant p in sc.People) if (!p.Active) late.Add($"{p.Tag} ({(p.Spawned ? "spawned, not active" : p.Requested ? "no answer from the spawner" : "not requested")})");
-                            Cleanup(sc, $"setup failed: not active after {Settings.ScenarioSpawnTimeout.Value:0} s: {string.Join(", ", late)}");
-                        }
+                            Cleanup(sc, $"setup failed: not ready after {Settings.ScenarioSpawnTimeout.Value:0} s: {StageReport(sc)}");
                         return;
                     }
+                    // Everyone is here and held: the start state is checked before anyone moves.
+                    string invalid = Validate(sc);
+                    if (invalid != null) { Cleanup(sc, $"setup failed: start state invalid: {invalid}"); return; }
+                    int released = ScenarioStaging.Release(sc, "everyone ready");
+                    foreach (Participant p in sc.People) if (p.Existing == null) p.ReleasedAt = now;
                     foreach (Participant p in sc.People) Face(sc, p);
                     sc.Stage = Stage.Setup;
                     sc.StageSince = now;
-                    sc.Note(TL.Info, $"everyone active after {now - sc.LaunchedAt:0.0} s; setup");
+                    sc.Note(TL.Info, $"everyone ready after {now - sc.LaunchedAt:0.0} s{(released > 0 ? $"; {released} staged bot(s) released together" : "")}; stage timings: {Timings(sc)}; setup");
                     sc.Preset.Setup?.Invoke(sc);
                     return;
                 }
@@ -340,6 +367,70 @@ namespace HandsAreHigh
             }
         }
 
+        // Per participant: where he is in the spawn (for failures and timeouts).
+        private static string StageReport(Scenario sc)
+        {
+            var sb = new StringBuilder();
+            foreach (Participant p in sc.People)
+            {
+                if (p.Existing != null) continue;
+                if (sb.Length > 0) sb.Append("; ");
+                sb.Append($"{p.Tag}: {p.Stage()}");
+            }
+            return sb.ToString();
+        }
+
+        // Profile / created / active / brain on the hold, seconds after launch, per participant.
+        private static string Timings(Scenario sc)
+        {
+            var sb = new StringBuilder();
+            float t0 = sc.LaunchedAt;
+            string T(float t) => t < 0f ? "-" : $"{t - t0:0.0}";
+            foreach (Participant p in sc.People)
+            {
+                if (p.Existing != null) continue;
+                if (sb.Length > 0) sb.Append("; ");
+                sb.Append($"{p.Tag} profile {T(p.ProfileAt)} created {T(p.CreatedAt)} placed {T(p.SpawnedAt)} active {T(p.ActiveAt)} brain {T(p.BrainAt)}");
+            }
+            return sb.ToString();
+        }
+
+        // The start state, checked while everyone is still held: placed where validated, squads in
+        // one group each (and different squads apart), relationships, and sight and distance
+        // between each participant and the one he faces (enforced where the preset asks).
+        private static string Validate(Scenario sc)
+        {
+            sc.Validated = true;
+            var notes = new List<string>();
+            foreach (Participant p in sc.People)
+            {
+                if (p.Existing != null || p.Player == null) continue;
+                Vector3 d = p.Player.Position - p.Spot; d.y = 0f;
+                if (d.magnitude > 3f) return $"{p.Tag} is {d.magnitude:0.0} m from his validated spot";
+                if (sc.Groups.TryGetValue(p.Squad, out BotsGroup g) && p.Owner2.BotsGroup != g) return $"{p.Tag} isn't in his squad's group";
+                foreach (Participant q in sc.People)
+                {
+                    if (q == p || q.Player == null || q.Existing != null) continue;
+                    if (q.Squad != p.Squad && q.Owner2 != null && q.Owner2.BotsGroup == p.Owner2.BotsGroup) return $"{p.Tag} and {q.Tag} ended up in one group";
+                }
+            }
+            foreach (Participant p in sc.People)
+            {
+                if (p.Player == null || string.IsNullOrEmpty(p.FaceTag) || p.FaceTag == "you") continue;
+                Participant q = sc.Find(p.FaceTag);
+                if (q?.Player == null) continue;
+                float dist = Vector3.Distance(p.Player.Position, q.Player.Position);
+                bool sight = Perception.LineClear(Perception.Eye(p.Player), Perception.Eye(q.Player));
+                bool enemies = true;
+                try { enemies = p.Squad == q.Squad || (p.Owner2?.BotsGroup != null && p.Owner2.BotsGroup.IsEnemy(q.Player)); } catch { }
+                notes.Add($"{p.Tag} -> {q.Tag} {dist:0.0} m, {(sight ? "in sight" : "NO line of sight")}{(p.Squad != q.Squad ? (enemies ? ", enemies" : ", NOT enemies") : "")}");
+                if (sc.Preset.NeedSight && !sight) return $"{p.Tag} can't see {q.Tag} from where they stand ({dist:0} m): move the crosshair";
+                if (sc.Preset.MaxStart > 0f && dist > sc.Preset.MaxStart) return $"{p.Tag} and {q.Tag} start {dist:0} m apart (at most {sc.Preset.MaxStart:0})";
+            }
+            if (notes.Count > 0) sc.Note(TL.Info, $"start state: {string.Join("; ", notes)}");
+            return null;
+        }
+
         private static void Face(Scenario sc, Participant p)
         {
             if (p.Existing != null || p.Owner2 == null) return;
@@ -403,6 +494,9 @@ namespace HandsAreHigh
             sc.Cancelled = true;
             sc.EndWhy = why;
             sc.Events.Clear();
+            int staged = ScenarioStaging.Release(sc, "cleanup");
+            foreach (Participant p in sc.People)
+                if ((object)p.Player != null) { Compliance.Force(p.Player, ComplianceChoice.Auto); Judgement.Force(p.Player, JudgeForce.Auto); }
             int lifted = ScenarioShield.Remove(sc);
             var report = new StringBuilder();
             report.Append($"Scenario {sc.Title} report ({(sc.Mode == ScenarioMode.Forced || sc.Forced.Count > 0 ? "FORCED STATE: not evidence that natural surrender works" : "natural trigger")}), ended after {sc.Since:0} s: {why}");
@@ -410,7 +504,8 @@ namespace HandsAreHigh
             if (sc.Forced.Count > 0) report.Append($"\n  forced: {string.Join("; ", sc.Forced)}");
             if (sc.Conditions.Count > 0) report.Append($"\n  set up: {string.Join("; ", sc.Conditions)}");
             if (sc.SetupFailed != null) report.Append($"\n  setup incomplete: {sc.SetupFailed}");
-            report.Append($"\n  overrides lifted: {lifted} shield/truce pair(s); fire held back by the shield {ScenarioShield.Blocked} time(s)");
+            report.Append($"\n  overrides lifted: {lifted} shield/truce pair(s); fire held back by the shield {ScenarioShield.Blocked} time(s){(staged > 0 ? $"; {staged} bot(s) still staged, released" : "")}");
+            report.Append($"\n  spawn stages: {Timings(sc)}");
             ScenarioShield.Blocked = 0;
 
             // Items first (who holds what is read from the living), then the bots.

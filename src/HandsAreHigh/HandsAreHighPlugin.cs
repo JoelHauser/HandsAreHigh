@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using BepInEx;
 using BepInEx.Logging;
@@ -17,7 +17,7 @@ namespace HandsAreHigh
     {
         public const string PluginGuid = "com.joelhauser.handsarehigh";
         public const string PluginName = "Hands Are High";
-        public const string PluginVersion = "0.15.0";
+        public const string PluginVersion = "0.17.0";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").
@@ -64,6 +64,11 @@ namespace HandsAreHigh
             // layer and SAIN's avoid-threat layer (80). Inert unless Captors holds a custody.
             Captors.RegisterLayers(Brains, Settings.CaptorPriority.Value);
             if (BossLayersRegistered) Captors.RegisterLayers(BossBrains, Settings.CaptorPriority.Value);
+            // 0.16.0: debug scenarios hold their bots until all are ready (inert for every other
+            // bot: active only for a bot in ScenarioStaging.Held). Above the surrender layer.
+            ScenarioStaging.RegisterLayers(Brains, Mathf.Min(200, Settings.LayerPriority.Value + 3));
+            _teardown.Add(ScenarioStaging.Clear);
+            _teardown.Add(LootingBotsAdapter.Reset);
             _teardown.Add(SurrenderRegistry.Clear);
             _teardown.Add(SainAdapter.Reset);
             _teardown.Add(OrbitAdapter.Reset);      // every ORBIT sleep block we set is lifted
