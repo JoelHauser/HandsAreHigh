@@ -47,12 +47,19 @@ namespace HandsAreHigh
     public enum KneelRiseChoice { Auto, Compliant, Defensive, Escape }
     public enum KneelBraceChoice { Auto, Always, Never }
     public enum KneelEscapeChoice { Auto, Commit, BackDown, StandUp }
+    // 14. Debug "Kneel pose isolate": the one contributor switched off (All: none off).
+    public enum KneelPoseIsolate { All, LookAlign, PelvisSquare, TorsoSquare, LegHinge, Head, Hands, BodyOnly }
 
     internal sealed class KneelLeg
     {
         internal Transform Hip, Knee, Foot, Toe;
         internal float Thigh, Shin, FootLen;
         internal float Side;   // -1 left, +1 right
+        // 0.15.0: bones between hip and knee and between knee and ankle (the thigh twist bone):
+        // the animator rolls them differently in its crouch; they keep the standing pose's local
+        // rotation for the whole kneel (captured with the reference).
+        internal Transform[] Mid;
+        internal Quaternion[] MidRef;
     }
 
     internal sealed class KneelRig
@@ -163,6 +170,15 @@ namespace HandsAreHigh
             if (Settings.LogKneel.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {msg}");
         }
 
+        // 14. Debug "Kneel pose isolate": is this contributor switched off? BodyOnly turns off the
+        // head look and the hands-behind-head arms.
+        internal static bool Off(KneelPoseIsolate part)
+        {
+            KneelPoseIsolate v = Settings.KneelPoseIsolate.Value;
+            if (v == part) return true;
+            return v == KneelPoseIsolate.BodyOnly && (part == KneelPoseIsolate.Head || part == KneelPoseIsolate.Hands);
+        }
+
         // ---- ownership (asked by the layer, gestures, menu, registry, pose patch) ----------
 
         internal static bool Active(SurrenderState s) => s.Kneel != KneelPhase.Standing;
@@ -205,7 +221,7 @@ namespace HandsAreHigh
         internal static float HandsWeight(SurrenderState s)
         {
             KneelStyle st = s.KneelStyle;
-            if (st == null || s.Kneel == KneelPhase.Standing) return 0f;
+            if (st == null || s.Kneel == KneelPhase.Standing || Off(KneelPoseIsolate.Hands)) return 0f;
             return Ss(st.HandsA, st.HandsB, s.KneelT) * s.Weight * Settings.HandsBehindHeadStrength.Value;
         }
 
@@ -248,7 +264,7 @@ namespace HandsAreHigh
         // ---- requests ---------------------------------------------------------------------
 
         // Orders.Give (Kneel): repeating it changes nothing already happening.
-        internal static string Request(SurrenderState s, out bool ok)
+        internal static string Request(SurrenderState s, Player by, out bool ok)
         {
             ok = true;
             s.KneelFallback = null;
@@ -262,6 +278,16 @@ namespace HandsAreHigh
             s.KneelSearchI = -1;
             s.KneelSpotMoving = false;
             s.KneelSearchWhy = null;
+            // 0.15.0: the way he will face, fixed now: towards whoever gave the order, where that
+            // man stands now. Nothing later (the captor walking round him) moves it.
+            s.KneelFaceSet = false;
+            s.KneelFaceSince = -1f;
+            s.KneelFaceLogged = false;
+            if (Settings.FaceCaptor.Value && by != null && s.Bot != null)
+            {
+                Vector3 d = by.Position - s.Bot.Position; d.y = 0f;
+                if (d.sqrMagnitude > 0.25f) { s.KneelFaceDir = d.normalized; s.KneelFaceSet = true; }
+            }
             // Only what no step can fix is refused here (rig, legs, skeleton); ground and room are
             // checked as he starts, and a better spot nearby is looked for then (TryBegin).
             if (!HardChecks(s, out string why))
@@ -363,6 +389,7 @@ namespace HandsAreHigh
                     if (!Settings.KneelEnabled.Value) { Fallback(s, "kneeling is off in the config"); break; }
                     if (s.KneelSpotMoving) { SpotWalk(s, now); break; }
                     if (s.KneelSearchI >= 0) { SearchSpot(s); break; }
+                    TurnRoot(s, dt, now);
                     TryBegin(s, now);
                     break;
 
@@ -665,7 +692,6 @@ namespace HandsAreHigh
             else if (s.KneelFade > 0f) wait = "still settling from the last rise";
             else if (bot.CustomAnimationsAreProcessing) wait = "playing an animation";
             else if (bot.MovementContext?.PlayerAnimator?.AnimatedInteractions?.IsInteractionPlaying == true) wait = "an interaction is playing";
-            else if (!FacingSettled(s)) wait = "turning to face his captor";
             if (wait != null)
             {
                 if (s.KneelWaitSince <= 0f) s.KneelWaitSince = now;
@@ -673,6 +699,9 @@ namespace HandsAreHigh
                 else if (Settings.VerboseLogs.Value) Log(s, $"kneel: waits ({wait})");
                 return;
             }
+            // Facing is never a reason to give up (0.14.0 waited for a 15 deg match that the game's
+            // root never reaches while the look is within 45 deg; with a captor walking, never).
+            if (!FacingSettled(s, now)) return;
             if (!HardChecks(s, out string why)) { Fallback(s, why, tell: true); return; }
             Frame(bot, out Vector3 o, out Vector3 f, out Vector3 r);
             if (!Fits(s, o, f, r, s.KneelScratch, out why))
@@ -747,15 +776,74 @@ namespace HandsAreHigh
                    $"{(s.KneelHelmet ? "helmet" : "no helmet")}{(s.KneelMoves > 0 ? $", after {s.KneelMoves} step(s) to find room" : "")}");
         }
 
-        // He kneels facing his captor: when the layer is still turning him (FaceCaptor), the
-        // kneel's frame would be off and is frozen once it starts.
-        private static bool FacingSettled(SurrenderState s)
+        // 0.15.0: before going down he turns to KneelFaceDir (fixed when the order was taken). The
+        // game turns a bot's root only once his look is over 45 deg from it (MovementState.
+        // ProcessRotation / TrunkRotationLimit) and otherwise twists the animated trunk towards the
+        // look; so the layer keeps his look on that direction (PreTurn) and the root is turned here
+        // at a walking-turn pace (MovementContext.ApplyRotation, the call the game's own states use
+        // for the root). Standing, hands up, not moving: a turn on the spot, bounded in time.
+        private const float FaceTurnSpeed = 150f;   // deg/s
+        private const float FaceTolerance = 10f;
+        private const float FaceTurnLimit = 2.5f;   // s: then he kneels the way he faces
+
+        internal static bool PreTurn(SurrenderState s, out Vector3 dir)
         {
-            if (!Settings.FaceCaptor.Value || !s.FaceSet) return true;
+            dir = s.KneelFaceDir;
+            return s.KneelFaceSet && s.Order == Order.Kneel && s.Kneel == KneelPhase.Standing && s.KneelFallback == null &&
+                   !s.KneelSpotMoving && s.Phase == Phase.HandsUp && Settings.KneelEnabled.Value;
+        }
+
+        private static float FaceOff(SurrenderState s)
+        {
             Vector3 f = s.Bot.Transform.Original.forward; f.y = 0f;
-            Vector3 to = s.FaceTarget - s.Bot.Position; to.y = 0f;
-            if (f.sqrMagnitude < 1e-4f || to.sqrMagnitude < 0.25f) return true;
-            return Vector3.Angle(f, to) <= 15f;
+            if (f.sqrMagnitude < 1e-4f) return 0f;
+            return Vector3.SignedAngle(f, s.KneelFaceDir, Vector3.up);
+        }
+
+        private static void TurnRoot(SurrenderState s, float dt, float now)
+        {
+            if (!PreTurn(s, out _) || !s.ArmsUp || s.Progress < 1f || s.Moving) return;
+            if (s.KneelFaceSince >= 0f && now - s.KneelFaceSince > FaceTurnLimit) return;
+            float off = FaceOff(s);
+            if (Mathf.Abs(off) <= 1f) return;
+            if (s.KneelFaceSince < 0f) s.KneelFaceSince = now;
+            MovementContext mc = s.Bot.MovementContext;
+            if (mc == null) return;
+            float step = Mathf.Sign(off) * Mathf.Min(Mathf.Abs(off), FaceTurnSpeed * dt);
+            mc.ApplyRotation(Quaternion.AngleAxis(step, Vector3.up) * mc.TransformRotation);
+        }
+
+        private static bool FacingSettled(SurrenderState s, float now)
+        {
+            if (!s.KneelFaceSet) return true;
+            float off = Mathf.Abs(FaceOff(s));
+            if (off <= FaceTolerance)
+            {
+                if (s.KneelFaceSince >= 0f && !s.KneelFaceLogged)
+                    Log(s, $"kneel: turned to face where the order came from ({now - s.KneelFaceSince:0.0} s, {off:0} deg off)");
+                s.KneelFaceLogged = true;
+                return true;
+            }
+            if (s.KneelFaceSince >= 0f && now - s.KneelFaceSince > FaceTurnLimit)
+            {
+                if (!s.KneelFaceLogged) Log(s, $"kneel: couldn't finish turning ({off:0} deg off after {FaceTurnLimit:0.0} s); kneels the way he faces");
+                s.KneelFaceLogged = true;
+                return true;
+            }
+            return false;
+        }
+
+        // 0.15.0: a bot captor's check before he orders a kneel (terrain and clearance where the
+        // prisoner stands, his legs, his rig). True with a note when the spot itself won't do but
+        // the prisoner may step to room nearby (Kneel reposition); false when kneeling can't work.
+        internal static bool Suitable(SurrenderState s, out string why)
+        {
+            if (s?.Bot == null || s.Kneel != KneelPhase.Standing) { why = "already kneeling or getting there"; return false; }
+            if (!HardChecks(s, out why)) return false;
+            Frame(s.Bot, out Vector3 o, out Vector3 f, out Vector3 r);
+            if (Fits(s, o, f, r, s.KneelScratch, out why)) { why = null; return true; }
+            if (Settings.KneelReposition.Value) { why = $"no room right where he stands ({why}); he may step to room nearby"; return true; }
+            return false;
         }
 
         // What no change of place can fix. One bad leg: he still kneels (the hurt one goes down
@@ -990,6 +1078,11 @@ namespace HandsAreHigh
             };
             if (leg.Thigh < 0.25f || leg.Thigh > 0.7f || leg.Shin < 0.25f || leg.Shin > 0.7f || leg.FootLen < 0.05f)
             { why = $"rig: unexpected {side} leg (thigh {leg.Thigh:0.00} m, shin {leg.Shin:0.00} m)"; return null; }
+            var mid = new System.Collections.Generic.List<Transform>(2);
+            for (Transform t = knee.parent; t != null && t != hip; t = t.parent) mid.Add(t);
+            for (Transform t = foot.parent; t != null && t != knee; t = t.parent) mid.Add(t);
+            leg.Mid = mid.ToArray();
+            leg.MidRef = new Quaternion[leg.Mid.Length];
             return leg;
         }
 
@@ -1220,6 +1313,52 @@ namespace HandsAreHigh
             Vector3 spine = (rig.Head.position - mid).normalized;
             s.KneelRefSpine = new Vector3(Vector3.Dot(spine, r), spine.y, Vector3.Dot(spine, f));
             s.KneelRefOk = true;
+            MeasureLegAxes(s, rig, r);
+        }
+
+        // 0.15.0: each leg bone's own (along, hinge) axes in its local space, from the standing
+        // pose. The hinge is the leg's own bend plane (hip-knee-ankle) where the knee is bent
+        // enough to tell (>= 4 deg, within 35 deg of his right), else his right; the standing knee
+        // is bent ~8 deg. Then a leg bone's full rotation follows from (direction, hinge), the
+        // way ArmPose.PoseArm does it for the arms (0.13.1): no roll left to chance.
+        private static void MeasureLegAxes(SurrenderState s, KneelRig rig, Vector3 r)
+        {
+            s.KneelLegAxesOk = false;
+            for (int i = 0; i < 2; i++)
+            {
+                KneelLeg leg = rig.Legs[i];
+                if (leg.Mid != null)
+                    for (int m = 0; m < leg.Mid.Length; m++) leg.MidRef[m] = leg.Mid[m] != null ? leg.Mid[m].localRotation : Quaternion.identity;
+                Vector3 th = leg.Knee.position - leg.Hip.position, sh = leg.Foot.position - leg.Knee.position, ft = leg.Toe.position - leg.Foot.position;
+                if (th.sqrMagnitude < 1e-4f || sh.sqrMagnitude < 1e-4f || ft.sqrMagnitude < 1e-6f) return;
+                Vector3 h = Vector3.Cross(th.normalized, sh.normalized);
+                if (h.magnitude < Mathf.Sin(4f * Mathf.Deg2Rad) || Vector3.Angle(h, r) > 35f) h = r;
+                h.Normalize();
+                SetAxes(s, 3 * i, leg.Hip, th, h);
+                SetAxes(s, 3 * i + 1, leg.Knee, sh, h);
+                SetAxes(s, 3 * i + 2, leg.Foot, ft, h);
+            }
+            s.KneelLegAxesOk = true;
+        }
+
+        private static void SetAxes(SurrenderState s, int k, Transform bone, Vector3 along, Vector3 hinge)
+        {
+            Vector3 a = along.normalized;
+            Vector3 h = Vector3.ProjectOnPlane(hinge, a);
+            if (h.sqrMagnitude < 1e-6f) h = Vector3.ProjectOnPlane(Vector3.up, a);
+            Quaternion inv = Quaternion.Inverse(bone.rotation);
+            s.KneelLegAlong[k] = inv * a;
+            s.KneelLegHinge[k] = inv * h.normalized;
+        }
+
+        // A leg bone pointed along dir with its measured hinge on `hinge`, blended by w.
+        private static void PoseBone(SurrenderState s, int k, Transform bone, Vector3 dir, Vector3 hinge, float w)
+        {
+            if (dir.sqrMagnitude < 1e-6f) return;
+            Vector3 h = Vector3.ProjectOnPlane(hinge, dir);
+            if (h.sqrMagnitude < 1e-6f) return;
+            Quaternion want = Quaternion.LookRotation(dir, h) * Quaternion.Inverse(Quaternion.LookRotation(s.KneelLegAlong[k], s.KneelLegHinge[k]));
+            bone.rotation = Quaternion.Slerp(bone.rotation, want, w);
         }
 
         private static readonly Vector3[] RH = new Vector3[2], RHF = new Vector3[2], RK = new Vector3[2], RF = new Vector3[2], RT = new Vector3[2];
@@ -1256,6 +1395,24 @@ namespace HandsAreHigh
             }
             Quaternion headRot = rig.Head.rotation;
             float shift = Presence.IdleShift(s);   // 0 unless settled on his knees (IdleW)
+            // How much of the squaring is on: eased in over the first 12% of t (and out at the end
+            // of a rise), times the kneel's own weight, so nothing snaps at either end.
+            float sq = w * Ss(0f, 0.12f, t);
+
+            // 0.15.0 Pelvis yaw: his hips square to the way his body (and knees) point. The swing
+            // below only tilts the pelvis; its yaw was the animator's (with its trunk turned
+            // towards a look), and the legs, solved in the planted frame, then twisted against it.
+            s.KneelPelvisYaw = 0f;
+            if (!Off(KneelPoseIsolate.PelvisSquare) && sq > 0f)
+            {
+                Vector3 hl = rig.Legs[1].Hip.position - rig.Legs[0].Hip.position; hl.y = 0f;
+                if (hl.sqrMagnitude > 1e-4f)
+                {
+                    float yaw = Mathf.Clamp(Vector3.SignedAngle(hl, r, Vector3.up), -60f, 60f);
+                    s.KneelPelvisYaw = yaw;
+                    rig.Pelvis.rotation = Quaternion.AngleAxis(yaw * sq, Vector3.up) * rig.Pelvis.rotation;
+                }
+            }
 
             // Torso: from his standing lean to kneeling upright (with his own small lean), a
             // forward lean in the middle of the move, more while a hand pushes on his knee.
@@ -1286,6 +1443,14 @@ namespace HandsAreHigh
 
             rig.Head.rotation = Quaternion.Slerp(rig.Head.rotation, headRot, w);
 
+            // 0.15.0 Torso: the shoulders square to the hips. Whatever trunk twist the animator
+            // still plays (its look-to-body turn, its idle) is taken out here, so the head look's
+            // torso share (Presence.ApplyUpper, bounded) starts from a square chest and is the only
+            // turn above the hips. Split over the lower and upper spine about the spine's own axis.
+            s.KneelChestYaw = 0f;
+            if (!Off(KneelPoseIsolate.TorsoSquare) && sq > 0f) SquareTorso(p, s, rig, r, sq);
+            if (Settings.LogPose.Value) PoseDiag(p, s, rig, f);
+
             int trail = 1 - s.KneelLead;
             for (int i = 0; i < 2; i++)
             {
@@ -1295,6 +1460,53 @@ namespace HandsAreHigh
                 Vector3 planted = RF[i] + fF * (s.KneelStepNow * stepW) + Vector3.up * (StepLift * Mathf.Sin(Mathf.PI * stepW) + s.KneelGround[4 + i] * stepW);
                 SolveLeg(s, rig, i, k, w, oF, fF, rF, planted);
             }
+        }
+
+        // Shoulder line onto the hip line (both flattened), about the spine's own axis, half on
+        // Spine1 and half on Spine3 (Spine3 under Spine1: it carries the first half too).
+        private static void SquareTorso(Player p, SurrenderState s, KneelRig rig, Vector3 r, float sq)
+        {
+            PlayerBones b = p.PlayerBones;
+            if (b?.Upperarms == null || b.Upperarms.Length < 2 || b.Upperarms[0] == null || b.Upperarms[1] == null) return;
+            Vector3 sl = b.Upperarms[1].position - b.Upperarms[0].position;
+            if (Vector3.Dot(sl, r) < 0f) sl = -sl;
+            Vector3 hl = rig.Legs[1].Hip.position - rig.Legs[0].Hip.position;
+            sl.y = 0f; hl.y = 0f;
+            if (sl.sqrMagnitude < 1e-4f || hl.sqrMagnitude < 1e-4f) return;
+            float yaw = Mathf.Clamp(Vector3.SignedAngle(sl, hl, Vector3.up), -60f, 60f);
+            s.KneelChestYaw = yaw;
+            Transform low = b.Spine1, high = b.Spine3?.Original, neck = b.Neck;
+            if (low == null) return;
+            Vector3 axis = Vector3.up;
+            if (neck != null)
+            {
+                Vector3 v = neck.position - low.position;
+                if (v.sqrMagnitude > 1e-4f && Vector3.Angle(v, Vector3.up) < 50f) axis = v.normalized;
+            }
+            float a = yaw * sq;
+            if (high != null && high != low && high.IsChildOf(low))
+            {
+                low.rotation = Quaternion.AngleAxis(a * 0.5f, axis) * low.rotation;
+                high.rotation = Quaternion.AngleAxis(a * 0.5f, axis) * high.rotation;
+            }
+            else low.rotation = Quaternion.AngleAxis(a, axis) * low.rotation;
+        }
+
+        // 14. Debug "Log pose diagnostics": once a second per posed bot, every contributor's share.
+        private static void PoseDiag(Player p, SurrenderState s, KneelRig rig, Vector3 f)
+        {
+            float now = Time.time;
+            if (now < s.KneelPoseLogAt) return;
+            s.KneelPoseLogAt = now + 1f;
+            MovementContext mc = p.MovementContext;
+            float h2b = mc != null ? mc.HandsToBodyAngle : 0f;
+            Vector3 a = s.KneelAnchorFwd; a.y = 0f;
+            float root = a.sqrMagnitude > 1e-4f ? Vector3.SignedAngle(a, f, Vector3.up) : 0f;
+            PresenceState look = s.Look;
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: pose: {s.Kneel} t {s.KneelT:0.00}; game look-to-body {h2b:+0;-0;0} deg (animated trunk twist follows this), " +
+                $"root {root:+0;-0;0} deg from where he knelt; hips squared by {s.KneelPelvisYaw:+0;-0;0}, chest by {s.KneelChestYaw:+0;-0;0} deg; " +
+                $"look yaw {look.Yaw:+0;-0;0} (torso {look.Assist:+0;-0;0}, head from chest {look.Yaw - look.Assist:+0;-0;0}), pitch {look.Pitch:+0;-0;0}, " +
+                $"attention {look.Glance}{(s.CaptorInView ? "" : ", captor out of view")}; legs {(s.KneelLegAxesOk && !Off(KneelPoseIsolate.LegHinge) ? "hinged" : "swung")}; isolate {Settings.KneelPoseIsolate.Value}");
         }
 
         private static void SolveLeg(SurrenderState s, KneelRig rig, int i, float k, float w, Vector3 o, Vector3 f, Vector3 r, Vector3 planted)
@@ -1335,9 +1547,28 @@ namespace HandsAreHigh
             Vector3 toe = foot + toeDir * leg.FootLen;
             if (toe.y < gF + ToeHeight) toeDir = (OntoHeight(foot, toeDir, leg.FootLen, gF + ToeHeight, -f) - foot).normalized;
 
-            ArmPose.Aim(leg.Hip, leg.Knee, knee - hip, w);
-            ArmPose.Aim(leg.Knee, leg.Foot, foot - knee, w);
-            ArmPose.Aim(leg.Foot, leg.Toe, toeDir, w);
+            if (s.KneelLegAxesOk && !Off(KneelPoseIsolate.LegHinge))
+            {
+                // 0.15.0: full rotations on the leg's own hinge (the plane hip-knee-ankle as
+                // solved, its normal on his right side), mid bones (thigh twist) at the standing
+                // pose's local rotation: nothing of the animated crouch's roll is kept.
+                if (leg.Mid != null)
+                    for (int m = 0; m < leg.Mid.Length; m++)
+                        if (leg.Mid[m] != null) leg.Mid[m].localRotation = Quaternion.Slerp(leg.Mid[m].localRotation, leg.MidRef[m], w);
+                Vector3 T = knee - hip, S = foot - knee;
+                Vector3 hn = Vector3.Cross(T.normalized, S.normalized);
+                if (hn.magnitude < 0.05f) hn = r;
+                else { hn.Normalize(); if (Vector3.Dot(hn, r) < 0f) hn = -hn; }
+                PoseBone(s, 3 * i, leg.Hip, T, hn, w);
+                PoseBone(s, 3 * i + 1, leg.Knee, foot - leg.Knee.position, hn, w);
+                PoseBone(s, 3 * i + 2, leg.Foot, toeDir, hn, w);
+            }
+            else
+            {
+                ArmPose.Aim(leg.Hip, leg.Knee, knee - hip, w);
+                ArmPose.Aim(leg.Knee, leg.Foot, foot - knee, w);
+                ArmPose.Aim(leg.Foot, leg.Toe, toeDir, w);
+            }
             s.KneelKneePos[i] = leg.Knee.position;
             s.KneelKneeFrame = Time.frameCount;
 
@@ -1422,7 +1653,7 @@ namespace HandsAreHigh
         internal static void ApplyHands(Player p, SurrenderState s)
         {
             KneelStyle st = s.KneelStyle;
-            if (st == null || s.Kneel == KneelPhase.Standing) return;
+            if (st == null || s.Kneel == KneelPhase.Standing || Off(KneelPoseIsolate.Hands)) return;
             float h = Ss(st.HandsA, st.HandsB, s.KneelT) * s.Weight * Settings.HandsBehindHeadStrength.Value;
             if (h <= 0.001f) return;
             PlayerBones b = p.PlayerBones;

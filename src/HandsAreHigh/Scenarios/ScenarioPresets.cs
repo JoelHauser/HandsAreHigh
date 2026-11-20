@@ -768,6 +768,45 @@ namespace HandsAreHigh
             };
             list.Add(p.Done());
 
+            // 0.15.0
+            p = new ScenarioPreset
+            {
+                Name = "Captor closes in and kneels prisoner",
+                Tests = "A bot captor walks up to a disarmed prisoner and orders him onto his knees; the prisoner weighs resisting as he comes; kneeling facing and look limits.",
+                Watch = "'close in on', 'closes in on', 'stops closing in', 'puts ... on his knees' / 'can't kneel there', 'turned to face where the order came from', 'sees ... on his knees', 'opening (... range x, posture x)', 'is behind him, out of view', 'loses sight of his captor'. Pose: Log pose diagnostics on, walk round the kneeling man.",
+                Prereq = "Forced custody. Captor plan forces the choice (or leaves it to the real rolls). Ground: place it on flat open ground, then on stairs or in clutter for the unsuitable case.",
+                Natural = false, ShieldDefault = true
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(16f, 6f, 40f));
+            p.Params.Add(ParamDef.Number("squad", "Captor squad size", 1f, 3f, 1f, 1f));
+            p.Params.Add(ParamDef.Choice("plan", "Captor plan", new[] { "Close in, then kneel", "Kneel from where he stands", "Close in, no kneel", "Real rolls" }));
+            p.Params.Add(Kit("k", "Prisoner keeps")); p.Params.Add(NerveP("n", "Prisoner nerve")); p.Params.Add(Pers("pe", "Prisoner personality"));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                Squad(sc, "BEAR", sc.Values.I("squad"), -h, 0f, "Prisoner");
+                From(Add(sc, "Prisoner", "Scav", "B", h, 0f, sc.Values.I("squad") > 1 ? "PMC-1" : "PMC"), sc.Values, null, null, "k", "n", "pe");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Conditions(sc);
+                Participant captor = sc.Find(sc.Values.I("squad") > 1 ? "PMC-1" : "PMC");
+                Participant prisoner = sc.Find("Prisoner");
+                PrisonerTo(sc, prisoner, captor, custody: true, "forced start");
+                string plan = sc.Values.S("plan");
+                if (plan != "Real rolls")
+                    sc.Step($"{captor.Tag}: plan '{plan}'", () =>
+                    {
+                        if (!captor.Active) return captor.Dead ? "the captor died" : "";
+                        bool close = plan != "Kneel from where he stands";
+                        bool kneel = plan != "Close in, no kneel";
+                        return Captors.DebugPlan(captor.Player, close, kneel);
+                    });
+            };
+            list.Add(p.Done());
+
             return list;
         }
 

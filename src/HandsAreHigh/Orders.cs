@@ -44,6 +44,10 @@ namespace HandsAreHigh
             }
             s.Captor = by;
             s.OrderByHuman = human;
+            // 0.15.0: who gave it, kept apart from custody and from where he looks (Presence
+            // looks at his captor only while he can see him; an old issuer is never a target).
+            s.OrderIssuer = by;
+            s.OrderIssuedAt = Time.time;
             HandsAreHighPlugin.Log.LogInfo($"{s.Name}: ordered {order} by {(human ? "you" : Restraint.Name(by))}{(debug ? " (debug key)" : "")}");
             if (!debug) { s.KneelTestLeft = 0; s.KneelTestArmed = false; }   // a real order ends a kneel test
 
@@ -80,7 +84,7 @@ namespace HandsAreHigh
                     // Kneel.Update does the rest; asking again while he's going down or down
                     // changes nothing, asking while he rises sends him back down from there.
                     s.Order = Order.Kneel;
-                    string note = Kneel.Request(s, out bool ok);
+                    string note = Kneel.Request(s, by, out bool ok);
                     if (human) OrderMenu.Notify(note, ok ? NoteKind.Success : NoteKind.Error);
                     Answer(s, VoiceEvent.Acknowledge);
                     break;

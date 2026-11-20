@@ -6,6 +6,95 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.15.0 (2026-11-19, home PC): kneel twist at its source, facing/attention rules, bot captors
+close in and kneel prisoners, observable resistance. Built (Release, 0 warnings) and installed in
+H:\SPT4.1.X 2026-11-20 with `dotnet build -c Release -p:DeployToSPT=true` (no dist zip, no GitHub
+release); committed + pushed to main. Never run in game; the pose fix is a code-level diagnosis.**
+
+From Joel's 0.14.0 log (LogOutput.log 2026-11-19 20:56): TechHappy (PMC-3) gave `order Kneel ...
+not given (out of range)` every second while walking up, then the prisoner logged `kneel: waits
+(turning to face his captor)` ~40 times and `never settled`; Joel's own Kneel then worked.
+- ENGINE (verified, 0.16.9 decompile): MovementContext.Rotation setter / MovementState.ProcessRotation:
+  a bot's root turns only when look yaw minus root yaw (HandsToBodyAngle) exceeds TrunkRotationLimit
+  (EFTHardSettings.HANDS_TO_BODY_MAX_ANGLE 45; AI snaps at once); below that
+  PlayerAnimator.SetDeltaRotation(HandsToBodyAngle) makes the body animator twist the trunk toward
+  the look. BotSteering keeps steering to the last LookToPoint every fixed update.
+- Why the AI kneel never started: Kneel.FacingSettled wanted the ROOT within 15 deg of FaceTarget;
+  the root stops up to 45 deg short (the trunk twists instead), and FaceTarget moved as the captor
+  walked. Now: Kneel.Request(s, by) fixes KneelFaceDir toward the issuer once; the layer looks along
+  it (Kneel.PreTurn) and Kneel.TurnRoot turns the root at 150 deg/s with MovementContext.ApplyRotation
+  (the game's own root call); settled within 10 deg, or after 2.5 s he kneels the way he faces. Facing
+  is never a fallback reason any more.
+- Twist sources found (all fixed, each switchable in 14. Debug "Kneel pose isolate"):
+  1. LookAlign: while kneeling the steering target stayed where the captor stood when he went down:
+     animator trunk twist up to 45 deg vs planted hips. SurrenderLayer.KeepLookOnBody: while any part of
+     the kneel has his legs (not the rise pivot), LookToDirection(KneelAnchorFwd) -> HandsToBodyAngle ~0.
+  2. PelvisSquare: ApplyBody's pelvis correction was a swing (FromToRotation hips->head): pelvis yaw
+     stayed the animator's; legs solved in the planted frame twisted against it. Pelvis yawed so the
+     hip line = body right.
+  3. TorsoSquare: shoulder line squared to the hip line (Spine1/Spine3 halves, spine axis), so no
+     animator twist survives under our look.
+  4. 0.14.0 Presence torso share (up to 35 deg from 8 deg) stacked on 1: now kneeling torso <= 12
+     ("Kneeling torso turn max"), from 30 deg, head-from-chest <= 55 ("Kneeling head turn max").
+  5. LegHinge: legs were swung (Aim) from the animated crouch, keeping its thigh/shin roll. Now each
+     leg bone's (along, hinge) is measured from the standing ref (MeasureLegAxes; hinge = hip-knee-ankle
+     plane if bent >= 4 deg and within 35 deg of right, else right) and posed as full rotations
+     (PoseBone, like ArmPose.PoseArm); bones between hip/knee and knee/ankle (thigh twist) held at the
+     ref's local rotation. Squaring eases in over t 0-0.12 (and out at the end of a rise).
+  Nothing accumulates (animator rewrites every bone; ArmPosePatch skips frames without _bodyupdated).
+- Attention: s.OrderIssuer/OrderIssuedAt recorded (log only); the look target is the captor only while
+  in view. Presence.InView: kneeling, within Reach (head + torso) + 40 deg peripheral of the planted
+  body; standing always. Out of view: `loses sight of his captor`, faces where he knelt, head 8 deg
+  down, a glance over that shoulder (to reach) every 4-9 s; never stands or turns to keep eye contact.
+  Layer: s.CaptorInView (logs `is behind him, out of view` / `in view again`); CaptorLastSeen updated
+  only in view, or coarsely (>1.5 m moves = footsteps) when present behind. Reactions.Covered(inView):
+  behind him = assumed covered unless heard (reload, shots elsewhere, sprinting, weapon switch).
+  SquadCovers: an unseen squadmate within 8 m with a line counts as covering (assumed). ReassessEscape
+  needs the captor actually in view.
+- Bot captors (Captors.cs): orders not tried out of range/line (logged once per step `waits (...);
+  walks up first`, walk-up triggered). Kneel only when KneelReady (hands up and empty, captor covering
+  him; 10 s then Stay) and Kneel.Suitable (HardChecks + Fits; no fit but reposition on -> still ordered,
+  noted); else Stay. Followed once (FollowKneel): `sees X on his knees` / `can't kneel ...; lets him
+  stay standing` / 15 s timeout; never repeated. Captor line Kneel = GetInCover (the player's Get down
+  trigger), fallback HoldPosition/Stop; the order applies without audio.
+- Close-in (MaybeCloseIn/PickCloseSpot, once per custody, "Captors close in on a disarmed prisoner"
+  0.55 x0.6 if the prisoner still carries a weapon, x(1+0.15/squadmate), x(1-0.6 hurt)): fixed spot at
+  "Close-in distance (m)" 3.5 on the captor's side (0/+-30/+-60 deg), on NavMesh, same level, >= 1.3 m
+  from the dropped gun, line to the prisoner, complete path <= 2x+2 m. Walk 0.6, look on chest (gun
+  follows). Stops: in position, any threat (no retry), prisoner moved 1.5 m, 12 s, stuck 2.5 s; max 2
+  tries. SetMode during it ends it for good.
+- Resistance seen, not decided: Captors.Check waits for Reactions.Shows (hands < 0.75, moving, urgent
+  rise, something in hands/draw) + 0.18-0.45 s, or 2.5 s if he can't see; the captor layer keeps him
+  until then. Restraint.OnArmed (squad) deferred the same way (SurrenderRegistry, <= 1.5 s).
+- Openings: chance x range (<= 2.5 m armed 1.3 / unarmed 0.75; <= 5 m 1.1 / 0.9) x posture (kneeling
+  0.75, going down 0.5, getting up 0.6) x fire (1 - 0.4 suppression); logged with Log decisions.
+  TakeOpening at <= 2.5 m: knife x1.5, draw x0.7. Firing still only after arms down and off the knees
+  (SurrenderRegistry hand-off, unchanged).
+- Debug: "Kneel pose isolate", "Log pose diagnostics" (1/s: look-to-body angle, root vs knelt
+  direction, hips/chest squared by, torso/head yaw, attention, legs hinged/swung). Scenario preset
+  "Captor closes in and kneels prisoner" (plan: close+kneel / kneel only / close only / real rolls;
+  Captors.DebugPlan).
+
+### In-game test plan (0.15.0)
+
+Log decisions, Log kneeling, Log attention, Log pose diagnostics on.
+1. Pose: Ctrl+K a held Scav, stand in front, beside, behind him; leave him 60 s. Pose lines: game
+   look-to-body ~0, root ~0 from where he knelt, hips/chest squared by small numbers after the first
+   second; no growth over time (accumulation). Then each "Kneel pose isolate" value: the one that brings
+   the twist back is the culprit if it isn't gone. Both lead legs (several kneels), rise and walk off.
+2. Facing: give Kneel from 30-40 deg off his facing: `turned to face where the order came from`; walk
+   round him while he turns: he doesn't follow.
+3. Behind: walk behind a kneeling man: `is behind him, out of view`, `loses sight of his captor`; head
+   to the front, glance over the shoulder now and then; no torso twist after you; no opening line
+   just for being behind (only reload/fire/sprint heard).
+4. Scenario "Captor closes in and kneels prisoner", each plan, flat ground then stairs/clutter:
+   `close in on ... chance`, `closes in`, `stops closing in: in position`, `puts ... on his knees` or
+   `can't kneel there ...; stay`, `sees ... on his knees`; no repeated order lines.
+5. Same with Prisoner keeps a sidearm/knife and a defiant personality: opening lines show `range x`
+   and `posture x`; on resistance: `his resistance shows (...)` then the captor's `sees ... ` line.
+6. Captor squad size 3: squadmates' coverage, a threat during the close-in (`something else needs his
+   attention`, no retry). Kill the prisoner / captor mid-approach / mid-kneel; leave the raid.
+
 **0.14.0 (2026-11-19, home PC): bot-vs-bot identity fix, SAIN target filter, captor walk-up, urgent
 escapes, weapon-recovery preference, head/torso look split, scenario spawn mag check. Built against
 H:\SPT4.1.X, 0 warnings, dist/HandsAreHigh-0.14.0.zip, installed; committed + pushed to main

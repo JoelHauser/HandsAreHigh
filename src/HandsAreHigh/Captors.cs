@@ -105,6 +105,21 @@ namespace HandsAreHigh
         internal Vector3 ApproachTarget;
         internal float ApproachKeep;
 
+        // 0.15.0: closing in on a disarmed prisoner (once per custody, a fixed spot, bounded).
+        internal bool CloseDecided;         // rolled once
+        internal bool Close;                // the current approach is the close-in one
+        internal Vector3 CloseSpot;
+        internal Vector3 CloseFrom;         // where the prisoner stood when the spot was chosen
+        internal int CloseTries;
+        // 0.15.0: a kneel order given, followed until he is down or can't (never repeated).
+        internal bool AwaitKneel;
+        internal float KneelIssuedAt;
+        internal float ReadySince = -1f;    // waiting for control before a kneel order
+        internal int WaitLoggedStep = -1;   // the plan step a wait (range, control) was logged for
+        // 0.15.0: resistance noticed only once it shows (arms coming down, moving, a draw), after
+        // his own reaction time.
+        internal float ResistSeenAt = -1f;
+
         internal bool Busy => Mode == CaptorMode.Engage;
     }
 
@@ -274,6 +289,26 @@ namespace HandsAreHigh
             return true;
         }
 
+        // Debug scenarios (0.15.0): the captor's plan forced: close in or not (the roll skipped,
+        // the spot, path and threat checks real), kneel or stay (the readiness and terrain checks
+        // real), then let go after the usual hold. Null when applied.
+        internal static string DebugPlan(Player captor, bool close, bool kneel)
+        {
+            if (captor == null || !ByBot.TryGetValue(captor, out CaptorState cs)) return "isn't guarding anyone";
+            cs.CloseDecided = true;
+            cs.Close = close;
+            cs.CloseTries = 0;
+            cs.Plan.Clear();
+            cs.PlanName = $"debug: {(close ? "close in, " : "")}{(kneel ? "kneel" : "stay")}, then release";
+            cs.Plan.Add(kneel ? OrderKind.Kneel : OrderKind.Stay);
+            cs.Plan.Add(OrderKind.Leave);
+            cs.Step = 0;
+            cs.AwaitKneel = false;
+            cs.HoldUntil = Mathf.Max(cs.HoldUntil, Time.time + 40f);
+            HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: plan forced: {cs.PlanName} (holds him at least 40 s)");
+            return null;
+        }
+
         // Debug scenarios: start one of the captor's own glances now (the real glance code picks
         // where he looks and for how long; the prisoner sees it as a real opening).
         internal static bool ForceGlance(Player captor, out string why)
@@ -394,12 +429,25 @@ namespace HandsAreHigh
             if (SurrenderRegistry.HoldsBot(cs.Bot)) { CaptorDown(cs, "captor gave up himself"); return; }
             if (s.Phase != Phase.HandsUp)
             {
+                // 0.15.0: he reacts to what he can see, not to the prisoner's decision: the arms
+                // coming down, the man moving, a draw in his hands; then his own reaction time.
+                string shown = Reactions.Shows(s);
+                bool seesHim = shown != null && Perception.Recognises(cs.Owner, s.Bot);
+                if (cs.ResistSeenAt < 0f)
+                {
+                    if (!seesHim && now - s.PhaseSince < 2.5f) return;   // nothing visible yet (2.5 s at most)
+                    cs.ResistSeenAt = now + (seesHim ? Dice.Range(0.18f, 0.45f) : 0f);
+                    if (Settings.LogDecisions.Value)
+                        HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {(seesHim ? $"sees {s.Name} {shown}" : $"{s.Name} is no longer where he held him")} ({s.Phase}, {now - s.PhaseSince:0.00} s after he decided)");
+                }
+                if (now < cs.ResistSeenAt) return;
                 // He resists: going for a weapon gets the urgent line, running a warning.
                 bool armed = s.Phase == Phase.Rearmed || s.Phase == Phase.Recovering || s.Phase == Phase.PickingUp;
                 CaptorVoice.Say(cs.Bot, armed ? CaptorLine.Resist : CaptorLine.Warn);
                 End(cs, $"prisoner {s.Phase}");
                 return;
             }
+            cs.ResistSeenAt = -1f;
             if (cs.Owner.BotState != EBotState.Active || s.Suspended) return;   // asleep: nothing, revalidated on wake
 
             ThreatLevel t = Assess(cs, now, out string why, out Vector3 at, out bool atKnown);
@@ -458,15 +506,38 @@ namespace HandsAreHigh
             else cs.LostSightSince = -1f;
 
             if (now >= cs.HoldUntil && cs.Step < cs.Plan.Count - 1) cs.Step = cs.Plan.Count - 1;   // time's up: let him go
-            if (now < cs.NextOrderAt || !sees || now < cs.GlanceUntil) return;
+            if (cs.AwaitKneel) FollowKneel(cs, s, now);
+            if (cs.Approaching || now < cs.NextOrderAt || !sees || now < cs.GlanceUntil) return;
             if (s.DropQueue.Count > 0 || s.ReportAt > 0f) return;   // his last order is still being carried out
             OrderKind next = cs.Plan[cs.Step];
             if (next == OrderKind.Leave && now < cs.HoldUntil && cs.PlanName != "disarm and release") return;
+            if (cs.AwaitKneel && next != OrderKind.Leave) return;   // the kneel is still being carried out
+
+            // 0.15.0: closing in once the prisoner is under control (a contextual choice).
+            if (next != OrderKind.Leave && MaybeCloseIn(cs, s, now)) return;
+
+            // 0.15.0: out of range or without a line, the order isn't tried (it used to be tried
+            // and refused every second); a walk-up is asked for instead.
+            if (!Orders.CanGive(s, cs.Bot, human: false, out string cant))
+            {
+                WaitLog(cs, s, next, cant);
+                cs.NextOrderAt = now + 1f;
+                if (cant == "out of range" || cant == "no clear line") cs.NextApproachAt = Mathf.Min(cs.NextApproachAt, now);
+                else if (++cs.OrderFailures >= 8) End(cs, $"couldn't give orders ({cant})");
+                return;
+            }
+
+            if (next == OrderKind.Kneel && !KneelReady(cs, s, now, out next)) return;
 
             if (Orders.Give(s, next, cs.Bot, human: false, out string whyNot))
             {
                 cs.OrderFailures = 0;
                 if (next == OrderKind.Leave) { End(cs, "let him go", released: true); return; }
+                if (next == OrderKind.Kneel)
+                {
+                    cs.AwaitKneel = true;
+                    cs.KneelIssuedAt = now;
+                }
                 cs.Step++;
                 cs.NextOrderAt = now + Settings.Between(Settings.OrderGapMin, Settings.OrderGapMax);
             }
@@ -475,6 +546,144 @@ namespace HandsAreHigh
                 cs.NextOrderAt = now + 1f;
                 if (++cs.OrderFailures >= 8) End(cs, $"couldn't give orders ({whyNot})");
             }
+        }
+
+        private static void WaitLog(CaptorState cs, SurrenderState s, OrderKind next, string why)
+        {
+            if (cs.WaitLoggedStep == cs.Step) return;
+            cs.WaitLoggedStep = cs.Step;
+            if (Settings.LogDecisions.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: order {next} to {s.Name} waits ({why}){(why == "out of range" || why == "no clear line" ? "; walks up first" : "")}");
+        }
+
+        // A kneel order only once he is under control: hands up and empty, the gun that was in
+        // his hands on the ground (or nothing in them), covered by his captor; and only where
+        // kneeling can work (Kneel.Suitable). Not ready within 10 s, or unsuitable: he is told to
+        // stay standing instead (never an impossible order repeated).
+        private static bool KneelReady(CaptorState cs, SurrenderState s, float now, out OrderKind give)
+        {
+            give = OrderKind.Kneel;
+            string wait = null;
+            if (s.Weight < 0.95f || !s.ArmsUp) wait = "his hands aren't up";
+            else if (s.DropPending || s.HandsPending || !Arsenal.HandsEmpty(s.Bot)) wait = "his hands aren't empty yet";
+            else if (!Perception.Covering(cs.Bot, s.Bot, Settings.WatchAngle.Value)) wait = "isn't covering him";
+            if (wait != null)
+            {
+                if (cs.ReadySince < 0f) cs.ReadySince = now;
+                if (now - cs.ReadySince < 10f)
+                {
+                    WaitLog(cs, s, OrderKind.Kneel, wait);
+                    cs.NextOrderAt = now + 0.5f;
+                    return false;
+                }
+                give = OrderKind.Stay;
+                if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: no control for a kneel order after 10 s ({wait}); tells {s.Name} to stay instead");
+                return true;
+            }
+            cs.ReadySince = -1f;
+            if (!Kneel.Suitable(s, out string why))
+            {
+                give = OrderKind.Stay;
+                if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {s.Name} can't kneel there ({why}); tells him to stay standing instead");
+                return true;
+            }
+            if (Settings.LogDecisions.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: puts {s.Name} on his knees ({Vector3.Distance(cs.Bot.Position, s.Bot.Position):0.0} m, covering him{(why != null ? "; " + why : "")})");
+            return true;
+        }
+
+        // The kneel he ordered, followed (one order, never repeated): down, or not possible.
+        private static void FollowKneel(CaptorState cs, SurrenderState s, float now)
+        {
+            string done = null;
+            if (s.Kneel == KneelPhase.Down) done = $"sees {s.Name} on his knees ({now - cs.KneelIssuedAt:0.0} s after the order)";
+            else if (s.KneelFallback != null) done = $"{s.Name} can't kneel ({s.KneelFallback}); lets him stay standing, hands up";
+            else if (s.Order != Order.Kneel) done = $"{s.Name}'s kneel order was replaced";
+            else if (now - cs.KneelIssuedAt > 15f && s.Kneel == KneelPhase.Standing) done = $"{s.Name} still isn't down after 15 s; leaves it at that";
+            if (done == null) return;
+            cs.AwaitKneel = false;
+            if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {done}");
+        }
+
+        // ---- closing in (0.15.0) -------------------------------------------------------------
+        //
+        // Once per custody, after the prisoner has his hands up and has dropped the gun in his
+        // hands, the captor may walk closer (Captors close in on a disarmed prisoner) to a fixed
+        // spot at the close-in distance on his own side of the prisoner (never within 1.3 m of
+        // the dropped gun, a clear line to the prisoner from it, a complete short path). Only with
+        // no threat (Approach stops it on any Alert, Fire or Contact), at a walk, gun and eyes on
+        // the prisoner; at most two tries; stuck or slow: guards from where he is.
+        private static readonly float[] CloseAngles = { 0f, 30f, -30f, 60f, -60f };
+
+        private static bool MaybeCloseIn(CaptorState cs, SurrenderState s, float now)
+        {
+            if (cs.Approaching || cs.CloseTries >= 2) return false;
+            if (cs.CloseDecided && !cs.Close) return false;
+            // Control first: hands up and empty (the held gun on the ground), no order in progress.
+            if (s.Weight < 0.95f || s.DropPending || s.HandsPending || !Arsenal.HandsEmpty(s.Bot) || Kneel.Active(s) || s.Order == Order.Follow) return false;
+            float d = Vector3.Distance(cs.Bot.Position, s.Bot.Position);
+            float standoff = Settings.CaptorStandoff.Value;
+            if (d <= standoff + 1.5f) { cs.CloseDecided = true; return false; }
+            if (!cs.CloseDecided)
+            {
+                cs.CloseDecided = true;
+                bool kept = Arsenal.GunOnBody(s.Bot) != null || Arsenal.HasMelee(s.Bot);
+                int backing = Reactions.FreeAlliesNear(cs.Owner, cs.Bot);
+                float hurt = cs.Bot.HealthController != null ? NaturalSurrender.Injury(cs.Bot, out _) : 0f;
+                float chance = Mathf.Clamp01(Settings.CaptorCloseChance.Value * (kept ? 0.6f : 1f) * (1f + 0.15f * Mathf.Min(2, backing)) * (1f - 0.6f * hurt));
+                float roll = Dice.Value;
+                cs.Close = roll < chance;
+                if (Settings.LogDecisions.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: close in on {s.Name}? {d:0.0} m, {(kept ? "he still carries a weapon" : "nothing left on him")}, {backing} squadmate(s) near, hurt {hurt:0.00}: chance {chance:0.00}, roll {roll:0.00} -> {(cs.Close ? "yes" : "no, guards from here")}");
+                if (!cs.Close) return false;
+            }
+            if (!Perception.TakeHeavy()) return true;   // waits a frame with path budget
+            cs.CloseTries++;
+            if (!PickCloseSpot(cs, s, standoff, out string why))
+            {
+                cs.Close = false;
+                if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: no good spot to close in on {s.Name} ({why}); guards from {d:0.0} m");
+                return false;
+            }
+            cs.Approaching = true;
+            cs.ApproachKeep = standoff;
+            cs.ApproachSince = now;
+            cs.ApproachTarget = s.Bot.Position;
+            cs.ProgressFrom = cs.Bot.Position;
+            cs.ProgressSince = now;
+            cs.PathIssued = false;
+            cs.GlanceUntil = 0f;
+            if (Settings.LogDecisions.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: closes in on {s.Name} ({d:0.0} m -> {Vector3.Distance(cs.CloseSpot, s.Bot.Position):0.0} m, try {cs.CloseTries}/2), gun on him");
+            return true;
+        }
+
+        private static bool PickCloseSpot(CaptorState cs, SurrenderState s, float standoff, out string why)
+        {
+            why = "no candidate";
+            Vector3 pr = s.Bot.Position;
+            Vector3 dir = cs.Bot.Position - pr; dir.y = 0f;
+            if (dir.sqrMagnitude < 0.01f) { why = "on top of him"; return false; }
+            dir.Normalize();
+            bool gun = s.DroppedWeapon != null && !s.GunGone;
+            float now = Vector3.Distance(cs.Bot.Position, pr);
+            for (int i = 0; i < CloseAngles.Length; i++)
+            {
+                Vector3 c = pr + Quaternion.AngleAxis(CloseAngles[i], Vector3.up) * dir * standoff;
+                if (!UnityEngine.AI.NavMesh.SamplePosition(c, out UnityEngine.AI.NavMeshHit hit, 0.6f, UnityEngine.AI.NavMesh.AllAreas)) { why = "off the NavMesh"; continue; }
+                Vector3 spot = hit.position;
+                if (Mathf.Abs(spot.y - pr.y) > 0.6f) { why = "another level"; continue; }
+                if (gun && (spot - s.DropPosition).sqrMagnitude < 1.3f * 1.3f) { why = "on his dropped gun"; continue; }
+                float sd = Vector3.Distance(spot, pr);
+                if (sd < 2.2f || sd > now - 1.2f) { why = "not closer"; continue; }
+                if (!Perception.LineClear(spot + Vector3.up * 1.5f, Perception.Chest(s.Bot))) { why = "no line to him from there"; continue; }
+                if (!Perception.PathTo(cs.Bot.Position, spot, out Vector3[] corners, out string pw)) { why = pw; continue; }
+                if (PathLength(corners) > 2f * Vector3.Distance(cs.Bot.Position, spot) + 2f) { why = "the way round is too long"; continue; }
+                cs.CloseSpot = spot;
+                cs.CloseFrom = pr;
+                return true;
+            }
+            return false;
         }
 
         // ---- walking up to him (0.14.0) ---------------------------------------------------
@@ -491,6 +700,30 @@ namespace HandsAreHigh
         {
             float d = Vector3.Distance(cs.Bot.Position, s.Bot.Position);
             float keep = Mathf.Min(Settings.CaptorGuardDistance.Value, Settings.AiOrderRange.Value - 2f);
+            if (cs.Approaching && cs.Close)
+            {
+                // Closing in: to a fixed spot (no new spot per frame, no circling).
+                string stop = null;
+                Vector3 to = cs.CloseSpot - cs.Bot.Position; to.y = 0f;
+                if (t != ThreatLevel.None) stop = "something else needs his attention";
+                else if (to.magnitude <= 0.6f || d <= Settings.CaptorStandoff.Value + 0.3f) stop = $"in position ({d:0.0} m)";
+                else if ((s.Bot.Position - cs.CloseFrom).sqrMagnitude > 1.5f * 1.5f) stop = "the prisoner moved";
+                else if (now - cs.ApproachSince > 12f) stop = "took too long";
+                else if ((cs.Bot.Position - cs.ProgressFrom).sqrMagnitude >= 0.25f) { cs.ProgressFrom = cs.Bot.Position; cs.ProgressSince = now; }
+                else if (now - cs.ProgressSince > ApproachStuck) stop = "stuck";
+                if (stop != null)
+                {
+                    cs.Approaching = false;
+                    cs.PathIssued = false;
+                    bool done = stop.StartsWith("in position");
+                    if (done || t != ThreatLevel.None) cs.CloseTries = 2;   // no second go after a threat
+                    else cs.Close = cs.CloseTries < 2;
+                    cs.NextApproachAt = now + 6f;
+                    cs.NextOrderAt = Mathf.Max(cs.NextOrderAt, now + (done ? Dice.Range(0.4f, 1f) : 1f));
+                    if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: stops closing in on {s.Name}: {stop}");
+                }
+                return;
+            }
             if (cs.Approaching)
             {
                 string stop = null;
@@ -633,6 +866,7 @@ namespace HandsAreHigh
             cs.ModeSince = Time.time;
             cs.ModeWhy = why;
             cs.QuietSince = -1f;
+            if (cs.Approaching && cs.Close) { cs.CloseTries = 2; cs.Close = false; }   // no second close-in after a threat
             cs.Approaching = false;
             if (m != CaptorMode.Cover) cs.PathIssued = false;
             if (Settings.LogDecisions.Value)
@@ -840,7 +1074,10 @@ namespace HandsAreHigh
             if (p == null || !Settings.Enabled.Value) return false;
             if (ByBot.TryGetValue(p, out CaptorState cs))
             {
-                if (cs.Mode == CaptorMode.Engage || cs.Prisoner == null || cs.Prisoner.Phase != Phase.HandsUp || cs.Prisoner.Suspended) return false;
+                if (cs.Mode == CaptorMode.Engage || cs.Prisoner == null || cs.Prisoner.Suspended) return false;
+                // 0.15.0: a prisoner who has stopped complying keeps the guard on him until the
+                // guard has noticed it (Check: ResistSeenAt, his reaction time); then custody ends.
+                if (cs.Prisoner.Phase != Phase.HandsUp && cs.ResistSeenAt >= 0f && Time.time >= cs.ResistSeenAt) return false;
                 prisoner = cs.Prisoner;
                 return true;
             }
@@ -951,6 +1188,21 @@ namespace HandsAreHigh
         private void WalkUp(CaptorState cs, SurrenderState s)
         {
             if (Mathf.Abs(_pose - 1f) > 0.01f) { _pose = 1f; BotOwner.SetPose(1f); }
+            if (cs.Close && !cs.PathIssued)
+            {
+                // Closing in: one path to the fixed spot.
+                cs.PathIssued = true;
+                if (!Perception.PathTo(BotOwner.GetPlayer.Position, cs.CloseSpot, out Vector3[] cc, out _) || cc.Length < 2)
+                { cs.ProgressSince = -1000f; return; }
+                if (!_moving) Relink();
+                _moving = true;
+                _stopped = false;
+                BotOwner.Sprint(false);
+                BotOwner.SetTargetMoveSpeed(Mathf.Min(Settings.CaptorApproachSpeed.Value, 0.6f));
+                BotOwner.MovementResume();
+                BotOwner.Mover.GoToByWay(cc, 0.4f);
+            }
+            if (cs.Close) { BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot)); return; }
             if (!cs.PathIssued && Time.time >= cs.NextPathAt)
             {
                 cs.NextPathAt = Time.time + 1.5f;

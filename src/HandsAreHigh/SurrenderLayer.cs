@@ -98,6 +98,29 @@ namespace HandsAreHigh
                 case Phase.Hiding: Hiding(s, check); break;
                 case Phase.Rearmed: Rearmed(s); break;
             }
+            KeepLookOnBody(s);
+        }
+
+        // 0.15.0, the twist at its source (verified, 0.16.9 MovementContext / MovementState):
+        // a bot's look yaw (Player.Rotation, steered by BotSteering every fixed update towards the
+        // last LookToPoint) and his root's yaw differ by HandsToBodyAngle; MovementContext feeds
+        // that to the body animator (PlayerAnimator.SetDeltaRotation), which turns the animated
+        // trunk towards the look by up to TrunkRotationLimit (EFTHardSettings
+        // HANDS_TO_BODY_MAX_ANGLE, 45 deg); past it MovementState.ProcessUpperbodyRotation turns
+        // the root itself (at once for AI). While he knelt, the last look point (where his captor
+        // stood when he went down) stayed his steering target: the animated chest stayed twisted up
+        // to 45 deg against his planted hips, our torso look added up to 35 more on top, and his
+        // root could even swing past the knees. So while any part of the kneel has his legs, his
+        // look is kept on the way his knees point: HandsToBodyAngle ~0, the animator adds no trunk
+        // twist, and the root never turns on his planted knees. Where he looks is the head's job
+        // (Presence), within its limits. The pivot at the end of a rise turns him on purpose.
+        private void KeepLookOnBody(SurrenderState s)
+        {
+            if (Kneel.Off(KneelPoseIsolate.LookAlign)) return;
+            if (!Kneel.Active(s) || Kneel.PivotOpen(s)) return;
+            Vector3 a = s.KneelAnchorFwd; a.y = 0f;
+            if (a.sqrMagnitude < 1e-4f) return;
+            BotOwner.Steering.LookToDirection(a.normalized, 360f);
         }
 
         private static bool DueNow(SurrenderState s)
@@ -152,7 +175,12 @@ namespace HandsAreHigh
             }
             // He faces the captor he sees; otherwise where he last knew him to be. Not while any
             // part of a kneel is on: turning the body would slide his knees over the ground.
-            if (Settings.FaceCaptor.Value && captorAlive && !Kneel.Active(s))
+            // 0.15.0: about to kneel, he turns to the direction fixed when he took the order (not
+            // to wherever his captor has walked since); Kneel turns his root to it (the game turns a
+            // bot's root only once his look is 45 deg off, so a look alone never settled him).
+            if (Kneel.PreTurn(s, out Vector3 kneelDir))
+                BotOwner.Steering.LookToDirection(kneelDir, 360f);
+            else if (Settings.FaceCaptor.Value && captorAlive && !Kneel.Active(s))
                 Face(s, ThreatPos(s, captor) + Vector3.up * 1.6f);
 
             ProcessDropQueue(s);
@@ -243,11 +271,25 @@ namespace HandsAreHigh
             float dist = captorAlive ? Vector3.Distance(captor.Position, Me.Position) : float.MaxValue;
             bool seen = captorAlive && Perception.Sees(Me, captor, dist);
             s.CaptorSeen = seen;
+            // 0.15.0: in view = within what his eyes can reach from his planted body (kneeling).
+            // A captor behind a kneeling man is still there (a clear line, close: heard, so no
+            // "captor gone"), but not watched: where he stands is only updated coarsely when he
+            // walks (footsteps), and where his gun points is unknown (Reactions.Covered).
+            bool inView = seen && Presence.InView(s, Perception.Eye(captor));
+            if (inView != s.CaptorInView)
+            {
+                s.CaptorOutOfViewSince = inView ? -1f : now;
+                if (Settings.LogDecisions.Value || Settings.LogAttention.Value)
+                    HandsAreHighPlugin.Log.LogInfo(inView
+                        ? $"{s.Name}: has {Restraint.Name(captor)} in view again"
+                        : $"{s.Name}: {Restraint.Name(captor)} is behind him, out of view ({dist:0.0} m); knows he's there, can't see what he does");
+            }
+            s.CaptorInView = inView;
             string gone = null;
             if (!captorAlive) gone = "captor is dead";
             else if (seen)
             {
-                s.CaptorLastSeen = captor.Position;
+                if (inView || (captor.Position - s.CaptorLastSeen).sqrMagnitude > 1.5f * 1.5f) s.CaptorLastSeen = captor.Position;
                 s.CaptorHiddenSince = -1f;
                 // Closing in on an unanswered surrender keeps it open a little longer.
                 if (!s.Accepted && dist <= s.OfferRef - 3f)
@@ -291,7 +333,7 @@ namespace HandsAreHigh
             // Is he covered? A change reaches his decisions after his reaction time.
             bool debugOpening = now < s.DebugOpeningUntil;
             string kind; float strength; bool clear;
-            bool covered = Reactions.Covered(s, captor, Me, seen, Settings.WatchAngle.Value, out kind, out strength, out clear);
+            bool covered = Reactions.Covered(s, captor, Me, seen, inView, Settings.WatchAngle.Value, out kind, out strength, out clear);
             if (debugOpening) { covered = false; kind = "debug opening"; strength = 1f; clear = true; }
 
             // A human captor holding him at gunpoint for a moment has acknowledged the surrender.
@@ -364,17 +406,51 @@ namespace HandsAreHigh
             float nerveScale = Mathf.Lerp(0.3f, 1f, s.Nerve);
             float squad = 1f + Settings.SquadBoost.Value * Mathf.Clamp01(allies / 2f);
             float hurt = 1f - 0.5f * s.Injury;
+            float closeK = CloseQuarters(s, captor, dist, out string closeWhy);
+            float poseK = PostureFactor(s, out string poseWhy);
+            float fire = Mathf.Clamp01(Suppression.Decayed(SurrenderRegistry.HistoryOf(Me), now) / Mathf.Max(1f, Settings.SustainedFireEvents.Value));
+            float fireK = 1f - 0.4f * fire;
             float chance = Mathf.Clamp01(Settings.BreakChance.Value * nerveScale * s.OpeningStrength *
-                                         (1f + Settings.OpportunityBoost.Value * scramble) * squad * hurt);
+                                         (1f + Settings.OpportunityBoost.Value * scramble) * squad * hurt * closeK * poseK * fireK);
             float roll = Dice.Value;
             bool acts = roll < chance;
             string why = $"{s.OpeningKind} for {now - s.OpenSince:0.0} s";
-            if (Settings.VerboseLogs.Value || debug || (acts && Settings.LogDecisions.Value))
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening ({why}, {dist:0} m{(debug ? ", debug" : "")}): nerve {s.Nerve:0.00}, " +
-                    $"opening x{s.OpeningStrength:0.00}, own gun {scramble:0.00} ({scrambleWhy}), squad x{squad:0.00} ({allies} near), hurt x{hurt:0.00}; " +
+            if (Settings.VerboseLogs.Value || debug || Settings.LogDecisions.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening ({why}, {dist:0.0} m{(debug ? ", debug" : "")}): nerve {s.Nerve:0.00}, " +
+                    $"opening x{s.OpeningStrength:0.00}, own gun {scramble:0.00} ({scrambleWhy}), squad x{squad:0.00} ({allies} near), hurt x{hurt:0.00}, " +
+                    $"range x{closeK:0.00} ({closeWhy}), posture x{poseK:0.00} ({poseWhy}), fire x{fireK:0.00}; " +
                     $"chance {chance:0.00}, roll {roll:0.00} -> {(acts ? "acts" : "keeps still")}");
             if (!acts) return;
             TakeOpening(s, captor, dist, scramble, scrambleWhy, allies, why);
+        }
+
+        // 0.15.0: how close the man covering him is. Within arm's reach plus a step (2.5 m) a man
+        // with a knife or a gun still on him has a real chance to lunge or draw before the captor
+        // reacts; one with nothing has only a closer gun pointing at him. A captor walking up is
+        // weighed like any other: closer is both danger and opportunity.
+        private float CloseQuarters(SurrenderState s, Player captor, float dist, out string why)
+        {
+            bool kept = Arsenal.GunOnBody(Me) != null || Arsenal.HasMelee(Me);
+            bool moving = captor != null && s.CaptorInView && captor.Velocity.sqrMagnitude > 0.5f * 0.5f;
+            string mv = moving ? ", he's walking up" : "";
+            if (dist <= 2.5f) { why = kept ? $"within a lunge, armed{mv}" : $"within a lunge, nothing on him{mv}"; return kept ? 1.3f : 0.75f; }
+            if (dist <= 5f) { why = kept ? $"close, armed{mv}" : $"close{mv}"; return kept ? 1.1f : 0.9f; }
+            why = $"{dist:0} m{mv}";
+            return 1f;
+        }
+
+        // 0.15.0: what his body is doing. On his knees he must get up first (the rise takes time,
+        // in sight); halfway down or up he is off balance; standing still is the easiest.
+        private static float PostureFactor(SurrenderState s, out string why)
+        {
+            switch (s.Kneel)
+            {
+                case KneelPhase.Down: why = "kneeling, must get up first"; return 0.75f;
+                case KneelPhase.GoingDown: why = "getting down, off balance"; return 0.5f;
+                case KneelPhase.GettingUp: why = "getting up"; return 0.6f;
+            }
+            why = "standing";
+            return 1f;
         }
 
         // You can only take what you can see: his dropped gun is "gone" once he can see the
@@ -649,15 +725,18 @@ namespace HandsAreHigh
                        $"{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}, hurt {s.Injury:0.00}{(s.LegsBad ? ", legs hurt" : "")}, " +
                        $"{allies} squadmate(s) near{(kneeling ? $", kneeling: on foot x{onFoot:0.0}, draw x{drawK:0.00}" : "")}): ");
 
+            // 0.15.0: at arm's reach (2.5 m) a lunge with the knife beats a draw in front of him;
+            // a draw then is slower than the man already aiming.
+            bool lunge = dist <= 2.5f;
             if (gun == null) log.Append("draw: no gun on him; ");
             else if (dist > Settings.SidearmRange.Value) log.Append($"draw: you're beyond {Settings.SidearmRange.Value:0} m; ");
-            else Add(options, log, "draw " + Arsenal.SlotName(gun),
-                Settings.DrawWeight.Value * (0.4f + nerve) * fight * (allies > 0 ? 1.2f : 1f) * (1f - 0.4f * s.Injury) * drawK);
+            else Add(options, log, "draw " + Arsenal.SlotName(gun) + (lunge ? " (at arm's reach)" : ""),
+                Settings.DrawWeight.Value * (0.4f + nerve) * fight * (allies > 0 ? 1.2f : 1f) * (1f - 0.4f * s.Injury) * drawK * (lunge ? 0.7f : 1f));
 
             if (gun != null) log.Append("knife: has a gun to draw; ");
             else if (!Arsenal.HasMelee(Me)) log.Append("knife: none; ");
             else if (dist > Settings.KnifeRange.Value) log.Append($"knife: you're beyond {Settings.KnifeRange.Value:0} m; ");
-            else Add(options, log, "knife", Settings.KnifeWeight.Value * (0.2f + nerve) * fight * (1f - 0.5f * s.Injury) * Mathf.Lerp(legs, 1f, 0.5f) * onFoot);
+            else Add(options, log, "knife", Settings.KnifeWeight.Value * (0.2f + nerve) * fight * (1f - 0.5f * s.Injury) * Mathf.Lerp(legs, 1f, 0.5f) * onFoot * (lunge ? 1.5f : 1f));
 
             // 0.14.0: a gun within easy reach is the strong choice (x2.5 within 3 m, x1.6 within
             // 5 m); on his knees it costs little more than standing when it lies right by him.
@@ -751,7 +830,10 @@ namespace HandsAreHigh
             float dist = Vector3.Distance(captor.Position, Me.Position);
             bool seen = Perception.Sees(Me, captor, dist);
             // A debug opening ignores your aim until it ends, here as everywhere.
-            bool covered = seen && now >= s.DebugOpeningUntil && Reactions.Covered(s, captor, Me, true, Settings.WatchAngle.Value, out _, out _, out _);
+            // 0.15.0: only a captor he can see aiming makes him reconsider (one behind him, unseen,
+            // doesn't call off an escape already under way).
+            bool covered = seen && now >= s.DebugOpeningUntil && Presence.InView(s, Perception.Eye(captor)) &&
+                           Reactions.Covered(s, captor, Me, true, true, Settings.WatchAngle.Value, out _, out _, out _);
             if (!covered) { s.KneelEscapeSeen = -1f; return false; }
             if (s.KneelEscapeSeen < 0f)
             {

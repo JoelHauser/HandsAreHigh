@@ -271,6 +271,14 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> KneelReposition;
         internal static ConfigEntry<float> KneelSpotRadius;
         internal static ConfigEntry<KneelEscapeChoice> KneelTestEscape;
+        // 0.15.0: pose ownership and diagnostics
+        internal static ConfigEntry<KneelPoseIsolate> KneelPoseIsolate;
+        internal static ConfigEntry<bool> LogPose;
+        internal static ConfigEntry<float> KneelHeadYaw;
+        internal static ConfigEntry<float> KneelTorsoYaw;
+        // 0.15.0: bot captors close in and kneel prisoners
+        internal static ConfigEntry<float> CaptorCloseChance;
+        internal static ConfigEntry<float> CaptorStandoff;
         // 18 Attention and demeanor
         internal static ConfigEntry<bool> DemeanorEnabled;
         internal static ConfigEntry<float> DemeanorStrength;
@@ -733,6 +741,10 @@ namespace HandsAreHigh
             CaptorVoiceGap = c.Bind(BotCaptor, "Captor line gap (s)", 3.5f, Range("Least time between two non-urgent lines of one captor.", 0.5f, 30f));
             CaptorKneelChance = c.Bind(BotCaptor, "Captors put prisoners on their knees", 0.4f,
                 Range("Chance a bot captor's plan orders his prisoner to kneel instead of just stay (needs Kneel on order). He is told to get up calmly when let go.", 0f, 1f));
+            CaptorCloseChance = c.Bind(BotCaptor, "Captors close in on a disarmed prisoner", 0.55f,
+                Range("Chance (once per custody) that a captor, once the prisoner has his hands up and has dropped the gun in his hands, walks closer to give orders and control him. Only with nothing threatening him, along a complete path, gun on the prisoner; stops on any threat.", 0f, 1f));
+            CaptorStandoff = c.Bind(BotCaptor, "Close-in distance (m)", 3.5f,
+                Range("Where a captor who closes in stops: room for both of them, out of arm's reach, never on the dropped gun.", 2.5f, 8f));
             CaptorCover = c.Bind(BotCaptor, "Captors take cover", true,
                 "Under fire from a direction he can tell, a captor moves to a reachable spot hidden from it (keeping the prisoner in sight if he can) instead of standing exposed. A visible enemy always goes to the combat AI.");
             CaptorCoverRadius = c.Bind(BotCaptor, "Captor cover search (m)", 12f, Range("", 3f, 40f));
@@ -788,6 +800,10 @@ namespace HandsAreHigh
             KneelTestStyle = c.Bind(Debug, "Kneel test style", KneelStyleChoice.Auto, "Forces the descent style for every kneel (preview each one). Auto: chosen by the bot.");
             KneelTestRise = c.Bind(Debug, "Kneel test rise", KneelRiseChoice.Auto, "Forces the rise for an ordered stand-up (and picks the urgent rise key's kind). Auto: compliant for orders.");
             KneelTestBrace = c.Bind(Debug, "Kneel test brace", KneelBraceChoice.Auto, "Always / Never forces the knee brace on rises.");
+            KneelPoseIsolate = c.Bind(Debug, "Kneel pose isolate", HandsAreHigh.KneelPoseIsolate.All,
+                "Turns one contributor of the kneeling pose off to see which one distorts it: LookAlign (the bot's look kept on his planted body, so the game's trunk twist stays at 0), PelvisSquare, TorsoSquare, LegHinge (legs posed on their own knee hinge instead of swung), Head (head and torso look), Hands (hands behind the head), BodyOnly (legs, pelvis and torso only). All: everything on (normal).");
+            LogPose = c.Bind(Debug, "Log pose diagnostics", false,
+                "Once a second per kneeling bot: the game's look-to-body angle (what twists the animated trunk), root yaw vs where he knelt, hip-line and shoulder-line yaw, our torso and head turn, and how far the head is turned from the chest.");
             KneelBracePalmFlip = c.Bind(Debug, "Kneel brace palm flip", false,
                 "Turns the bracing hand over (180 deg about the fingers). Only if the palm shows the back of the hand on the thigh: which side of the rig's palm bone faces down was inferred from the thumb root, not seen in game.");
             BindKneel(c);
@@ -840,17 +856,21 @@ namespace HandsAreHigh
                 "Held bots watch their captor and now and then glance at what they know about: their dropped gun, where fire came from, a squadmate in sight, a way out, the ground. A glance holds briefly and returns to the captor; it never means he is about to act.");
             GlanceMin = c.Bind(PresenceSec, "Glance every min (s)", 3f, Range("Time between glances, between min and max, scaled by demeanor (defiant men hold your eyes longer).", 1f, 30f));
             GlanceMax = c.Bind(PresenceSec, "Glance every max (s)", 9f, Range("", 1f, 60f));
-            HeadMaxYaw = c.Bind(PresenceSec, "Head turn max (deg)", 70f, Range("Left/right from his body. With his hands behind his head the neck turns at most 25 deg and his upper back carries the rest (Torso turn max, doubled then).", 20f, 85f));
+            HeadMaxYaw = c.Bind(PresenceSec, "Head turn max (deg)", 70f, Range("Left/right from his body. Standing. Kneeling uses the two Kneeling ... max settings below.", 20f, 85f));
             HeadMaxDown = c.Bind(PresenceSec, "Head down max (deg)", 35f, Range("", 5f, 60f));
             HeadMaxUp = c.Bind(PresenceSec, "Head up max (deg)", 20f, Range("At most 12 deg with his hands behind his head.", 0f, 40f));
             HeadSpeed = c.Bind(PresenceSec, "Head speed (deg per s)", 200f, Range("Top speed of a head turn (eased in and out).", 40f, 600f));
-            TorsoAssist = c.Bind(PresenceSec, "Torso turn max (deg)", 15f, Range("A look further than 25 deg to the side turns his upper back by up to this much (twice this, from 8 deg, with his hands behind his head); never his hips or kneeling body.", 0f, 30f));
+            TorsoAssist = c.Bind(PresenceSec, "Torso turn max (deg)", 15f, Range("Standing: a look further than 25 deg to the side turns his upper back by up to this much; never his hips. Kneeling: Kneeling torso turn max.", 0f, 30f));
             KneelIdle = c.Bind(PresenceSec, "Kneeling idle movement", true,
                 "While he kneels: an occasional small weight shift of the hips and settling of the elbows, on his own random timing; knees and feet stay put. The game's own breathing is kept (not doubled).");
             KneelIdleStrength = c.Bind(PresenceSec, "Kneeling idle strength", 1f, Range("", 0f, 2f));
             Flinch = c.Bind(PresenceSec, "Flinch at near misses", true,
                 "A round passing close to a held bot's head (anyone's, within the near-miss radius, nothing in between) makes him duck his head and hunch his shoulders for half a second. Cosmetic: a hit is handled as a hit, and nothing waits for the flinch.");
             FlinchStrength = c.Bind(PresenceSec, "Flinch strength", 1f, Range("", 0f, 1.5f));
+            KneelHeadYaw = c.Bind(PresenceSec, "Kneeling head turn max (deg)", 55f,
+                Range("While kneeling with his hands behind his head: how far the head turns from his chest (the hands go round with it). Measured against his torso, not the world.", 20f, 70f));
+            KneelTorsoYaw = c.Bind(PresenceSec, "Kneeling torso turn max (deg)", 12f,
+                Range("While kneeling: how far his upper back may turn from his planted hips to help a look. Someone further round than head + torso (+ the corner of his eye) is out of his sight: he doesn't twist after him.", 0f, 25f));
             FlinchCooldown = c.Bind(PresenceSec, "Flinch cooldown (s)", 0.7f, Range("Automatic fire can't restart it faster than this; each flinch leaves the next weaker for a few seconds.", 0.2f, 5f));
         }
 

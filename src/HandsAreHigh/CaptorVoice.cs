@@ -20,7 +20,7 @@ namespace HandsAreHigh
     // One pending line per bot: a more urgent one replaces it, urgent lines (a new threat, a
     // prisoner going for a gun) clear anything queued and skip the line gap; nothing waits on a
     // line: the order, the move, the fight all happen at once whether audio plays or not.
-    internal enum CaptorLine { Demand, Stay, Disarm, Follow, Leave, Warn, Resist, Threat, UnderFire, TakeCover, HandOver, TakeOver, Abandon, LostSight }
+    internal enum CaptorLine { Demand, Stay, Disarm, Follow, Leave, Warn, Resist, Threat, UnderFire, TakeCover, HandOver, TakeOver, Abandon, LostSight, Kneel }
 
     internal static class CaptorVoice
     {
@@ -61,6 +61,9 @@ namespace HandsAreHigh
         private static readonly EPhraseTrigger[] LTakeOver = { EPhraseTrigger.Covering, EPhraseTrigger.Roger };
         private static readonly EPhraseTrigger[] LAbandon = { EPhraseTrigger.OnYourOwn, EPhraseTrigger.Negative, EPhraseTrigger.Going };
         private static readonly EPhraseTrigger[] LLostSight = { EPhraseTrigger.OnLostVisual, EPhraseTrigger.LostVisual };
+        // 0.15.0: "get down": the trigger the player's own Get down order speaks (CommandVoice,
+        // heard in game as GetInCover); HoldPosition if his voice has none.
+        private static readonly EPhraseTrigger[] LKneel = { EPhraseTrigger.GetInCover };
 
         private static VoicePriority PriorityOf(CaptorLine l)
         {
@@ -83,6 +86,7 @@ namespace HandsAreHigh
             {
                 case CaptorLine.Demand: return LDemand;
                 case CaptorLine.Stay: return LStay;
+                case CaptorLine.Kneel: fallback = LStay; return LKneel;
                 case CaptorLine.Disarm: return LDisarm;
                 case CaptorLine.Follow: return LFollow;
                 case CaptorLine.Leave: fallback = LLeaveScav; return LLeave;
@@ -106,6 +110,7 @@ namespace HandsAreHigh
                 case OrderKind.DropKit:
                 case OrderKind.ArmourOff: return CaptorLine.Disarm;
                 case OrderKind.Follow: return CaptorLine.Follow;
+                case OrderKind.Kneel: return CaptorLine.Kneel;
                 case OrderKind.Leave: return CaptorLine.Leave;
                 default: return CaptorLine.Stay;
             }

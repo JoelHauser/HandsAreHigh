@@ -47,6 +47,11 @@ namespace HandsAreHigh
         internal bool HeadAxisOk;
         internal float LastApply;
         internal float Assist;                  // torso yaw this frame (deg)
+        // 0.15.0: his captor is behind him, out of what his eyes can reach (kneeling): he doesn't
+        // twist after him. Now and then a glance over that shoulder, as far as a neck goes.
+        internal bool Lost;
+        internal float LostSide;                // -1 left, +1 right: where he last had him
+        internal float BehindUntil, NextBehindAt;
 
         // Flinch.
         internal float FlinchStart = -1000f, FlinchAmp, FlinchSide, FlinchHab = 1f, FlinchGate = 1f;
@@ -245,7 +250,8 @@ namespace HandsAreHigh
 
             // Head and torso look: on while he holds his hands up (fades out in 0.2 s when he acts:
             // the AI or the game's own animation has the head then).
-            bool attend = On && Settings.HeadMovement.Value && s.Phase == Phase.HandsUp && !s.Suspended && (s.Weight > 0.3f || Kneel.Active(s));
+            bool attend = On && Settings.HeadMovement.Value && s.Phase == Phase.HandsUp && !s.Suspended && (s.Weight > 0.3f || Kneel.Active(s)) &&
+                          !(Kneel.Posing(s) && Kneel.Off(KneelPoseIsolate.Head));
             p.W = Mathf.MoveTowards(p.W, attend ? 1f : 0f, dt / (attend ? 0.5f : 0.2f));
 
             // Kneeling idle: only while settled on his knees, nothing else going on.
@@ -265,6 +271,7 @@ namespace HandsAreHigh
                 // was measured, and skewed it for good).
                 p.Glance = GlanceKind.Captor;
                 p.Yaw = p.Pitch = p.YawVel = p.PitchVel = p.Assist = 0f;
+                p.Lost = false;
                 return;
             }
             Glances(s, now);
@@ -382,7 +389,7 @@ namespace HandsAreHigh
         {
             Player c = s.Captor;
             known = true;
-            if (s.CaptorSeen && Perception.Alive(c)) return Perception.Eye(c) - Vector3.up * 0.08f;
+            if (s.CaptorSeen && s.CaptorInView && Perception.Alive(c)) return Perception.Eye(c) - Vector3.up * 0.08f;
             if (s.CaptorLastSeen != Vector3.zero) return s.CaptorLastSeen + Vector3.up * 1.5f;
             known = false;
             return Vector3.zero;
@@ -517,9 +524,12 @@ namespace HandsAreHigh
             // and up to twice the torso limit. The arms are solved after this (ArmPose.Apply,
             // Kneel.ApplyHands), from the turned shoulders, so they turn with the chest instead
             // of twisting. Never the hips or the legs: the kneeling body stays planted.
-            float hands = Kneel.HandsWeight(s);
-            float maxA = TorsoMax(s, hands);
-            float dead = Mathf.Lerp(25f, 8f, hands), share = Mathf.Lerp(0.4f, 0.75f, hands);
+            // 0.15.0: kneeling, the torso's share is small and bounded (Kneeling torso turn max,
+            // 12 deg) and starts past what the neck does easily: the hips and knees are planted,
+            // and the chest under it is square to them (Kneel.SquareTorso). 0.14.0 let it carry up
+            // to 35 deg from 8 deg on, on top of the animator's own trunk twist: the contortion.
+            float maxA = TorsoMax(s);
+            float dead = Kneel.Active(s) ? 30f : 25f, share = 0.4f;
             float a = Mathf.Sign(p.Yaw) * Mathf.Clamp((Mathf.Abs(p.Yaw) - dead) * share, 0f, maxA) * p.W;
             p.Assist = a;
             if (Mathf.Abs(a) > 0.01f)
@@ -571,9 +581,10 @@ namespace HandsAreHigh
             Vector3 bodyF = BodyFwd(pl, s);
             if (bodyF.sqrMagnitude < 1e-4f) return;
             Vector3 eye = Perception.Eye(pl);
-            Vector3 at = p.Glance != GlanceKind.Captor ? p.GlancePoint : CaptorPoint(s, out _);
+            bool onCaptor = p.Glance == GlanceKind.Captor;
+            Vector3 at = onCaptor ? CaptorPoint(s, out _) : p.GlancePoint;
             float yaw = 0f, pitch = 0f;
-            bool have = p.Glance != GlanceKind.Captor || s.Captor != null;
+            bool have = !onCaptor || s.Captor != null;
             if (have && at != Vector3.zero)
             {
                 Vector3 d = at - eye;
@@ -582,18 +593,53 @@ namespace HandsAreHigh
                 if (d.sqrMagnitude > 0.01f) pitch = -Mathf.Asin(Mathf.Clamp(d.normalized.y, -1f, 1f)) * Mathf.Rad2Deg;
             }
             DemeanorProfile prof = Of(s);
-            pitch += prof.Pitch * K * (p.Glance == GlanceKind.Captor ? 1f : 0.3f);
-            // Hands behind the head: the neck turns less (HeadShare) and the upper back more
-            // (ApplyUpper); the reach is the two together. A captor beyond it isn't stared at
-            // from a neck at its limit: the look settles a little short of the limit, a little
-            // down (listening for him), instead of pinning the head at the end of its travel.
+            pitch += prof.Pitch * K * (onCaptor ? 1f : 0.3f);
+            // 0.15.0 limits, measured from his planted body (BodyFwd): the torso's share
+            // (TorsoMax) plus the head's turn from the chest (HeadShare) is all he can turn.
             float hands = Kneel.HandsWeight(s);
-            float reach = HeadShare(hands) + TorsoMax(s, hands);
+            float reach = Reach(s);
             float maxUp = Mathf.Lerp(Settings.HeadMaxUp.Value, 12f, hands);
-            if (Mathf.Abs(yaw) > reach + 12f)
+            now = Time.time;
+            if (onCaptor && Kneel.Active(s))
             {
-                yaw = Mathf.Sign(yaw) * reach * 0.85f;
-                pitch += 6f;
+                // His captor behind him (out of view: the layer's CaptorInView, or the last place
+                // he had him now beyond his reach): he loses him. No stare from a neck at its
+                // limit, no torso twisting after him: he faces where he knelt, head a little down
+                // (listening), and now and then glances over that shoulder as far as it goes.
+                bool lost = !s.CaptorInView || Mathf.Abs(yaw) > reach + Peripheral;
+                if (lost && !p.Lost)
+                {
+                    p.Lost = true;
+                    p.LostSide = Mathf.Abs(yaw) > 1f ? Mathf.Sign(yaw) : (Dice.Value < 0.5f ? -1f : 1f);
+                    p.NextBehindAt = now + Dice.Range(1.5f, 4f);
+                    p.BehindUntil = 0f;
+                    Log(s, $"loses sight of his captor (about {Mathf.Abs(yaw):0} deg round, past what he can turn to: {reach:0} + {Peripheral:0} from the corner of his eye); stops tracking him");
+                }
+                else if (!lost && p.Lost)
+                {
+                    p.Lost = false;
+                    Log(s, $"has his captor in view again ({yaw:+0;-0} deg)");
+                }
+                if (p.Lost)
+                {
+                    if (now >= p.NextBehindAt && p.BehindUntil < now && s.Gesture == GestureKind.None)
+                    {
+                        p.BehindUntil = now + Dice.Range(0.6f, 1.1f);
+                        p.NextBehindAt = p.BehindUntil + Dice.Range(4f, 9f) * M(prof.GlanceEvery);
+                    }
+                    yaw = now < p.BehindUntil ? p.LostSide * reach : p.LostSide * Mathf.Min(10f, reach * 0.2f);
+                    pitch = Mathf.Max(pitch, 0f) * 0.5f + 8f;
+                }
+                else if (Mathf.Abs(yaw) > reach)
+                {
+                    // In the corner of his eye: held a little short of his limit.
+                    yaw = Mathf.Sign(yaw) * reach * 0.92f;
+                }
+            }
+            else
+            {
+                p.Lost = false;
+                if (Mathf.Abs(yaw) > reach + 12f) { yaw = Mathf.Sign(yaw) * reach * 0.85f; pitch += 6f; }
             }
             yaw = Mathf.Clamp(yaw, -reach, reach);
             pitch = Mathf.Clamp(pitch, -maxUp, Settings.HeadMaxDown.Value);
@@ -603,14 +649,32 @@ namespace HandsAreHigh
             p.Pitch = Mathf.SmoothDamp(p.Pitch, pitch, ref p.PitchVel, smooth / M(prof.Speed), speed, dt);
         }
 
-        // The neck's share of a look (deg): the full limit standing, 25 deg with the hands fully
-        // behind the head. The torso's: TorsoAssist standing, up to twice that kneeling with the
-        // hands behind the head (never more than 35).
-        private static float HeadShare(float hands) =>
-            Mathf.Lerp(Settings.HeadMaxYaw.Value, Mathf.Min(25f, Settings.HeadMaxYaw.Value), hands);
+        // 0.15.0 limits. The head's turn from the chest: Head turn max standing, Kneeling head turn
+        // max (55) kneeling; the hands behind the head go round with it (Kneel.ApplyHands follows
+        // HeadDelta). The torso's: Torso turn max standing, Kneeling torso turn max (12) kneeling.
+        private static float HeadShare(SurrenderState s) =>
+            Kneel.Active(s) ? Mathf.Min(Settings.KneelHeadYaw.Value, Settings.HeadMaxYaw.Value) : Settings.HeadMaxYaw.Value;
 
-        private static float TorsoMax(SurrenderState s, float hands) =>
-            Mathf.Min(35f, Mathf.Lerp(Settings.TorsoAssist.Value, Settings.TorsoAssist.Value * 2f, hands));
+        private static float TorsoMax(SurrenderState s) =>
+            Kneel.Active(s) ? Settings.KneelTorsoYaw.Value : Settings.TorsoAssist.Value;
+
+        internal static float Reach(SurrenderState s) =>
+            Kneel.Off(KneelPoseIsolate.Head) ? 0f : HeadShare(s) + TorsoMax(s);
+
+        // Beyond his turn, what the corner of his eye still takes in (deg).
+        internal const float Peripheral = 40f;
+
+        // Is this point within what he can see from where his body faces? Standing, he turns to
+        // face his captor (the layer's Face), so always; kneeling, his body is planted: reach plus
+        // the corner of his eye, measured from the way his knees point.
+        internal static bool InView(SurrenderState s, Vector3 point)
+        {
+            if (s?.Bot == null || !Kneel.Active(s)) return true;
+            Vector3 bodyF = BodyFwd(s.Bot, s);
+            Vector3 d = point - Perception.Eye(s.Bot); d.y = 0f;
+            if (bodyF.sqrMagnitude < 1e-4f || d.sqrMagnitude < 0.04f) return true;
+            return Vector3.Angle(bodyF, d) <= Reach(s) + Peripheral;
+        }
 
         // His body's facing for the look: while any part of a kneel is on, the frame his legs are
         // planted in (Kneel.KneelAnchorFwd), not the root's, which steering may still move; so the

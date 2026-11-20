@@ -511,6 +511,15 @@ namespace HandsAreHigh
                 UpdateSuspension(bot, s);
                 // try/catch inline: a lambda here would allocate a closure per bot per frame.
                 try { Voice.Tick(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("voice", e); }
+                if (s.ArmedPending != null && (s.Phase == Phase.HandsUp || s.Phase == Phase.Retreating || s.Phase == Phase.Hiding || s.Phase == Phase.Regrouping)) s.ArmedPending = null;
+                if (!s.Dead && s.ArmedPending != null && (Reactions.Shows(s) != null || Time.time - s.ArmedPendingSince > 1.5f))
+                {
+                    string what = s.ArmedPending;
+                    s.ArmedPending = null;
+                    if (Settings.LogDecisions.Value || Settings.LogRestraint.Value)
+                        HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his resistance shows ({Reactions.Shows(s) ?? "time"}) {Time.time - s.ArmedPendingSince:0.00} s after he decided; the bots around him react to it now");
+                    try { Restraint.OnArmed(s, what); } catch (System.Exception e) { HandsAreHighPlugin.Report("restraint armed", e); }
+                }
                 try { Kneel.Update(s, dt); } catch (System.Exception e) { HandsAreHighPlugin.Report("kneel", e); }
                 try { Presence.Update(s, dt); } catch (System.Exception e) { HandsAreHighPlugin.Report("presence", e); }
                 try { Gestures.Update(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("gestures", e); }

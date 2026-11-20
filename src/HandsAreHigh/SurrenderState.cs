@@ -94,7 +94,18 @@ namespace HandsAreHigh
         // didn't know.
         internal Vector3 CaptorLastSeen;
         internal float CaptorHiddenSince = -1f;
-        internal bool CaptorSeen;           // this check: he sees his captor (Perception.SeesCaptor)
+        internal bool CaptorSeen;           // this check: a clear line to his captor (presence: he knows he's there)
+        // 0.15.0: the captor inside what his eyes can reach (gaze limits from his planted body when
+        // kneeling). False for a man behind a kneeling prisoner: present, heard, but not watched;
+        // the prisoner can't tell where that gun points.
+        internal bool CaptorInView = true;
+        internal float CaptorOutOfViewSince = -1f;
+        // 0.15.0: who gave the last order (logged; never a look target by itself). Captor is custody.
+        internal Player OrderIssuer;
+        internal float OrderIssuedAt = -1000f;
+        // 0.15.0: resistance decided but not yet visible to the bots around him.
+        internal string ArmedPending;
+        internal float ArmedPendingSince;
 
         // The surrender as an offer (0.9.0). Accepted: the captor has acknowledged it (a human came
         // within AcknowledgeDistance in sight, aimed at him a moment, or gave an order; a bot took
@@ -265,6 +276,18 @@ namespace HandsAreHigh
         internal readonly float[] KneelLegHurt = new float[2];
         internal readonly bool[] KneelArmBad = new bool[2];
         internal float KneelLimbsAt = -1000f;
+        // 0.15.0: the direction he turns to before kneeling, fixed when the order is taken (the
+        // issuer's direction then), so a captor walking about never keeps him turning.
+        internal Vector3 KneelFaceDir;
+        internal bool KneelFaceSet;
+        internal float KneelFaceSince = -1f;
+        internal bool KneelFaceLogged;
+        // 0.15.0: each leg bone's own axes (along, knee hinge), measured from the standing pose at
+        // the first frame down: legs are posed as full rotations on their hinge, not swings.
+        internal readonly Vector3[] KneelLegAlong = new Vector3[6], KneelLegHinge = new Vector3[6];
+        internal bool KneelLegAxesOk;
+        internal float KneelPoseLogAt;
+        internal float KneelPelvisYaw, KneelChestYaw;   // last frame's corrections (diagnostics)
 
         // Each arm's own elbow hinge, in the upper arm's and the forearm's local space, measured
         // once from the animator's pose (ArmPose.MeasureAxes; index 0 left, 1 right). With it the
@@ -338,6 +361,9 @@ namespace HandsAreHigh
             KneelFallback = null;
             KneelEscape = false;
             KneelSpotMoving = false;
+            KneelFaceSet = false;
+            CaptorInView = true;
+            CaptorOutOfViewSince = -1f;
             KneelSearchI = -1;
             KneelTestLeft = 0;
             KneelTestArmed = false;
@@ -374,9 +400,19 @@ namespace HandsAreHigh
             // is remembered by whoever saw it); running or giving up again is re-decided.
             if (old != p)
             {
+                // 0.15.0: going for a weapon is told to the bots around him once it shows (arms
+                // coming down, a draw in his hands, moving off: Reactions.Shows), not at the moment
+                // he decides; SurrenderRegistry.Tick fires it (at most 1.5 s later).
                 if ((p == Phase.Rearmed && reason != "mod disabled") || p == Phase.Recovering || p == Phase.PickingUp)
-                    Restraint.OnArmed(this, p == Phase.Rearmed ? "drew a weapon" : "went for a gun");
-                else Restraint.OnSituationChanged(this);
+                {
+                    ArmedPending = p == Phase.Rearmed ? "drew a weapon" : "went for a gun";
+                    ArmedPendingSince = Time.time;
+                }
+                else
+                {
+                    ArmedPending = null;
+                    Restraint.OnSituationChanged(this);
+                }
             }
             Retries = 0;
             HideMoving = false;
