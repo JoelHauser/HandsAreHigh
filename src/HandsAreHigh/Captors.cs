@@ -31,13 +31,12 @@ namespace HandsAreHigh
     //   Fire     incoming fire: BotMemory.IsUnderFire (hits, heard fire), our near misses
     //            (Suppression.cs), SAIN's suppression state >= Medium
     //   Alert    an enemy he saw in the last few seconds, out of sight now
-    // and is in one of three modes:
+    // and is in one of two modes:
     //   Guard    the layer has him: stands, covers the prisoner, gives his plan's orders,
     //            glances now and then (towards an Alert, or around him): real openings.
-    //   Cover    fire from a direction he can tell: he moves to a reachable spot hidden from
-    //            it within CaptorCoverRadius (preferring one that keeps the prisoner in sight),
-    //            a close prisoner ordered to follow (complete path only) and to stay once there.
-    //            Contact interrupts it. At most 2 moves per custody, 10 s apart; stuck -> Engage.
+    //   (Fire)   0.21.0: incoming fire on him or the prisoner ends the hold-up (FireBreak.cs,
+    //            Interrupt): no custody kept through a firefight, no prisoner led into cover. The
+    //            0.9.0-0.20.x Cover mode (move to cover, prisoner follows) is gone.
     //   Engage   survival and combat first: the layer lets go at once (SAIN / vanilla combat
     //            fight, take cover, shoot). Pending dialogue is dropped. The first time, a free
     //            squadmate who can actually cover the prisoner may take custody over. He stays in
@@ -54,7 +53,7 @@ namespace HandsAreHigh
     // ORBIT: while a custody lasts, both bots are kept out of Ghost sleep (OrbitAdapter), lifted
     // when it ends. Pit Fireteam: player allies never become captors (their movement stays with
     // Pit Fireteam and your orders; its follower layers at 71-76 sit above ours anyway).
-    internal enum CaptorMode { Guard, Cover, Engage }
+    internal enum CaptorMode { Guard, Engage }
 
     internal enum ThreatLevel { None, Alert, Fire, Contact }
 
@@ -81,12 +80,7 @@ namespace HandsAreHigh
         internal string ModeWhy;
         internal bool HandOverTried;
 
-        // Cover.
-        internal Vector3 CoverPoint;
-        internal float CoverPendingSince = -1f;
-        internal Vector3 CoverFrom;
-        internal int CoverMoves;
-        internal float NextCoverAt;
+        // Movement progress (walking up to the prisoner).
         internal Vector3 ProgressFrom;
         internal float ProgressSince;
         internal bool PathIssued;
@@ -157,8 +151,6 @@ namespace HandsAreHigh
         private static readonly List<SurrenderState> PendingScratch = new List<SurrenderState>(8);
         private static float _nextPending, _nextLater, _nextKillCheck;
 
-        private const int MaxCoverMoves = 2;
-        private const float CoverMoveLimit = 6f;
 
         internal static int Count => ByBot.Count;
         internal static int PendingCount => Pending.Count;
@@ -238,6 +230,9 @@ namespace HandsAreHigh
             if (!CanGuard(c)) return $"no guarding behaviour for a {c.Profile?.Info?.Settings?.Role}";
             if (o.BotState != EBotState.Active || o.IsDead) return "not active";
             if (SurrenderRegistry.HoldsBot(c)) return "held himself";
+            // 0.21.0: nobody is taken in the middle of the fire that broke a hold-up.
+            if (FireBreak.BlocksCustody(c)) return "under fire (a hold-up of his was just broken by it)";
+            if (FireBreak.Blocks(s.Bot)) return $"{s.Name} is under fire";
             if (ByBot.Count >= Settings.MaxAiEncounters.Value) return $"{ByBot.Count} bot-held prisoners already";
             if (ByBot.ContainsKey(c)) return "already guarding someone";   // one prisoner per bot
             if (!(c.HandsController is Player.FirearmController)) return "no gun in his hands";
@@ -532,23 +527,21 @@ namespace HandsAreHigh
             Judgement.Watch(cs, s, now);
 
             ThreatLevel t = Assess(cs, now, out string why, out Vector3 at, out bool atKnown);
+            // 0.21.0: incoming fire on the captor breaks the hold-up (FireBreak): custody ends, his
+            // combat AI has him, the prisoner gets to safety. Only fire that began during this
+            // custody and isn't the prisoner's own (or his own side's): rounds the prisoner fired
+            // before he gave up must not break the custody that followed. A direct hit or near miss
+            // is caught sooner by FireBreak's own hooks; this is the captor's threat sense (also
+            // vanilla's hearing without SAIN).
+            if (t == ThreatLevel.Fire && FreshFire(cs, s, now))
+            {
+                FireBreak.OnCaptorFire(cs, why, at, atKnown);
+                return;
+            }
             switch (cs.Mode)
             {
                 case CaptorMode.Guard:
                     if (t == ThreatLevel.Contact) { Engage(cs, s, now, why, at, atKnown); return; }
-                    if (t == ThreatLevel.Fire)
-                    {
-                        if (TryCover(cs, s, now, why, at, atKnown)) return;
-                        if (cs.CoverPendingSince >= 0f && now - cs.CoverPendingSince < 0.75f) return;   // search waits for budget
-                        Engage(cs, s, now, why, at, atKnown);
-                        return;
-                    }
-                    cs.CoverPendingSince = -1f;
-                    break;
-                case CaptorMode.Cover:
-                    if (t == ThreatLevel.Contact) { Engage(cs, s, now, why, at, atKnown); return; }
-                    UpdateCover(cs, s, now);
-                    if (cs.Mode != CaptorMode.Guard) return;
                     break;
                 case CaptorMode.Engage:
                     if (t >= ThreatLevel.Fire) cs.QuietSince = -1f;
@@ -827,7 +820,7 @@ namespace HandsAreHigh
         // A captor too far to give orders (or who lost his line to the prisoner) walks up to a
         // practical distance along a complete NavMesh path (BotMover.GoToByWay; never a teleport),
         // gun on the prisoner, at a walk. Only while nothing threatens him: any Alert, Fire or
-        // Contact stops it at once (Fire goes to Cover, Contact to Engage, as before), so he never
+        // Contact stops it at once (Fire breaks the hold-up, Contact goes to Engage), so he never
         // crosses open ground under fire; guarding from where he stands is always valid. Stuck
         // 2.5 s, 25 s total or no path: he stops and guards from there (one retry after 8 s).
         private const float ApproachStuck = 2.5f, ApproachLimit = 25f;
@@ -995,6 +988,32 @@ namespace HandsAreHigh
             return ThreatLevel.None;
         }
 
+        // 0.21.0: the captor's "under fire" is about this custody: it began after he took the man
+        // (the game's UnderFireTime or our last near miss is newer than the custody), and the last
+        // shooter we know of is not the prisoner or the captor's own side. SAIN's suppression alone
+        // (no shooter, possibly left over from the fight with this man) isn't enough.
+        private static bool FreshFire(CaptorState cs, SurrenderState s, float now)
+        {
+            BotHistory h = SurrenderRegistry.HistoryOf(cs.Bot);
+            float start = cs.Since + 0.5f;
+            bool hit = cs.Owner.Memory != null && cs.Owner.Memory.IsUnderFire && cs.Owner.Memory.UnderFireTime > start;
+            bool miss = h.FireAt > start && now - h.FireAt < 2.5f && Suppression.Decayed(h, now) > 0.3f;
+            if (!hit && !miss) return false;
+            if (h.FireBy != null && h.FireByAt > start && !FireBreak.Credible(s, h.FireBy)) return false;
+            return true;
+        }
+
+        // 0.21.0 (FireBreak): incoming fire on him or his prisoner. Custody ends at once with no
+        // "fetch it after the release" and no resistance read into the prisoner's escape: his layer
+        // lets go and the combat AI (SAIN / vanilla) has him with its own perception.
+        internal static void Interrupt(CaptorState cs, string why)
+        {
+            if (cs == null) return;
+            CaptorVoice.Interrupt(cs.Bot);
+            CaptorVoice.Say(cs.Bot, CaptorLine.UnderFire);
+            End(cs, $"incoming fire: {why}", released: false, interrupted: true);
+        }
+
         private static void SetMode(CaptorState cs, CaptorMode m, string why)
         {
             if (cs.Mode == m) return;
@@ -1005,7 +1024,7 @@ namespace HandsAreHigh
             cs.QuietSince = -1f;
             if (cs.Approaching && cs.Close) { cs.CloseTries = 2; cs.Close = false; }   // no second close-in after a threat
             cs.Approaching = false;
-            if (m != CaptorMode.Cover) cs.PathIssued = false;
+            cs.PathIssued = false;
             if (Settings.LogDecisions.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {old} -> {m} ({why}), prisoner {cs.Prisoner?.Name}");
         }
@@ -1014,13 +1033,10 @@ namespace HandsAreHigh
         private static void Engage(CaptorState cs, SurrenderState s, float now, string why, Vector3 at, bool atKnown)
         {
             SetMode(cs, CaptorMode.Engage, why);
-            cs.CoverPendingSince = -1f;
             cs.GlanceUntil = 0f;
             CaptorVoice.Interrupt(cs.Bot);
             bool behind = atKnown && Vector3.Angle(cs.Bot.LookDirection, at - cs.Bot.Position) > 120f;
             CaptorVoice.Say(cs.Bot, why.StartsWith("incoming") || why.StartsWith("rounds") || why.StartsWith("suppressed") ? CaptorLine.UnderFire : CaptorLine.Threat, 0f, behind);
-            // A prisoner following him into cover stops where he is: he isn't led into the fight.
-            if (s.FollowToCover) { s.FollowToCover = false; if (s.Order == Order.Follow) s.Order = Order.None; }
             if (cs.HandOverTried) return;
             cs.HandOverTried = true;
             TryHandOver(cs, s, why);
@@ -1063,65 +1079,6 @@ namespace HandsAreHigh
                 if (Impractical(m, s, out _) == null) return m;
             }
             return null;
-        }
-
-        // ---- cover -------------------------------------------------------------------------
-
-        private static bool TryCover(CaptorState cs, SurrenderState s, float now, string why, Vector3 from, bool known)
-        {
-            if (!Settings.CaptorCover.Value || !known || cs.CoverMoves >= MaxCoverMoves || now < cs.NextCoverAt) return false;
-            if (cs.CoverPendingSince < 0f) cs.CoverPendingSince = now;
-            // A cover search is up to PathCandidates path solves: only on a frame with budget.
-            if (!Perception.TakeHeavy()) return false;
-            cs.CoverPendingSince = -1f;
-            if (!Perception.CoverPoint(cs.Bot, from, Settings.CaptorCoverRadius.Value, s.Bot, out Vector3 point, out bool keepsSight))
-            {
-                cs.NextCoverAt = now + 10f;
-                if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {why}, no reachable cover within {Settings.CaptorCoverRadius.Value:0} m");
-                return false;
-            }
-            cs.CoverMoves++;
-            cs.NextCoverAt = now + 10f;
-            cs.CoverPoint = point;
-            cs.CoverFrom = from;
-            cs.ProgressFrom = cs.Bot.Position;
-            cs.ProgressSince = now;
-            cs.PathIssued = false;
-            cs.GlanceUntil = 0f;
-            SetMode(cs, CaptorMode.Cover, $"{why}: cover {Vector3.Distance(point, cs.Bot.Position):0.0} m away{(keepsSight ? ", keeps him in sight" : ", loses sight of him")}");
-            CaptorVoice.Interrupt(cs.Bot);
-            CaptorVoice.Say(cs.Bot, CaptorLine.TakeCover);
-
-            // A close prisoner comes along (his own complete path to it), if that is allowed.
-            if (Settings.PrisonerFollowsToCover.Value &&
-                Vector3.Distance(s.Bot.Position, cs.Bot.Position) <= Settings.FollowToCoverWithin.Value &&
-                Perception.Reachable(s.Bot.Position, point) &&
-                Orders.Give(s, OrderKind.Follow, cs.Bot, human: false, out _))
-            {
-                s.FollowToCover = true;
-            }
-            return true;
-        }
-
-        private static void UpdateCover(CaptorState cs, SurrenderState s, float now)
-        {
-            Vector3 d = cs.CoverPoint - cs.Bot.Position; d.y = 0f;
-            if (d.magnitude <= 1f) { ArriveCover(cs, s, "in cover"); return; }
-            if ((cs.Bot.Position - cs.ProgressFrom).sqrMagnitude >= 0.25f) { cs.ProgressFrom = cs.Bot.Position; cs.ProgressSince = now; }
-            else if (now - cs.ProgressSince > 2f) { Engage(cs, s, now, "stuck on the way to cover", cs.CoverFrom, true); return; }
-            if (now - cs.ModeSince > CoverMoveLimit) Engage(cs, s, now, "didn't reach cover in time", cs.CoverFrom, true);
-        }
-
-        private static void ArriveCover(CaptorState cs, SurrenderState s, string why)
-        {
-            SetMode(cs, CaptorMode.Guard, why);
-            cs.NextOrderAt = Mathf.Max(cs.NextOrderAt, Time.time + 1f);
-            if (s.FollowToCover)
-            {
-                s.FollowToCover = false;
-                // Stay there, near him (the order checks range and line; he stops either way).
-                if (!Orders.Give(s, OrderKind.Stay, cs.Bot, human: false, out _) && s.Order == Order.Follow) s.Order = Order.None;
-            }
         }
 
         // ---- attention ---------------------------------------------------------------------
@@ -1178,19 +1135,22 @@ namespace HandsAreHigh
         // Custody ends. The decisions are per observer and outlive custody (restraint stays);
         // unless he was released, his surrender is unanswered again: he reassesses from what he
         // sees (a bounded offer, then he seeks safety).
-        internal static void End(CaptorState cs, string why, bool released = false)
+        // 0.21.0 interrupted (incoming fire): the fetch ends with nothing kept for later, the prisoner's
+        // escape is not resistance (his squadmate's cover ends without a "resisted" watch), and his
+        // offer isn't reopened (he is getting to safety, not standing there).
+        internal static void End(CaptorState cs, string why, bool released = false, bool interrupted = false)
         {
             if (!ByBot.Remove(cs.Bot) && cs.Prisoner?.Custody != cs) return;
-            try { CaptorLoot.OnCustodyEnd(cs, released); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after custody", e); }
+            try { CaptorLoot.OnCustodyEnd(cs, released && !interrupted); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after custody", e); }
             SurrenderState s = cs.Prisoner;
             // 0.20.0: his squadmate's cover ends with the custody (a man resisting is still watched
             // by him for a moment: his own reaction).
-            try { Overwatch.Release(cs, why, resisted: !released && s != null && !s.Dead && s.Phase != Phase.HandsUp); }
+            try { Overwatch.Release(cs, why, resisted: !released && !interrupted && s != null && !s.Dead && s.Phase != Phase.HandsUp); }
             catch (System.Exception e) { HandsAreHighPlugin.Report("squad cover release", e); }
             if (s != null && s.Custody == cs) s.Custody = null;
             OrbitAdapter.KeepAwake(cs.Owner, false, why);
             OrbitAdapter.KeepAwake(s?.Bot?.AIData?.BotOwner, false, why);
-            if (!released) Unanswered(s);
+            if (!released && !interrupted) Unanswered(s);
             HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: stops holding {s?.Name} ({why}) after {Time.time - cs.Since:0} s");
         }
 
@@ -1199,7 +1159,6 @@ namespace HandsAreHigh
             if (s == null || s.Dead || s.Phase != Phase.HandsUp) return;
             s.Accepted = false;
             s.OfferUntil = Time.time + 0.6f * Settings.Between(Settings.OfferMin, Settings.OfferMax);
-            if (s.FollowToCover) { s.FollowToCover = false; if (s.Order == Order.Follow) s.Order = Order.None; }
         }
 
         // He surrendered himself, or a human took over his prisoner.
@@ -1307,8 +1266,22 @@ namespace HandsAreHigh
         public override void Stop()
         {
             _pose = -1f;
-            if (_moving) { BotOwner.Sprint(false); _moving = false; }
+            // 0.21.0: our last path cleared too (a brain without SAIN kept walking it: an outdated
+            // destination once custody had ended).
+            if (_moving) { BotOwner.StopMove(); BotOwner.Sprint(false); _moving = false; }
             base.Stop();
+        }
+
+        // 0.21.0: the game's door opener, asked every frame he walks a path of ours (as vanilla's move
+        // nodes do; see SurrenderLogic.DoorBusy). True while it has him at a door.
+        private bool DoorBusy()
+        {
+            BotDoorOpener d = BotOwner.DoorOpener;
+            if (d == null) return false;
+            DoorInteractionStatus st;
+            try { st = d.UpdateDoorInteractionStatus(); }
+            catch { return false; }
+            return st == DoorInteractionStatus.OpeningDoor || d.Interacting || BotOwner.Mover.CurrentState == EBotMoverState.NearDoor;
         }
 
         public override void Update(CustomLayer.ActionData data)
@@ -1322,13 +1295,14 @@ namespace HandsAreHigh
                     _nextRelease = Time.time + 0.25f;
                     SainAdapter.ReleaseLayer(BotOwner, SurrenderRegistry.HistoryOf(BotOwner.GetPlayer));
                 }
+                // 0.21.0: on a path of ours and at a door: the game's opener has him until it's open.
+                if (_moving && DoorBusy()) return;
                 // 0.16.0: walking to the prisoner's gear and picking it up.
                 if (CaptorLoot.TryJob(BotOwner.GetPlayer, out LootJob job)) { Fetch(job); return; }
                 if (s?.Bot == null) return;
                 // 0.20.0: covering a squadmate's prisoner.
                 if (Overwatch.TryDrive(BotOwner.GetPlayer, out CoverGuard guard)) { Cover(guard, s); return; }
                 Captors.TryGet(BotOwner.GetPlayer, out CaptorState cs);
-                if (cs != null && cs.Mode == CaptorMode.Cover) { MoveToCover(cs); return; }
                 if (cs != null && cs.Approaching) { WalkUp(cs, s); return; }
 
                 if (_moving || !_stopped) { BotOwner.StopMove(); BotOwner.SetTargetMoveSpeed(0f); BotOwner.Sprint(false); _stopped = true; _moving = false; }
@@ -1338,31 +1312,6 @@ namespace HandsAreHigh
             }
             catch (System.Exception e) { HandsAreHighPlugin.Report("captor logic", e); }
             Perf.End(Perf.Sec.Captors, t0);
-        }
-
-        // One path (re-issued every 3 s while not there), sprinting, looking where he goes.
-        private void MoveToCover(CaptorState cs)
-        {
-            if (Mathf.Abs(_pose - 1f) > 0.01f) { _pose = 1f; BotOwner.SetPose(1f); }
-            if (!cs.PathIssued || Time.time >= cs.NextPathAt)
-            {
-                cs.NextPathAt = Time.time + 3f;
-                if (!Perception.PathTo(BotOwner.GetPlayer.Position, cs.CoverPoint, out Vector3[] corners, out _))
-                {
-                    cs.ProgressSince = -1000f;   // Captors.Check: stuck -> Engage (no repeated solves)
-                    cs.PathIssued = true;
-                    return;
-                }
-                if (!_moving) Relink();
-                cs.PathIssued = true;
-                _moving = true;
-                _stopped = false;
-                BotOwner.SetTargetMoveSpeed(1f);
-                BotOwner.MovementResume();
-                BotOwner.Mover.GoToByWay(corners, 0.5f);
-                BotOwner.Sprint(true);
-            }
-            BotOwner.Steering.LookToMovingDirection();
         }
 
         // Walking up to the prisoner: one path (re-made when he has moved 2 m, at most every

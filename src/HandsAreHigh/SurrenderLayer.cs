@@ -70,8 +70,11 @@ namespace HandsAreHigh
 
         public override void Stop()
         {
-            // Handing the bot back: leave the mover and pose for the next layer to set.
+            // Handing the bot back: the pose is the next layer's to set. 0.21.0: our last path is
+            // cleared (the registry's hand-back does it too), so a brain without SAIN doesn't keep
+            // walking an outdated destination of ours.
             _pose = -1f;
+            if (_s != null && _s.Moving) { BotOwner.StopMove(); _s.Moving = false; }
             base.Stop();
         }
 
@@ -91,8 +94,17 @@ namespace HandsAreHigh
                 }
             }
 
-            // An escape from his knees, and his captor covers him again before he's away.
-            if (s.KneelEscape && check && (s.Phase == Phase.Retreating || s.Phase == Phase.Hiding || s.Phase == Phase.Recovering) && ReassessEscape(s))
+            // 0.21.0: incoming fire (FireBreak) is acted on the frame it arrives, before anything
+            // else this frame: no waiting for the next check.
+            if (s.FirePending)
+            {
+                s.FirePending = false;
+                UnderFire(s);
+            }
+
+            // An escape from his knees, and his captor covers him again before he's away. Never
+            // one driven by fire (he isn't talked back down in the middle of it).
+            if (s.KneelEscape && check && !FireBreak.Blocks(Me) && (s.Phase == Phase.Retreating || s.Phase == Phase.Hiding || s.Phase == Phase.Recovering) && ReassessEscape(s))
                 return;
 
             switch (s.Phase)
@@ -104,8 +116,57 @@ namespace HandsAreHigh
                 case Phase.PickingUp: PickingUp(s); break;
                 case Phase.Hiding: Hiding(s, check); break;
                 case Phase.Rearmed: Rearmed(s); break;
+                case Phase.Released: Released(s); break;
             }
             KeepLookOnBody(s);
+        }
+
+        // 0.21.0: free and about to be handed to his own AI (SurrenderRegistry.Tick, once his arms
+        // are down, his legs his own and no hands change of ours is open): standing, not moving,
+        // no new look (the next AI decides where he looks and goes). A rise still under way
+        // finishes first (the AI never gets a kneeling body).
+        private void Released(SurrenderState s)
+        {
+            if (s.Moving) StopMoving();
+            if (s.SprintHeld) { s.SprintHeld = false; BotOwner.Sprint(false); }
+            if (!Kneel.LegsLocked(s)) SetPose(1f);
+        }
+
+        // The one way he leaves us without a draw: arms down, nothing of ours left on him.
+        private void HandBack(SurrenderState s, string why)
+        {
+            StopMoving();
+            BotOwner.Sprint(false);
+            s.SprintHeld = false;
+            s.HandBackWhy = why;
+            s.TargetWeapon = null;
+            s.Scrambling = false;
+            s.FireRecover = false;
+            s.HideMoving = false;
+            s.HideSearchPending = false;
+            s.Order = Order.None;
+            if (s.ArmsUp) s.LowerArms(Settings.LowerSeconds.Value);
+            // Still down (not already rising): a calm rise. A rise under way keeps its own timing.
+            // An urgent intent set this same frame (an escape under fire) is kept.
+            if ((s.Kneel == KneelPhase.Down || s.Kneel == KneelPhase.GoingDown) && !s.KneelIntentSet) Kneel.Urge(s, KneelRise.Compliant);
+            s.SetPhase(Phase.Released, why);
+        }
+
+        // 0.21.0: his look while any part of the kneel is on his bones (kneeling, rising, or the short
+        // blend back to the animator): only within MaxPivot of the way his knees point, and only once
+        // the rise allows turning on his planted feet. A look further round would make the game turn
+        // his root (or twist his trunk) over legs that are still posed in the kneel's frame.
+        private void SteerTo(SurrenderState s, Vector3 dir, float speed = 360f)
+        {
+            dir.y = 0f;
+            if (dir.sqrMagnitude < 1e-4f) return;
+            if (Kneel.Posing(s))
+            {
+                if (Kneel.LegsLocked(s) && !Kneel.PivotOpen(s)) return;   // KeepLookOnBody holds the look
+                dir = Kneel.PivotDir(s, dir);
+                speed = Mathf.Min(speed, PivotSpeed);
+            }
+            BotOwner.Steering.LookToDirection(dir.normalized, speed);
         }
 
         // 0.15.0, the twist at its source (verified, 0.16.9 MovementContext / MovementState):
@@ -147,12 +208,9 @@ namespace HandsAreHigh
         {
             Hold(1f);
             if (!s.DrawPending) return;
-            if (Kneel.LegsLocked(s))
-            {
-                // Turns on his planted feet once his knees are off the ground, the rest after.
-                if (Kneel.PivotOpen(s)) BotOwner.Steering.LookToDirection(Kneel.PivotDir(s, ThreatPos(s, s.Captor) - Me.Position), PivotSpeed);
-                return;
-            }
+            // Turns on his planted feet once his knees are off the ground (within MaxPivot), the
+            // rest once the kneel pose is off him entirely (SteerTo).
+            if (Kneel.Posing(s)) { SteerTo(s, ThreatPos(s, s.Captor) - Me.Position, PivotSpeed); return; }
             Face(s, ThreatPos(s, s.Captor) + Vector3.up * 1.3f);
         }
 
@@ -191,7 +249,9 @@ namespace HandsAreHigh
             // big turns, a pivot for small ones); the look it needs is applied here. The captor-facing
             // target is only updated (FaceTarget): looking straight at a man 120 deg round would make
             // the game snap his root (or twist his trunk) instead of stepping round.
-            bool facing = Settings.FaceCaptor.Value && captorAlive && !Kneel.Active(s);
+            // 0.21.0: not during the short blend back from a kneel either (Kneel.Posing): his legs
+            // are still partly the kneel's there.
+            bool facing = Settings.FaceCaptor.Value && captorAlive && !Kneel.Posing(s);
             if (facing) AimAt(s, ThreatPos(s, captor) + Vector3.up * 1.6f);
             if (Facing.Look(s, BotOwner)) { }
             else if (Kneel.PreTurn(s, out Vector3 kneelDir)) BotOwner.Steering.LookToDirection(kneelDir, 360f);
@@ -625,8 +685,7 @@ namespace HandsAreHigh
             s.DropQueue.Clear();
             s.ReportAt = -1f;
             s.CaptorLastSeen = threat;
-            GoHide(s, why);
-            s.HideUrgent = true;   // breaking away into cover: he hurries there
+            GoHide(s, why, urgent: true);   // breaking away into cover: he hurries there
         }
 
         // The game's callback normally clears DropPending within the hide animation. One
@@ -853,6 +912,155 @@ namespace HandsAreHigh
             }
         }
 
+        // ---- incoming fire (0.21.0, FireBreak.cs) -----------------------------------------
+
+        // Fire reached him or his captor. Held: the hold-up is over (the captor's side was ended by
+        // FireBreak); he gets to safety. Already getting away: cover from this fire, then his own
+        // AI. A pick-up transaction under way is never cut (it finishes; then the draw and his AI).
+        private void UnderFire(SurrenderState s)
+        {
+            Vector3 threat = s.FireFromKnown ? s.FireFrom : Me.Position + Me.LookDirection * 15f;
+            switch (s.Phase)
+            {
+                case Phase.HandsUp:
+                    EscapeFire(s, threat);
+                    return;
+                case Phase.Recovering:
+                    // Going for a gun: carried on only while it is still sane (close, not in the line
+                    // of the fire, and not hit since he set off).
+                    bool unsafeNow = RecoveryExposed(s, threat, out string exposed);
+                    if (s.TargetWeapon != null && !s.FireHit && !unsafeNow)
+                    {
+                        if (Settings.LogFireBreak.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: fire while going for his gun: keeps going ({exposed})");
+                        s.FireRecover = true;
+                        s.FireRecoverUntil = Mathf.Max(s.FireRecoverUntil, Time.time + 1.2f + Vector3.Distance(Me.Position, s.TargetPoint) / 3.5f);
+                        s.ThreatAt = threat;
+                        return;
+                    }
+                    TakeCoverFromFire(s, threat, s.FireHit ? "hit on the way to his gun: leaves it" : $"fire while going for his gun: leaves it ({exposed})");
+                    return;
+                case Phase.Retreating:
+                case Phase.Regrouping:
+                case Phase.Hiding:
+                    if (s.Phase == Phase.Hiding && s.HideFromFire && (s.HideMoving || s.HideSearchPending)) { s.ThreatAt = threat; return; }   // already on his way to cover from it
+                    TakeCoverFromFire(s, threat, $"under fire while {(s.Phase == Phase.Retreating ? "getting away" : "out of captivity")}");
+                    return;
+                default:
+                    return;   // PickingUp (transaction finishes), Rearmed / Released (his AI next)
+            }
+        }
+
+        // The hold-up is broken by fire: he gets to safety. Weighed once (logged), then committed:
+        //   cover    away from the fire, sprinting (always possible: no spot -> his own AI at once);
+        //   draw     a weapon he still carries, only with his hands free (no draw over a pending
+        //            drop or hands change: the busy-hands glitch);
+        //   his gun  a dash for his own dropped gun: close, reachable, still lying there, not out
+        //            towards the shooter (FireRecoverQuality); abandoned if it turns unsafe.
+        // A knife is never drawn under fire (charging the man who is shooting is not survival).
+        private void EscapeFire(SurrenderState s, Vector3 threat)
+        {
+            float now = Time.time;
+            Gestures.Cancel(s, "under fire");
+            Voice.Say(s, s.FireHit ? VoiceEvent.Hurt : VoiceEvent.Break);
+            s.MarkFlight();
+            Kneel.Urge(s, KneelRise.Escape);
+            s.LowerArms(Settings.EmergencyLowerSeconds.Value);
+            s.Order = Order.None;
+            s.DropQueue.Clear();      // items not yet dropped stay on him; the one in flight lands on its own
+            s.ReportAt = -1f;
+            s.GraceUntil = now + Settings.Grace.Value;
+            s.DrawCommitUntil = 0f;
+            s.EscalateAt = 0f;
+            s.ThreatAt = threat;
+            if (Perception.Alive(s.Captor)) s.CaptorLastSeen = ThreatPos(s, s.Captor);
+
+            float nerve = s.Nerve;
+            bool handsBusy = s.DropPending || s.HandsPending || s.DrawPending || !Arsenal.HandsEmpty(Me);
+            EquipmentSlot? gun = Arsenal.GunOnBody(Me);
+            bool kneeling = Kneel.Active(s) && s.KneelT > 0.5f;
+            var options = new List<Choice>(3);
+            var log = new StringBuilder($"{s.Name} under fire ({(s.FireHit ? "hit" : "near miss")}{(s.FireBy != null ? $" from {Restraint.Name(s.FireBy)}" : "")}, " +
+                                        $"{Vector3.Distance(Me.Position, threat):0} m{(s.FireFromKnown ? "" : ", direction unknown")}; nerve {nerve:0.00}" +
+                                        $"{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}{(kneeling ? ", on his knees" : "")}): ");
+
+            Add(options, log, "cover", Settings.EscapeWeight.Value * 1.5f * s.Flee * (1.3f - 0.3f * nerve) * (s.FireHit ? 1.3f : 1f));
+            if (gun == null) log.Append("draw: no gun on him; ");
+            else if (handsBusy) log.Append($"draw: hands busy ({Arsenal.DescribeHands(Me)}); ");
+            else Add(options, log, "draw " + Arsenal.SlotName(gun),
+                Settings.DrawWeight.Value * (0.4f + nerve) * s.Fight * (1f - 0.4f * s.Injury) * (kneeling ? 0.85f : 1f));
+            float q = FireRecoverQuality(s, threat, out string qWhy);
+            if (q <= 0f) log.Append($"his gun: {qWhy}; ");
+            else if (s.DropPending) log.Append("his gun: still leaving his hands; ");
+            else Add(options, log, $"his gun ({qWhy})", Settings.ScrambleWeight.Value * q * (0.5f + nerve) * s.Fight * (s.LegsBad ? 0.4f : 1f));
+
+            Choice c = Pick(options, log);
+            if (Settings.LogFireBreak.Value) HandsAreHighPlugin.Log.LogInfo(log.ToString());
+
+            if (c.Name != null && c.Name.StartsWith("draw") && Arsenal.Draw(s, BotOwner, false))
+            {
+                Rearm(s, $"draws his {Arsenal.SlotName(gun)} under fire");
+                return;
+            }
+            if (c.Name != null && c.Name.StartsWith("his gun"))
+            {
+                s.RecoverTries++;
+                StartScramble(s, ThreatPos(s, s.Captor), $"under fire, {qWhy}");
+                s.FireRecover = true;
+                s.FireRecoverUntil = now + 1.2f + Vector3.Distance(Me.Position, s.DropPosition) / 3.5f;
+                return;
+            }
+            TakeCoverFromFire(s, threat, c.Name != null && c.Name.StartsWith("draw") ? "couldn't draw (the game refused): cover from the fire" : "gets to cover from the fire");
+        }
+
+        // 0..1: a dash for his own dropped gun under fire. Only what he can know: where it fell
+        // (unless he saw it gone), whether the spot is in the shooter's view, whether it lies out
+        // towards the shooter; plus whether it is really still there (he'd see that on the way).
+        private float FireRecoverQuality(SurrenderState s, Vector3 threat, out string why)
+        {
+            float range = Settings.FireRecoverRange.Value;
+            Item gun = s.DroppedWeapon;
+            if (range <= 0f) { why = "off"; return 0f; }
+            if (gun == null) { why = "he didn't drop a gun"; return 0f; }
+            if (s.GunGone) { why = "he saw it's gone"; return 0f; }
+            if (s.Skip.Contains(gun)) { why = "failed to get it before"; return 0f; }
+            if (s.RecoverTries >= 2) { why = "tried twice already"; return 0f; }
+            float d = Vector3.Distance(Me.Position, s.DropPosition);
+            if (d > range) { why = $"{d:0} m away, over {range:0} m under fire"; return 0f; }
+            if (ClaimedByOther(s, gun)) { why = "another held bot is going for it"; return 0f; }
+            if (!Arsenal.StillThere(gun, s.DropPosition)) { why = "it isn't lying there any more"; return 0f; }
+            if (!DropReachable(s)) { why = "no path to it"; return 0f; }
+            bool exposed = RecoveryExposed(s, threat, out string ex);
+            float k = Mathf.Sqrt(1f - d / range) * (exposed ? 0.35f : 1f);
+            why = $"{d:0.0} m from him, {ex}";
+            return Mathf.Clamp01(k);
+        }
+
+        // Exposed: the spot is in the shooter's view, or it lies out towards him (within 50 deg of
+        // the fire's direction and more than 2 m off).
+        private bool RecoveryExposed(SurrenderState s, Vector3 threat, out string why)
+        {
+            Vector3 spot = s.TargetWeapon != null ? s.TargetPoint : s.DropPosition;
+            Vector3 toGun = spot - Me.Position; toGun.y = 0f;
+            Vector3 toFire = threat - Me.Position; toFire.y = 0f;
+            bool towards = toGun.magnitude > 2f && toFire.sqrMagnitude > 1f && Vector3.Angle(toGun, toFire) < 50f;
+            bool seen = s.FireFromKnown && Perception.LineClear(threat + Vector3.up * 1.5f, spot + Vector3.up * 0.4f);
+            why = towards ? "out towards the fire" : seen ? "in the shooter's view" : "out of the line of fire";
+            return towards || seen;
+        }
+
+        // Cover from fire: the nearest reachable spot hidden from where it came from (Hiding), at a
+        // sprint; his own AI on arrival, when stuck, out of time, or when there is none. Direction
+        // unknown: his own AI at once (it knows who is shooting at him; we don't).
+        private void TakeCoverFromFire(SurrenderState s, Vector3 threat, string why)
+        {
+            s.TargetWeapon = null;
+            s.Scrambling = false;
+            s.FireRecover = false;
+            if (!s.FireFromKnown) { HandBack(s, $"{why}; can't tell where it comes from: his own AI"); return; }
+            s.ThreatAt = threat;
+            GoHide(s, why, urgent: true, fromFire: true);
+        }
+
         // ---- an escape from the knees, called off or not ---------------------------------
 
         // Only escapes on foot that he chose (an opening, or the debug run/grab), started while
@@ -1015,6 +1223,9 @@ namespace HandsAreHigh
                 Rearm(s, "scramble failed, draws what he has");
                 return;
             }
+            // 0.21.0: under fire, the failed dash ends in cover from it (then his own AI), never in
+            // standing where the gun was.
+            if (s.FireRecover || FireBreak.Blocks(Me)) { TakeCoverFromFire(s, s.ThreatAt, $"gives up on his gun ({why})"); return; }
             s.BeginRetreat($"scramble failed ({why})", emergency: true);
         }
 
@@ -1164,11 +1375,15 @@ namespace HandsAreHigh
         }
 
         // 0.17.0: a leg reached, or out of time on it: on out of the area, or done.
+        // 0.21.0: also done once he is out of his captor's sight and well clear of where he was held
+        // (12 m): a hidden spot is what the flight was for; the area radius is no longer a goal he
+        // must reach leg after leg. At most 3 legs (was 5).
         private void LegDone(SurrenderState s, string why)
         {
             float radius = Settings.CaptivityRadius.Value;
             float sep = Perception.Flat(Me.Position, s.HeldAt);
-            if (sep < radius && s.FleeLegs < 4)
+            bool hidden = sep >= 12f && !Perception.CanSee(Me, ThreatPos(s, s.Captor)) && !CaptorSeesMe(s);
+            if (sep < radius && s.FleeLegs < 2 && !hidden)
             {
                 s.FleeLegs++;
                 s.LegSince = Time.time;
@@ -1178,8 +1393,15 @@ namespace HandsAreHigh
                 ResetProgress(s);
                 return;
             }
-            EndFlight(s, sep >= radius ? why : $"{why}, after {s.FleeLegs + 1} legs");
+            EndFlight(s, sep >= radius ? why : hidden ? $"{why}, out of his captor's sight" : $"{why}, after {s.FleeLegs + 1} legs");
             Regroup(s, why);
+        }
+
+        // His captor (alive) has a clear line to him now: the captor's eyes, not his.
+        private bool CaptorSeesMe(SurrenderState s)
+        {
+            Player c = s.Captor;
+            return Perception.Alive(c) && Perception.LineClear(Perception.Eye(c), Perception.Chest(Me));
         }
 
         private void EndFlight(SurrenderState s, string why)
@@ -1203,22 +1425,24 @@ namespace HandsAreHigh
             ResetProgress(s);
         }
 
+        // 0.21.0: away from his captor: he decides now (a kept gun, his own or another gun near, or
+        // his own AI). 0.20 and earlier stopped him crouched (pose 0.6) for 4-12 s, then hid him in
+        // a crouch (pose 0) and looked again every 8 s for the rest of the raid when he had nothing
+        // to fight with: the "runs, stops, crouches" every release ended in. No waiting here.
         private void Regroup(SurrenderState s, string why)
         {
             StopMoving();
-            // Bold men catch their breath faster.
-            s.RegroupUntil = Time.time + Settings.RegroupSeconds() * (1.3f - 0.6f * s.Nerve);
+            s.RegroupUntil = Time.time;
             s.SetPhase(Phase.Regrouping, why);
+            Decide(s);
         }
 
+        // A decision waiting for a frame with path budget (Decide returned without changing phase).
         private void Regrouping(SurrenderState s, bool check)
         {
-            Hold(0.6f);
-            if (!Kneel.LegsLocked(s)) BotOwner.Steering.LookToPoint(s.CaptorLastSeen + Vector3.up * 1.5f);
+            Hold(1f);
             if (!check) return;
             if (SpottedAgain(s)) return;
-            if (Time.time < s.RegroupUntil) return;
-
             Decide(s);
         }
 
@@ -1242,14 +1466,17 @@ namespace HandsAreHigh
                 s.FleeLockLogged = true;
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his {s.DroppedWeapon.ShortName.Localized()} lies where he was held: not going back for it for {s.FleeLockUntil - Time.time:0} s");
             }
+            // 0.21.0: two tries at a gun after getting away, then his own AI (no endless fetching).
+            bool fetch = s.RecoverTries < 2;
             // What he believes: unless he saw it gone, his gun is where he dropped it.
-            if (!ownInArea && Settings.RecoverOwnWeapon.Value && s.DroppedWeapon != null && !s.Skip.Contains(s.DroppedWeapon) &&
+            if (fetch && !ownInArea && Settings.RecoverOwnWeapon.Value && s.DroppedWeapon != null && !s.Skip.Contains(s.DroppedWeapon) &&
                 Vector3.Distance(s.DropPosition, s.CaptorLastSeen) > Settings.AvoidRadius.Value &&
                 !s.GunGone &&
                 Perception.Reachable(Me.Position, s.DropPosition))
             {
                 s.TargetWeapon = s.DroppedWeapon;
                 s.TargetPoint = s.DropPosition;
+                s.RecoverTries++;
                 s.SetPhase(Phase.Recovering, "going back for his own gun");
                 return;
             }
@@ -1257,7 +1484,7 @@ namespace HandsAreHigh
             // A 60 m sweep of loose guns and bodies is the heaviest thing he does: it waits for
             // a frame with budget, and after finding nothing he doesn't sweep again for 20 s
             // (a hiding bot looks around every 8 s; it used to sweep every time).
-            if (Settings.ScavengeWeapons.Value && Time.time >= s.NextScavengeScan)
+            if (fetch && Settings.ScavengeWeapons.Value && Time.time >= s.NextScavengeScan)
             {
                 if (!Perception.TakeHeavy()) return;   // decides next check (0.25 s)
                 Item found = Arsenal.FindWeapon(Me, s.CaptorLastSeen, Settings.ScavengeAvoid.Value,
@@ -1275,6 +1502,7 @@ namespace HandsAreHigh
                     {
                         s.TargetWeapon = found;
                         s.TargetPoint = at;
+                        s.RecoverTries++;
                         s.SetPhase(Phase.Recovering, $"going for {found.ShortName.Localized()} {Vector3.Distance(at, Me.Position):0} m away");
                         return;
                     }
@@ -1289,7 +1517,10 @@ namespace HandsAreHigh
             }
 
             s.TargetWeapon = null;
-            GoHide(s, "nothing to fight with", quiet: s.Phase == Phase.Regrouping && s.HidCount++ > 0);
+            // 0.21.0: nothing to fight with: his own AI has him from here (it moves, regroups, finds
+            // a weapon, fights or avoids with the whole raid in view). He used to crouch in a hide
+            // and look again every 8 s for the rest of the raid.
+            HandBack(s, kept != null ? $"couldn't draw his {Arsenal.SlotName(kept)} (the game refused)" : "away, nothing to fight with");
         }
 
         private void Recovering(SurrenderState s, bool check)
@@ -1336,6 +1567,12 @@ namespace HandsAreHigh
             {
                 if (s.Scrambling) FailScramble(s, "stuck on the way");
                 else GiveUpOn(s, "stuck on the way");
+                return;
+            }
+            // 0.21.0: a dash for his gun under fire has its own short budget (1.2 s + 1 s per 3.5 m).
+            if (s.FireRecover && Time.time > s.FireRecoverUntil)
+            {
+                FailScramble(s, "took too long under fire");
                 return;
             }
             float limit = s.Scrambling ? Settings.ScrambleTimeout.Value : Settings.RecoveryTimeout.Value;
@@ -1397,54 +1634,66 @@ namespace HandsAreHigh
         {
             if (s.TargetWeapon != null) s.Skip.Add(s.TargetWeapon);
             s.TargetWeapon = null;
+            if (FireBreak.Blocks(Me)) { TakeCoverFromFire(s, s.ThreatAt, $"gave up on the gun under fire: {why}"); return; }
+            // 0.21.0: decides again on the next check (another gun near, or his own AI), standing; not
+            // 1 s crouched. Not here and now: this can run inside the game's pick-up callback.
             StopMoving();
-            s.RegroupUntil = Time.time + 1f;
+            s.RegroupUntil = Time.time;
             s.SetPhase(Phase.Regrouping, $"gave up on the gun: {why}");
         }
 
-        // Nothing to fight with: gets out of sight of where he last saw you, stays low,
-        // and looks again every few seconds.
-        private void GoHide(SurrenderState s, string why, bool quiet = false)
+        // 0.21.0: a move to cover with a clear end. Out of sight of what he hides from (ThreatAt: his
+        // captor's last sighting, or the fire): a reachable hidden spot (the nearest one for fire,
+        // CoverPoint; a hiding place a little further for slipping away, RetreatPoint), at a sprint
+        // when urgent; his own AI has him once he is there, stuck, out of time (Move to cover at
+        // most), or when there is no spot (or he is already out of sight). 0.20 and earlier stood
+        // him in a crouch there and looked again every 8 s, for good when he had no gun.
+        private void GoHide(SurrenderState s, string why, bool urgent = false, bool fromFire = false)
         {
             StopMoving();
-            s.HideUrgent = false;
-            s.SetPhase(Phase.Hiding, why, quiet);
+            s.HideUrgent = urgent;
+            s.HideFromFire = fromFire;
+            if (!fromFire) s.ThreatAt = s.CaptorLastSeen;
+            s.HideUntil = Time.time + Settings.FireCoverSeconds.Value;
+            s.SetPhase(Phase.Hiding, why);
             // The cover search (up to PathCandidates path solves) runs from Hiding on a frame
             // with heavy-search budget, usually this one or the next.
-            s.HideSearchPending = Perception.CanSee(Me, s.CaptorLastSeen);
+            s.HideSearchPending = Perception.CanSee(Me, s.ThreatAt);
         }
 
         private void Hiding(SurrenderState s, bool check)
         {
-            if (s.HideSearchPending && Perception.TakeHeavy())
+            if (s.HideSearchPending)
             {
+                if (!Perception.TakeHeavy()) { Hold(1f); return; }
                 s.HideSearchPending = false;
-                if (Perception.RetreatPoint(Me, s.CaptorLastSeen, Settings.CoverRadius.Value, true, out s.TargetPoint))
-                    s.HideMoving = true;
+                bool found = s.HideFromFire
+                    ? Perception.CoverPoint(Me, s.ThreatAt, Settings.FireCoverRadius.Value, null, out s.TargetPoint, out _)
+                    : Perception.RetreatPoint(Me, s.ThreatAt, Settings.CoverRadius.Value, true, out s.TargetPoint);
+                if (!found)
+                {
+                    HandBack(s, $"no reachable cover within {(s.HideFromFire ? Settings.FireCoverRadius.Value : Settings.CoverRadius.Value):0} m");
+                    return;
+                }
+                s.HideMoving = true;
+                if (Settings.LogDecisions.Value || (s.HideFromFire && Settings.LogFireBreak.Value))
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: cover {Vector3.Distance(Me.Position, s.TargetPoint):0} m away, hidden from {(s.HideFromFire ? "the fire" : Restraint.Name(s.Captor))}");
             }
-            if (s.HideMoving)
+            if (!s.HideMoving)
             {
-                if (!MoveTo(s, s.TargetPoint, sprint: s.HideUrgent)) s.HideMoving = false;
+                HandBack(s, "out of sight of the threat already");
+                return;
             }
-            else
+            if (!MoveTo(s, s.TargetPoint, sprint: s.HideUrgent))
             {
-                Hold(0f);
-                if (!Kneel.LegsLocked(s)) BotOwner.Steering.LookToPoint(s.CaptorLastSeen + Vector3.up * 1.5f);
+                HandBack(s, "no route to cover");
+                return;
             }
             if (!check) return;
             if (SpottedAgain(s)) return;
-
-            if (s.HideMoving && (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value) || Stalled(s)))
-            {
-                s.HideMoving = false;
-                StopMoving();
-            }
-            if (Time.time - s.PhaseSince > Settings.HideRecheck.Value)
-            {
-                s.RegroupUntil = Time.time;
-                // Decide comes back to Hiding if there's still nothing; logged once, not every 8 s.
-                s.SetPhase(Phase.Regrouping, "looks again", quiet: true);
-            }
+            if (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value)) { HandBack(s, s.HideFromFire ? "in cover from the fire" : "in cover"); return; }
+            if (Stalled(s)) { HandBack(s, "stuck on the way to cover"); return; }
+            if (Time.time > s.HideUntil && !Kneel.LegsLocked(s)) HandBack(s, $"{Settings.FireCoverSeconds.Value:0} s on the way to cover");
         }
 
         // A human player close by aims straight at him for a moment: hands go up again.
@@ -1452,6 +1701,8 @@ namespace HandsAreHigh
         private bool SpottedAgain(SurrenderState s)
         {
             if (Time.time < s.GraceUntil) return false;
+            // 0.21.0: not while the fire that broke his hold-up is still on (no recapture loop).
+            if (FireBreak.Blocks(Me)) { s.AimedBy = null; return false; }
             // A debug opening simulates you not covering him: your aim doesn't count until it ends.
             if (Time.time < s.DebugOpeningUntil) { s.AimedBy = null; return false; }
             GameWorld world = Singleton<GameWorld>.Instance;
@@ -1486,7 +1737,6 @@ namespace HandsAreHigh
                     return true;
                 }
             }
-            s.HidCount = 0;
             SurrenderRegistry.Surrender(Me, aiming, s.Scrambling ? "caught mid-scramble" : "caught again", source: SurrenderSource.Recapture);
             return true;
         }
@@ -1580,6 +1830,19 @@ namespace HandsAreHigh
             }
             SetPose(1f);
             BotOwner.SetTargetMoveSpeed(1f);
+            // 0.21.0: doors. The game opens a door on a bot's path only when the logic driving him
+            // asks (vanilla MoveNode.DoorOpen -> BotDoorOpener.UpdateDoorInteractionStatus, every
+            // frame); SAIN does it inside its own mover. Our layer never asked, and a shut door
+            // doesn't cut the NavMesh (NavMeshDoorLink carves only for an open leaf), so BotMover
+            // carried him straight through it. While the opener works a door (its own NearDoor
+            // mover state, the interaction), he is its: no new path, no sprint, no stall count.
+            if (s.Moving && DoorBusy())
+            {
+                BotOwner.Sprint(false);
+                s.SprintHeld = sprint;
+                ResetProgress(s);
+                return true;
+            }
             bool first = s.NextMoveOrder == 0f || !s.Moving;
             bool moved = (point - s.PathTarget).sqrMagnitude > 1f;
             if (s.SprintHeld && Kneel.SprintAllowed(s)) { s.SprintHeld = false; if (sprint) BotOwner.Sprint(true); }
@@ -1592,7 +1855,10 @@ namespace HandsAreHigh
             // leg or no stamina means no sprint (MovementContext.CanSprint, Physical.CanSprint).
             if (sprint && s.Moving)
             {
-                BotOwner.Steering.LookToMovingDirection();
+                // 0.21.0: during the short blend back from a kneel the turn to his way stays within
+                // reach of his planted knees (SteerTo); the full turn follows a moment later.
+                if (Kneel.Posing(s)) SteerTo(s, s.PathTarget - Me.Position, PivotSpeed);
+                else BotOwner.Steering.LookToMovingDirection();
                 if (Kneel.SprintAllowed(s) && BotOwner.Mover != null && !BotOwner.Mover.Sprinting) BotOwner.Sprint(true);
                 MoveDiag(s);
             }
@@ -1622,7 +1888,7 @@ namespace HandsAreHigh
             // Straight out of a kneel he walks his first steps while our pose blends out
             // (0.14 s), then sprints: never a sprint cycle under a kneeling body.
             bool sprintNow = sprint && Kneel.SprintAllowed(s);
-            if (sprint) BotOwner.Steering.LookToMovingDirection();
+            if (sprint && !Kneel.Posing(s)) BotOwner.Steering.LookToMovingDirection();
             BotOwner.Sprint(sprintNow);
             s.SprintHeld = sprint && !sprintNow;
             return true;
@@ -1689,11 +1955,26 @@ namespace HandsAreHigh
             return Time.time - s.ProgressSince > Settings.StallSeconds.Value;
         }
 
+        // 0.21.0: on the same floor too (a spot on the floor above or below, straight overhead,
+        // used to count as reached).
         private bool Arrived(Vector3 point, float within)
         {
             Vector3 d = point - Me.Position;
+            if (Mathf.Abs(d.y) > 1.6f) return false;
             d.y = 0f;
             return d.magnitude <= within;
+        }
+
+        // 0.21.0: the game's door opener, asked every moving frame as vanilla's own move nodes do;
+        // true while it has him at a door (walking to the handle, opening, stepping through).
+        private bool DoorBusy()
+        {
+            BotDoorOpener d = BotOwner.DoorOpener;
+            if (d == null) return false;
+            DoorInteractionStatus st;
+            try { st = d.UpdateDoorInteractionStatus(); }
+            catch { return false; }
+            return st == DoorInteractionStatus.OpeningDoor || d.Interacting || BotOwner.Mover.CurrentState == EBotMoverState.NearDoor;
         }
 
         public override void BuildDebugText(StringBuilder sb)

@@ -141,8 +141,6 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> RetreatTimeout;
         internal static ConfigEntry<float> ArrivalTolerance;
         // 09
-        internal static ConfigEntry<float> RegroupMin;
-        internal static ConfigEntry<float> RegroupMax;
         internal static ConfigEntry<bool> RecoverOwnWeapon;
         internal static ConfigEntry<float> AvoidRadius;
         internal static ConfigEntry<bool> ScavengeWeapons;
@@ -153,7 +151,6 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> PickupTimeout;
         internal static ConfigEntry<bool> HighNerveKnife;
         // 10
-        internal static ConfigEntry<float> HideRecheck;
         internal static ConfigEntry<float> CoverRadius;
         internal static ConfigEntry<int> PathCandidates;
         internal static ConfigEntry<int> PathRetries;
@@ -350,10 +347,6 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> BusyRelease;
         internal static ConfigEntry<bool> AlliedCaptors;
         internal static ConfigEntry<bool> CaptorSpeech;
-        internal static ConfigEntry<bool> CaptorCover;
-        internal static ConfigEntry<float> CaptorCoverRadius;
-        internal static ConfigEntry<bool> PrisonerFollowsToCover;
-        internal static ConfigEntry<float> FollowToCoverWithin;
         internal static ConfigEntry<float> QuietBeforeGuarding;
         internal static ConfigEntry<float> MinEngageSeconds;
         internal static ConfigEntry<bool> CaptorGlances;
@@ -559,8 +552,7 @@ namespace HandsAreHigh
             ArrivalTolerance = c.Bind(Retreat, "Arrived within (m)", 2f, Range("", 0.5f, 5f));
 
             // 09 Regroup and rearm
-            RegroupMin = c.Bind(Recovery, "Regroup min (s)", 4f, Range("Time watching where he last saw you before deciding.", 0f, 60f));
-            RegroupMax = c.Bind(Recovery, "Regroup max (s)", 12f, Range("", 0f, 60f));
+            // 0.21.0: Regroup min/max (s) are gone: he decides at once after getting away (no waiting crouched).
             RecoverOwnWeapon = c.Bind(Recovery, "Go back for his own gun", true, "If it's still there and you weren't near it.");
             AvoidRadius = c.Bind(Recovery, "Own gun: keep away from you (m)", 20f, Range("", 0f, 100f));
             ScavengeWeapons = c.Bind(Recovery, "Look for another gun", true, "Loose guns and guns on bodies.");
@@ -572,7 +564,7 @@ namespace HandsAreHigh
             HighNerveKnife = c.Bind(Recovery, "Fight with a knife", true, "High-nerve bots with no gun to find come back with their knife.");
 
             // 10 Hiding and movement
-            HideRecheck = c.Bind(Hiding, "Look again every (s)", 8f, Range("", 1f, 60f));
+            // 0.21.0: Look again every (s) is gone: hiding ends in cover and his own AI takes over.
             CoverRadius = c.Bind(Hiding, "Cover search radius (m)", 20f, Range("", 3f, 100f));
             PathCandidates = c.Bind(Hiding, "Points tried", 12, IntRange("Candidate spots per retreat or cover search.", 2, 48));
             PathRetries = c.Bind(Hiding, "Retries when stuck", 3, IntRange("", 0, 10));
@@ -746,12 +738,8 @@ namespace HandsAreHigh
                 Range("Chance (once per custody) that a captor, once the prisoner has his hands up and has dropped the gun in his hands, walks closer to give orders and control him. Only with nothing threatening him, along a complete path, gun on the prisoner; stops on any threat.", 0f, 1f));
             CaptorStandoff = c.Bind(BotCaptor, "Close-in distance (m)", 3.5f,
                 Range("Where a captor who closes in stops: room for both of them, out of arm's reach, never on the dropped gun.", 2.5f, 8f));
-            CaptorCover = c.Bind(BotCaptor, "Captors take cover", true,
-                "Under fire from a direction he can tell, a captor moves to a reachable spot hidden from it (keeping the prisoner in sight if he can) instead of standing exposed. A visible enemy always goes to the combat AI.");
-            CaptorCoverRadius = c.Bind(BotCaptor, "Captor cover search (m)", 12f, Range("", 3f, 40f));
-            PrisonerFollowsToCover = c.Bind(BotCaptor, "Prisoner follows into cover", true,
-                "A captor going into cover orders a close prisoner to follow (hands up, his own path) and to stay once there. Only with a complete path and the prisoner in order range.");
-            FollowToCoverWithin = c.Bind(BotCaptor, "Follows into cover within (m)", 10f, Range("", 2f, 25f));
+            // 0.21.0: Captors take cover / cover search / prisoner follows into cover (and its range)
+            // are gone with the captor's Cover mode: incoming fire now breaks the hold-up (section 24).
             QuietBeforeGuarding = c.Bind(BotCaptor, "Back to guarding after quiet (s)", 2.5f,
                 Range("After a fight he goes back to guarding only once no enemy is in sight and no fire came in for this long.", 0.5f, 20f));
             MinEngageSeconds = c.Bind(BotCaptor, "Fights at least (s)", 3f,
@@ -814,6 +802,7 @@ namespace HandsAreHigh
             BindRealism(c);
             BindV19(c);
             BindSquadCover(c);   // 0.20.0
+            BindFireBreak(c);    // 0.21.0
         }
 
         private static void BindKneel(ConfigFile c)
@@ -928,12 +917,6 @@ namespace HandsAreHigh
         // The override applies live, to bots already met this raid too.
         internal static float EffectiveNerve(float rolled) => NerveOverride.Value ? NerveOverrideValue.Value : rolled;
 
-        internal static float RegroupSeconds()
-        {
-            float lo = Mathf.Min(RegroupMin.Value, RegroupMax.Value);
-            float hi = Mathf.Max(RegroupMin.Value, RegroupMax.Value);
-            return Dice.Range(lo, hi);
-        }
 
         internal static float Between(ConfigEntry<float> a, ConfigEntry<float> b) =>
             Dice.Range(Mathf.Min(a.Value, b.Value), Mathf.Max(a.Value, b.Value));

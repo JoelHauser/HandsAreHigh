@@ -150,6 +150,15 @@ namespace HandsAreHigh
         internal static string SlotName(EquipmentSlot? slot) =>
             slot == EquipmentSlot.Holster ? "sidearm" : slot == null ? "nothing" : "slung gun";
 
+        // 0.21.0: for the hand-back line: what he goes back to his own AI with.
+        internal static string DescribeArmed(Player bot)
+        {
+            if (bot == null) return "?";
+            EquipmentSlot? gun = GunOnBody(bot);
+            if (gun != null) return $"armed: {SlotName(gun)}";
+            return HasMelee(bot) ? "no gun, a knife" : "unarmed";
+        }
+
         internal static bool HasMelee(Player bot) =>
             bot.Equipment?.GetSlot(EquipmentSlot.Scabbard)?.ContainedItem != null;
 

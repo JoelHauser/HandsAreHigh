@@ -12,8 +12,9 @@ namespace HandsAreHigh
         Regrouping,   // out of sight, catching breath, deciding how to rearm
         Recovering,   // walking to a gun (his own or another one)
         PickingUp,    // waiting for the pick-up transaction
-        Hiding,       // nothing to fight with: crouched in cover, waits to be found
-        Rearmed       // weapon drawn: arms come down and the normal AI takes over
+        Hiding,       // 0.21.0: moving to cover (a hidden spot); on arrival his own AI has him
+        Rearmed,      // weapon drawn: arms come down and the normal AI takes over
+        Released      // 0.21.0: free, unarmed or not: arms down, legs free, then his own AI takes over
     }
 
     // A standing order from the captor. Separate from the phase: a bot following you is
@@ -87,7 +88,6 @@ namespace HandsAreHigh
         internal int UrgentPath;
         internal bool Scrambling;       // ran for his gun during an opening: sprints, no regroup first
         internal float ScrambleCooldownUntil;
-        internal int HidCount;          // hide-and-look-again cycles since last caught: only the first is logged
 
         // What he knows about the captor. After losing sight he only uses the last sighting.
         // At a surrender it is where he last saw his threat (EnemyInfo), never a position he
@@ -171,7 +171,26 @@ namespace HandsAreHigh
 
         // Follow: a failed path is retried at most once a second (not a path solve per frame).
         internal float FollowRetryAt;
-        internal bool FollowToCover;        // a bot captor ordered him along into cover
+
+        // 0.21.0: incoming fire that broke (or reached) this encounter (FireBreak.cs). FirePending:
+        // the layer reacts on its next frame (SurrenderLogic.UnderFire). FireFrom: where it came
+        // from as he can tell it (the shooter, or the hit's direction); FireBy when known.
+        internal bool FirePending;
+        internal Vector3 FireFrom;
+        internal bool FireFromKnown;
+        internal bool FireHit;
+        internal float FireTime = -1000f;
+        internal Player FireBy;
+        internal string FireSense;
+        internal bool FireRecover;          // going for his own gun under fire (abandoned if it turns unsafe)
+        internal float FireRecoverUntil;
+        internal Vector3 ThreatAt;          // what Hiding hides from (his captor's last sighting, or the fire)
+        internal bool HideFromFire;         // the nearest spot hidden from the fire (not a far-off hiding place)
+        internal float HideUntil;           // a move to cover ends here, wherever he is
+        internal int RecoverTries;          // guns gone for since he got away (at most 2, then his own AI)
+        // 0.21.0: leaving us (Phase.Released): why, and the hand-off log.
+        internal string HandBackWhy;
+        internal float LeftHeldAt = -1f;    // when he stopped holding his hands up (first time this surrender)
 
         // Set by Player.BeingHitAction (bullets, melee, explosions; never bleeding).
         internal bool WasHit;
@@ -408,7 +427,6 @@ namespace HandsAreHigh
             ClosestDist = float.MaxValue;
             OfferRef = float.MaxValue;
             CoveredSince = -1f;
-            FollowToCover = false;
             KneelFallback = null;
             KneelEscape = false;
             KneelSpotMoving = false;
@@ -426,6 +444,11 @@ namespace HandsAreHigh
             Facing.Clear(this);
             Demands = 0;
             EscalateAt = 0f;
+            // 0.21.0: nothing of the last escape carries into a new surrender.
+            FirePending = false;
+            FireRecover = false;
+            HandBackWhy = null;
+            LeftHeldAt = -1f;
             OfferUntil =Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * Nerve);
             Gestures.Cancel(this, "new surrender");
         }
@@ -459,6 +482,7 @@ namespace HandsAreHigh
             }
             PhaseSince = Time.time;
             NextMoveOrder = 0f;
+            if (old == Phase.HandsUp && p != Phase.HandsUp && LeftHeldAt < 0f) LeftHeldAt = Time.time;
             // What the bots around him see him do: going for a weapon ends every restraint (and
             // is remembered by whoever saw it); running or giving up again is re-decided.
             if (old != p)
@@ -516,6 +540,7 @@ namespace HandsAreHigh
             LegSince = now;
             FleeLockUntil = now + Settings.FleeCommit.Value;
             FleeLockLogged = false;
+            RecoverTries = 0;
         }
 
         internal void LowerArms(float seconds)

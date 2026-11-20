@@ -15,7 +15,7 @@ namespace HandsAreHigh
     internal enum NaturalGate
     {
         Role, Teammate, Cooldown, NotActive, NoTarget, TargetNotLiving, BotTarget, NotPerceived,
-        WeaponChange, TooFewReasons, LowPressure, Count
+        WeaponChange, TooFewReasons, LowPressure, UnderBreakingFire, Count
     }
 
     // 0.19.0: bounded counters for the natural pipeline, so a normal raid's log says how far bots
@@ -123,6 +123,7 @@ namespace HandsAreHigh
             sb.Append($"; rolls {_rolls} (Scav {_scavRolls}, PMC {_pmcRolls}), gave up {_gives} (Scav {_scavGives}, PMC {_pmcGives}), activated {_activated}");
             if (_failed > 0) sb.Append($", ACTIVATION FAILED {_failed}");
             sb.Append($"; hits ignored in the first moments of a surrender {_hitGrace}");
+            sb.Append($"; hold-ups broken by incoming fire {FireBreak.Broken}");   // 0.21.0
             sb.Append(". Surrenders started / acknowledged (bot custody):");
             for (int i = 0; i < Started.Length; i++)
                 sb.Append($" {(SurrenderSource)i} {Started[i]}/{Accepted[i]} ({Custody[i]}),");

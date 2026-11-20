@@ -16,7 +16,9 @@ namespace HandsAreHigh
         // 0.16.0
         OrderHands, OrderTurn, CaptorOrderHands, CaptorOrderTurn, DrawKept, CaptorWasHit,
         // 0.17.0
-        CaptorKillsNow, CaptorLetsGo
+        CaptorKillsNow, CaptorLetsGo,
+        // 0.21.0
+        FireNearMiss, FireHit
     }
 
     // Controlled events against ONE selected participant. Each says what it is:
@@ -65,6 +67,8 @@ namespace HandsAreHigh
                 case ScenarioEvent.CaptorWasHit: return "His captor remembers being shot by him (SIMULATED memory)";
                 case ScenarioEvent.CaptorKillsNow: return "His captor decides to kill him now (FORCED decision only)";
                 case ScenarioEvent.CaptorLetsGo: return "His captor lets him go now (his real Leave order)";
+                case ScenarioEvent.FireNearMiss: return "Near miss on him from 30 m (SIMULATED incoming fire, no shot)";
+                case ScenarioEvent.FireHit: return "Hit on him from 30 m (SIMULATED incoming fire, no damage)";
                 default: return "Surrender to the bot he fights (FORCED)";
             }
         }
@@ -73,7 +77,8 @@ namespace HandsAreHigh
         {
             switch (e)
             {
-                case ScenarioEvent.Opening: case ScenarioEvent.Suppress: case ScenarioEvent.PretendLeft: return TL.Simulated;
+                case ScenarioEvent.Opening: case ScenarioEvent.Suppress: case ScenarioEvent.PretendLeft:
+                case ScenarioEvent.FireNearMiss: case ScenarioEvent.FireHit: return TL.Simulated;
                 case ScenarioEvent.Glance: case ScenarioEvent.ForceRun: case ScenarioEvent.ForceGrab: case ScenarioEvent.Wiggle:
                 case ScenarioEvent.Finger: case ScenarioEvent.SurrenderToYou: case ScenarioEvent.SurrenderToEnemy:
                 case ScenarioEvent.DrawKept: case ScenarioEvent.CaptorKillsNow: return TL.Forced;
@@ -128,6 +133,10 @@ namespace HandsAreHigh
                     return foe == null || !foe.IsAI || !Perception.Alive(foe) ? "isn't fighting a bot right now" : null;
                 case ScenarioEvent.ThirdParty:
                     return sc.Stage == Stage.Running ? null : "only once the scenario runs";
+                case ScenarioEvent.FireNearMiss: case ScenarioEvent.FireHit:
+                    if (s != null && s.Phase != Phase.Rearmed && s.Phase != Phase.Released) return null;
+                    if (cs != null && cs.Prisoner != null && cs.Prisoner.Phase == Phase.HandsUp) return null;
+                    return "is neither held nor holding a man with his hands up";
                 default:
                     return null;
             }
@@ -222,6 +231,8 @@ namespace HandsAreHigh
                     Captors.End(cs0, "let him go (scenario event)", released: true);
                     return $"{cs0.Name} lets him go";
                 }
+                case ScenarioEvent.FireNearMiss: return FireBreak.Simulate(t.Player, hit: false);
+                case ScenarioEvent.FireHit: return FireBreak.Simulate(t.Player, hit: true);
                 case ScenarioEvent.CaptorWasHit:
                 {
                     EnemyInfo info = Perception.InfoAbout(s.Custody.Owner, t.Player);

@@ -66,14 +66,13 @@ namespace HandsAreHigh
         {
             target = null;
             if (!ByShooter.TryGetValue(shooter, out List<Pair> list)) return false;
-            Vector3 eye = Perception.Eye(shooter);
-            Vector3 look = shooter.LookDirection;
             for (int i = 0; i < list.Count; i++)
             {
                 Player p = list[i].Target;
-                if (!Perception.Alive(p)) continue;
-                Vector3 to = Perception.Chest(p) - eye;
-                if (to.sqrMagnitude > 200f * 200f || Vector3.Angle(look, to) > 6f) continue;
+                // 0.21.0: on the actual line of fire, and not behind the shooter's own target
+                // (Perception.InLineOfFire). The flat 6 deg cone blocked every shot a hostile third
+                // party fired at a captor with you anywhere near that bearing: it looked friendly.
+                if (!Perception.InLineOfFire(shooter, p, 200f)) continue;
                 target = p;
                 return true;
             }

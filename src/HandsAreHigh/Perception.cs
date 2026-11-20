@@ -76,6 +76,41 @@ namespace HandsAreHigh
 
         internal static bool CanSee(Player from, Vector3 point) => LineClear(Eye(from), point + Vector3.up * 1.2f);
 
+        // 0.21.0: would a round fired now along his look reach this man first? His body is a box
+        // round the line (0.55 m either side plus a little spread per metre, feet to the top of his
+        // head), in front of the muzzle, within range. A man further down the line than the
+        // shooter's own target, which stands on that line, is not in it: the round stops there.
+        // 0.20 tested a flat 6 deg cone at any range (4 m wide at 40 m) and never the target in
+        // front: a prisoner or an observing player standing anywhere near the bearing of a fight
+        // blocked every trigger press (a scenario's hostile third party never fired a shot in 30 s).
+        internal static bool InLineOfFire(Player shooter, Player man, float maxRange)
+        {
+            if (shooter == null || !Alive(man)) return false;
+            Vector3 eye = Eye(shooter);
+            Vector3 look = shooter.LookDirection;
+            if (look.sqrMagnitude < 1e-4f) return false;
+            look.Normalize();
+            if (!OnLine(eye, look, man, maxRange, out float along)) return false;
+            Player goal = null;
+            try { goal = PlayerOf(shooter.AIData?.BotOwner?.Memory?.GoalEnemy?.Person); } catch { }
+            if (goal != null && goal != man && Alive(goal) && OnLine(eye, look, goal, maxRange, out float goalAlong) && goalAlong + 0.75f < along)
+                return false;
+            return true;
+        }
+
+        private static bool OnLine(Vector3 eye, Vector3 look, Player p, float maxRange, out float along)
+        {
+            Vector3 feet = p.Position;
+            along = Vector3.Dot(feet + Vector3.up - eye, look);
+            if (along <= 0.2f || along > maxRange) return false;
+            Vector3 closest = eye + look * along;
+            Vector3 off = feet - closest;
+            float up = -off.y;                       // height of the line above his feet
+            if (up < -0.1f || up > 1.95f) return false;
+            off.y = 0f;
+            return off.magnitude <= 0.55f + 0.01f * along;
+        }
+
         // Within this a clear line is enough to know where someone is (sight, hearing, peripheral).
         internal const float CloseNotice = 25f;
 
@@ -310,7 +345,45 @@ namespace HandsAreHigh
             if (!wantCorners) return true;
             corners = Path.corners;
             if (corners == null || corners.Length == 0) { why = "empty path"; return false; }
+            // 0.21.0: a path that will be walked may not cross solid geometry (BotMover puts him on
+            // the NavMesh along it whatever stands there). The NavMesh is continuous through a shut
+            // door (it is only carved for an open leaf), and can be through a locked one.
+            if (CrossesGeometry(corners, out string what)) { why = $"the route crosses {what}"; corners = null; return false; }
             return true;
+        }
+
+        // 0.21.0: each leg of the route at hip height (1 m over the corners) against everything a
+        // player's capsule collides with (walls, props, doors; not players). A door that can be
+        // opened is allowed: the game's door opener opens it on the way (SurrenderLogic.DoorBusy).
+        // A locked door, or anything else, refuses the route: the caller picks another or hands
+        // the bot to his own AI. A few raycasts per walked path (paths are re-made every few s).
+        private static readonly RaycastHit[] GeoHits = new RaycastHit[8];
+        internal static bool CrossesGeometry(Vector3[] corners, out string what)
+        {
+            what = null;
+            int mask = LayersMaskController.PlayerStaticCollisionsMask;
+            for (int i = 1; i < corners.Length; i++)
+            {
+                Vector3 a = corners[i - 1] + Vector3.up, b = corners[i] + Vector3.up;
+                Vector3 d = b - a;
+                float len = d.magnitude;
+                if (len < 0.05f) continue;
+                int n = Physics.RaycastNonAlloc(a, d / len, GeoHits, len, mask, QueryTriggerInteraction.Ignore);
+                for (int k = 0; k < n; k++)
+                {
+                    Collider c = GeoHits[k].collider;
+                    if (c == null) continue;
+                    EFT.Interactive.Door door = c.GetComponentInParent<EFT.Interactive.Door>();
+                    if (door != null)
+                    {
+                        if (door.DoorState == EFT.Interactive.EDoorState.Locked) { what = "a locked door"; return true; }
+                        continue;
+                    }
+                    what = $"{c.name} ({LayerMask.LayerToName(c.gameObject.layer)}) {GeoHits[k].distance:0.0} m along leg {i}";
+                    return true;
+                }
+            }
+            return false;
         }
 
         internal static bool Reachable(Vector3 from, Vector3 to) => Solve(from, to, false, out _, out _);

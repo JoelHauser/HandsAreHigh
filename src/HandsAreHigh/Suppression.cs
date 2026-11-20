@@ -40,13 +40,28 @@ namespace HandsAreHigh
     [HarmonyPatch(typeof(BotMemory), nameof(BotMemory.SetUnderFire))]
     internal static class UnderFirePatch
     {
-        private static void Postfix(BotMemory __instance)
+        // 0.21.0: the game passes who fired (GetHitInner: the hit's player; the hearing sensor: the
+        // shooter); kept as the bot's last known source of fire while anyone is held or guarded.
+        private static void Postfix(BotMemory __instance, IPlayer source)
         {
-            if (!Settings.Enabled.Value || !Settings.NaturalSurrender.Value) return;
+            if (!Settings.Enabled.Value) return;
             Player bot = __instance?._owner?.GetPlayer;
             if (bot == null) return;
             long t0 = Perf.Begin();
-            try { Suppression.OnUnderFire(bot); }
+            try
+            {
+                if (SurrenderRegistry.Any || Captors.Any)
+                {
+                    Player by = Perception.PlayerOf(source);
+                    if (by != null && by != bot)
+                    {
+                        BotHistory h = SurrenderRegistry.HistoryOf(bot);
+                        h.FireBy = by;
+                        h.FireByAt = Time.time;
+                    }
+                }
+                if (Settings.NaturalSurrender.Value) Suppression.OnUnderFire(bot);
+            }
             catch (System.Exception e) { HandsAreHighPlugin.Report("under fire", e); }
             Perf.End(Perf.Sec.Hit, t0);
         }
@@ -69,6 +84,8 @@ namespace HandsAreHigh
             if (!shooter.IsAI && SurrenderRegistry.Any) WarningShots(shooter, from, dir, radius, range);
             // Near misses past a held man's head, by anyone: a cosmetic flinch (Presence).
             if (SurrenderRegistry.Any) Presence.OnShot(shooter, from, dir);
+            // 0.21.0: a credible near miss on a prisoner or his captor breaks the hold-up.
+            if (SurrenderRegistry.Any) FireBreak.OnShot(shooter, from, dir);
             // Gunfire is heard: a held man can tell his captor is shooting (Reactions), a captor
             // can tell he is being shot at. Only kept while anyone is held (one lookup per shot).
             if (SurrenderRegistry.Any) SurrenderRegistry.HistoryOf(shooter).ShotAt = Time.time;
@@ -173,6 +190,8 @@ namespace HandsAreHigh
             BotHistory h = SurrenderRegistry.HistoryOf(bot);
             float now = Time.time;
             if (nearMiss) h.NearMissAt = now;
+            if (shooter != null) { h.FireBy = shooter; h.FireByAt = now; }
+            FireBreak.Extend(h, now);   // 0.21.0: still under the fire that broke his hold-up
             if (now - h.FireAt < MinEventGap) return;
             h.Fire = Mathf.Min(Cap, Decayed(h, now) + weight);
             h.FireAt = now;

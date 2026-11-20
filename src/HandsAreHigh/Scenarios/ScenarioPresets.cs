@@ -388,8 +388,8 @@ namespace HandsAreHigh
             p = new ScenarioPreset
             {
                 Name = "Captor comes under fire",
-                Tests = "The captor puts cover and combat first; the prisoner reassesses what he sees.",
-                Watch = "'Guard -> Cover' or '-> Engage', 'takes over', the prisoner's opening line (gunfire heard / looks away), 'Engage -> Guard (quiet ...)'.",
+                Tests = "0.21.0: fire on the captor breaks the hold-up: his combat AI has him at once, the prisoner gets to safety and is handed to his own AI. A hostile bot that only shows up (no fire yet) is Contact: the captor engages and may hand custody to a squadmate.",
+                Watch = "'INCOMING FIRE: ... (the captor) ...: the hold-up breaks' (or '-> Engage' + 'takes over' for a bot only seen), '<prisoner> under fire (...): ... -> ...', 'back to his own AI (...)'. The hostile bot must actually fire at the captor (no 'Scenario shield: ... blocked at trigger' while it aims at him).",
                 Prereq = "Forced custody. Threat: a real hostile bot (spawned 40 m out), a SIMULATED suppression event (tests decisions only), or you fire near the captor.",
                 Natural = false
             };
@@ -1273,29 +1273,32 @@ namespace HandsAreHigh
             };
             list.Add(p.Done());
 
-            // Retreat from captivity
+            // Retreat from captivity (0.21.0: where he goes after: his own AI, followed in the log)
             p = new ScenarioPreset
             {
                 Name = "Retreat from captivity",
-                Tests = "A man leaving captivity commits to it: a destination outside the captivity area along a route that doesn't pass his captor, legs through cover when there's no way straight out, no looping back to the gun he dropped there.",
-                Watch = "'flees to a spot ... m from where he was held', 'still inside ... keeps going (leg n)', 'another way', 'retreat ends (...): ... m from where he was held, ... covered in ... s', 'lies where he was held: not going back for it'. Place it in the open, inside a building, and in a dead end.",
-                Prereq = "Forced custody; the captor's answers forced to mercy so the flight itself is what is tested. Let go: his real Leave order. Bolts: a forced run.",
+                Tests = "A man leaving captivity gets clear of his captor along a reachable route (never through a wall or a shut door), decides at once (a kept gun, his own gun if it is safe, another gun near, or nothing), and is handed to his own AI, which carries on with the raid: no stop-and-crouch, no lingering at the capture spot.",
+                Watch = "'flees to a spot ... m from where he was held', 'retreat ends (...)', then 'back to his own AI (...; armed: ... / unarmed, N m from where he was held, N s after leaving captivity)'. Then 'after release +15 s / +30 s / +60 s (last check): N m from where he was held ... layer <AI layer>, moving / still for N s, standing / crouched, target ...'; never 'STILL NEAR THE CAPTURE SPOT'. A door on the way: he stops at it and opens it (no walking through). 'the route crosses ...' (Verbose) = a route refused for geometry. Place it in the open, inside a building (crosshair placement), at a door, on stairs and in a dead end.",
+                Prereq = "Forced start: already surrendered, forced custody, the captor's answers forced to mercy so the flight itself is what is tested. Let go: his real Leave order. Bolts: a forced run. Gun removed: real loot removal.",
                 Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(25f)); p.Params.Add(Sep(8f));
             p.Params.Add(ParamDef.Choice("how", "He leaves", new[] { "Let go", "Bolts (FORCED run)" }));
             p.Params.Add(ParamDef.Choice("pose", "Prisoner", new[] { "Standing", "Kneeling" }));
+            p.Params.Add(ParamDef.Choice("gun", "His dropped gun", new[] { "Left where it fell", "Removed (none for him)" }));
+            p.Params.Add(Kit("k", "Prisoner keeps", 0));
             p.Params.Add(Delay(8f, "Leaves after (s)"));
             Common(p, true);
             p.Plan = sc =>
             {
                 float h = sc.Values.F("sep") / 2f;
                 Squad(sc, "BEAR", 1, -h, 0f, "Prisoner");
-                Add(sc, "Prisoner", "Scav", "B", h, 0f, "PMC");
+                From(Add(sc, "Prisoner", "Scav", "B", h, 0f, "PMC"), sc.Values, null, null, "k", null, null);
                 return null;
             };
             p.Setup = sc =>
             {
+                Conditions(sc);
                 Participant cap = sc.Find("PMC"), pr = sc.Find("Prisoner");
                 PrisonerTo(sc, pr, cap, custody: true, "forced start");
                 sc.Step($"{cap.Tag}: holds him, mercy forced", () =>
@@ -1305,7 +1308,89 @@ namespace HandsAreHigh
                     sc.Force($"{cap.Tag}'s answers forced to mercy (the flight is the test)");
                     return Captors.DebugSteps(cap.Player, "retreat test", OrderKind.Stay, sc.Values.Is("pose", "Kneeling") ? OrderKind.Kneel : OrderKind.Stay);
                 });
+                if (sc.Values.S("gun").StartsWith("Removed"))
+                    sc.After(Mathf.Max(1f, sc.Values.F("delay") - 2f), "his dropped gun is removed", () => ScenarioEvents.Run(sc, ScenarioEvent.RemoveGun, pr));
                 sc.After(sc.Values.F("delay"), "he leaves", () => ScenarioEvents.Run(sc, sc.Values.Is("how", "Let go") ? ScenarioEvent.CaptorLetsGo : ScenarioEvent.ForceRun, pr));
+            };
+            list.Add(p.Done());
+
+            // 0.21.0: incoming fire breaks the hold-up
+            p = new ScenarioPreset
+            {
+                Name = "Incoming fire breaks the hold-up",
+                Tests = "Fire on either the prisoner or his captor, at any moment of the hold-up (standing, kneeling, the captor collecting the gear, the prisoner dropping his gear, being let go, the prisoner going for his gun), ends it for both: the captor goes to his combat AI at once (custody, orders, fetch and squad cover dropped), the prisoner gets to safety (cover from the fire, a kept weapon, or his own gun if close and safe) and is handed to his own AI; nobody takes or surrenders again while the fire lasts.",
+                Watch = "'INCOMING FIRE: <who> (the prisoner / the captor) hit / a round N m past him by ...: the hold-up breaks', '<captor>: stops holding ... (incoming fire: ...)', '<prisoner> under fire (...): cover ...; draw ...; his gun ...; -> <choice>', then 'cover N m away, hidden from the fire' and 'back to his own AI (in cover from the fire ...)', or 'draws his ... under fire' / 'scrambles for his ... (under fire, ...)' and 'keeps going' or 'leaves it'. Kneeling: an escape rise, no walking on his knees. Squad 2: the guard's 'stops covering ...'. 'no surrender to ...: ... still under the fire' if anyone tries again. Then the 'after release +N s' lines.",
+                Prereq = "Forced start: already surrendered, forced custody and plan. The fire is a real hostile bot (spawned 40 m out on the chosen man: tests detection too), a SIMULATED near miss or hit (the same queue a real one takes; tests the reactions only), or you shooting near them.",
+                Natural = false
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(7f));
+            p.Params.Add(ParamDef.Choice("at", "Fire at", new[] { "The prisoner", "The captor" }));
+            p.Params.Add(ParamDef.Choice("fire", "Fire", new[] { "Near miss (SIMULATED)", "Hit (SIMULATED)", "Hostile bot (real)", "None (you shoot)" }));
+            p.Params.Add(ParamDef.Choice("when", "When", new[] { "Standing", "Kneeling", "Captor collecting the gear", "Prisoner dropping his gear", "Being let go", "Prisoner going for his gun" }));
+            p.Params.Add(ParamDef.Number("squad", "Captor squad size", 1f, 2f, 1f, 1f));
+            p.Params.Add(Kit("k", "Prisoner keeps", 0)); p.Params.Add(NerveP("n", "Prisoner nerve")); p.Params.Add(Pers("pe", "Prisoner personality"));
+            p.Params.Add(Delay(8f, "Fire after (s, Standing)"));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                Participant cap = Squad(sc, "BEAR", sc.Values.I("squad"), -h, 0f, "Prisoner");
+                From(Add(sc, "Prisoner", "Scav", "B", h, 0f, cap.Tag), sc.Values, null, null, "k", "n", "pe");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Conditions(sc);
+                Participant cap = sc.Find(sc.Values.I("squad") > 1 ? "PMC-1" : "PMC"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                string when = sc.Values.S("when"), fire = sc.Values.S("fire");
+                bool atCaptor = sc.Values.Is("at", "The captor");
+                OrderKind[] steps =
+                    when == "Kneeling" ? new[] { OrderKind.Kneel } :
+                    when == "Captor collecting the gear" || when == "Prisoner dropping his gear" ? new[] { OrderKind.Stay, OrderKind.DropWeapons } :
+                    new[] { OrderKind.Stay };
+                sc.Step($"{cap.Tag}: plan for {when}", () =>
+                {
+                    if (!cap.Active || !pr.Active) return (cap.Dead || pr.Dead) ? "a participant died" : "";
+                    Judgement.Force(cap.Player, JudgeForce.Mercy);
+                    if (when == "Prisoner dropping his gear") Compliance.Force(pr.Player, ComplianceChoice.DropsAll);
+                    sc.Force($"{cap.Tag}'s answers forced to mercy (the fire is the test)");
+                    return Captors.DebugSteps(cap.Player, $"fire test: {when}", steps);
+                });
+                // Once the hold-up is over (being let go, going for his gun) fire at the captor is not
+                // about him any more: the prisoner takes it.
+                Action<Participant> shootAt = t =>
+                {
+                    if (fire.StartsWith("Near miss")) ScenarioEvents.Run(sc, ScenarioEvent.FireNearMiss, t);
+                    else if (fire.StartsWith("Hit")) ScenarioEvents.Run(sc, ScenarioEvent.FireHit, t);
+                    else if (fire.StartsWith("Hostile")) ScenarioEvents.Run(sc, ScenarioEvent.ThirdParty, t);
+                    else sc.Note(TL.Info, $"now: shoot near {t.Tag} yourself (the real detection)");
+                };
+                Participant target = atCaptor ? cap : pr;
+                Func<SurrenderState> st = () => ScenarioOps.StateOf(pr);
+                switch (when)
+                {
+                    case "Kneeling":
+                        sc.OnceWhen(() => st()?.Kneel == KneelPhase.Down, 60f, "fire while he kneels", () => shootAt(target));
+                        break;
+                    case "Captor collecting the gear":
+                        sc.OnceWhen(() => CaptorLoot.Busy(cap.Player, out _), 90f, "fire while the captor collects the gear", () => shootAt(target));
+                        break;
+                    case "Prisoner dropping his gear":
+                        sc.OnceWhen(() => st() is SurrenderState s0 && (s0.DropQueue.Count > 0 || s0.ReportAt > 0f), 60f, "fire while he drops his gear", () => shootAt(target));
+                        break;
+                    case "Being let go":
+                        sc.After(sc.Values.F("delay"), "he is let go", () => ScenarioEvents.Run(sc, ScenarioEvent.CaptorLetsGo, pr));
+                        sc.OnceWhen(() => st()?.Phase == Phase.Retreating, 30f, "fire while he gets away", () => shootAt(pr));
+                        break;
+                    case "Prisoner going for his gun":
+                        sc.After(sc.Values.F("delay"), "he goes for his gun (FORCED)", () => ScenarioEvents.Run(sc, ScenarioEvent.ForceGrab, pr));
+                        sc.OnceWhen(() => st()?.Phase == Phase.Recovering || st()?.Phase == Phase.PickingUp, 20f, "fire while he goes for his gun", () => shootAt(pr));
+                        break;
+                    default:
+                        sc.After(sc.Values.F("delay"), "fire", () => shootAt(target));
+                        break;
+                }
             };
             list.Add(p.Done());
 

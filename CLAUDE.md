@@ -6,6 +6,113 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.21.0 (2026-11-20): incoming fire breaks a hold-up; released bots go back to their own AI; door
+and wall fixes on our paths; trigger guards fixed (the "friendly" scenarios); kneel look clamp.
+From Joel's pasted 7-part spec. Release packed (dist/HandsAreHigh-0.21.0.zip, DLL only) and
+installed in H:\SPT4.1.X (0.20.1 DLL backed up in that session's scratchpad, backup-0.20.1).
+Committed and pushed to main (no tag/release). NEVER RUN IN GAME.**
+
+Root causes (evidence: the 18:06 0.20.1 LogOutput, the 0.16.9 / SAIN decompiles):
+- Released bots "run, stop, crouch": a bot left the registry (our layer) ONLY through Rearmed. A
+  released man with nothing to draw ran the flight legs, then Regrouping held him crouched (pose 0.6)
+  4-12 s, then Hiding crouched him (pose 0) and "looked again" every 8 s, forever (log: ModularQuill
+  #S14 Hiding <-> Regrouping "nothing to fight with" for the rest of the scenario). His own AI never
+  got him back.
+- Walking through doors: the game opens a door on a bot's path only when the driving logic calls
+  BotOwner.DoorOpener.UpdateDoorInteractionStatus every frame (vanilla MoveNode.DoorOpen; SAIN does
+  doors in its own mover). Our layers never did, and a shut door doesn't cut the NavMesh
+  (NavMeshDoorLink carves only for an open leaf), so BotMover carried bots through shut doors.
+  Also: Arrived ignored height (a spot on the floor above counted as reached).
+- "Everyone friendly" scenarios: ScenarioShield.AimedAtShielded blocked any trigger press with the
+  observing player within a flat 6 deg of the aim at any range (4 m wide at 40 m) and never checked
+  the shooter's real target in front: #17's hostile third party aimed at the captor for 30 s and every
+  shot was "blocked at trigger" (44 logged blocks across 10 scenarios, rate-limited). Restraint's
+  guard (AimedAtRestrained) had the same flaw for a captor's squad firing past a prisoner.
+- Incoming fire never ended a hold-up: fire on a captor moved him to cover with the prisoner told to
+  follow (Cover mode) or kept custody through the fight (Engage); fire on the prisoner only mattered as
+  a hit in HandsUp.
+
+What changed:
+- FireBreak.cs: credible fire = a hit (prisoner's own BeingHitAction hook; one hook per captor,
+  synced 4x/s, the boss layers' pattern) or a near miss within "Near miss counts within" (1.5 m) of
+  either chest with a clear line, or the bot captor's own threat sense at Fire that began during this
+  custody (Captors.FreshFire; BotMemory.SetUnderFire's `source` now recorded as BotHistory.FireBy).
+  Not credible: the prisoner, the captor himself (warning shots, executions), his side (same
+  BotsGroup / not hostile to him; your teammates or GroupId for a human captor). Queued, acted on in
+  SurrenderRegistry.Tick (a hit at once, a near miss after 0.12-0.35 s): captor -> Captors.Interrupt
+  (End(interrupted): no fetch-later, no "resisted" guard watch, no reopened offer; his layer lets go);
+  prisoner -> SurrenderLogic.UnderFire. A human captor is never touched.
+- Prisoner under fire (EscapeFire, weighed once, logged): cover (CoverPoint hidden from the fire,
+  sprint), draw a kept gun (only with hands free: no draw over a pending drop/hands change), or a dash
+  for his own gun (<= "Goes for his gun under fire within" 6 m, still lying there, reachable, not
+  claimed, x0.35 if in the shooter's view or out towards him; budget 1.2 s + 1 s per 3.5 m; a hit or
+  new exposed fire on the way -> leaves it for cover). Kneeling: escape rise (Kneel.Urge before any
+  hand-back can overwrite it). Unknown direction: straight to his own AI. Already getting away when
+  fire arrives: cover from it, then his AI. A pick-up transaction under way is never cut.
+- No recapture loop: an ex-prisoner can't surrender (natural / demand / recapture) and an ex-captor
+  can't take custody until "No new surrender while under fire for" (8 s) after the last round near him
+  (BotHistory.FireBreakUntil / NoCustodyUntil, extended by every near miss or hit). Natural checks
+  gate it as UnderBreakingFire. An ex-captor may still give up himself (a new encounter).
+- Hand-back (Phase.Released): Regroup decides at once (kept gun / own gun / another gun near, at most
+  2 tries / else hand back); Hiding is a move to cover with an end (arrived, stuck, no route, no spot,
+  "Move to cover at most" 8 s) -> hand back; flight legs end once hidden from the captor and 12 m clear
+  (max 3 legs, was 5). SurrenderRegistry.Tick hands him back when arms are down, the kneel pose is off
+  and no hands request of ours is open (an unanswered one is abandoned after its limit), StopMove
+  first (no stale destination for a non-SAIN brain), cooldown as before. ReleaseWatch logs where he is
+  at +15/+30/+60 s (layer, moving, posture, target, armed; STILL NEAR THE CAPTURE SPOT flag).
+- Walls/doors: SurrenderLogic.MoveTo and CaptorLogic call the game's door opener every moving frame and
+  yield to it (no re-path, sprint or stall count) while it works a door; Perception.PathTo refuses a
+  route whose legs (1 m up) cross anything the player capsule collides with
+  (PlayerStaticCollisionsMask) except an openable door (a locked one refuses); Arrived needs the same
+  floor (<= 1.6 m); both logics' Stop() clear our path.
+- Trigger guards: Perception.InLineOfFire = the man's body on the line (0.55 m + 1 cm/m either side,
+  feet to head), and not if the shooter's own GoalEnemy stands on the line in front of him. Used by
+  restraint and the scenario observer override. tools/firesim: 12/12 cases as intended; the old rule
+  got 4 of the 12 wrong, all "blocked a shot that should fire" (you 6 m behind the target, a prisoner
+  1.2 m off the line at 20 m, a man on a balcony over the prisoner).
+- Kneel: SteerTo clamps every look to MaxPivot from the knees while any part of the kneel is on the
+  bones (incl. the 0.14 s hand-back blend); HandsUp facing waits for Kneel.Posing to end; the rise
+  pivot unchanged. Turn requests beyond that range already stand him up (TurnReKneel); a captor walking
+  behind a kneeling man is out of view (head only, within its limits), never a body turn.
+- Removed: captor Cover mode (TryCover/UpdateCover/ArriveCover/MoveToCover, FollowToCover) and its 4
+  keys (Captors take cover, Captor cover search, Prisoner follows into cover, Follows into cover
+  within); Regroup min/max and Look again every (s). Their lines stay orphaned in Joel's cfg.
+- Config 24. Incoming fire and release (8 keys). Scenarios: events "Near miss on him" / "Hit on him"
+  (SIMULATED, through the same queue); preset "Incoming fire breaks the hold-up" (fire at prisoner or
+  captor; near miss / hit / real hostile bot / you; standing, kneeling, captor collecting the gear,
+  prisoner dropping his gear, being let go, prisoner going for his gun; squad 1-2); "Retreat from
+  captivity" gains "His dropped gun: removed" and a kept-weapon kit; "Captor comes under fire" text.
+
+Tests done (offline): Debug and Release builds 0 warnings; Settings.Bind on copies of Joel's cfg
+through the built and the installed DLL (395 entries, section 24 at defaults, twice); tools/firesim
+12/12; tools/releasesim (every post-captivity path ends with his own AI, worst case 223 s = two
+30 s gun walks; the 0.20.1 graph is unbounded as the log showed). NOT done: anything in a raid.
+
+### In-game test plan (0.21.0)
+Log decisions, Log incoming fire on. Scenario "Incoming fire breaks the hold-up" unless noted.
+1. Fire at the prisoner, Near miss, Standing: `INCOMING FIRE: ... (the prisoner) a round 0.6 m past
+   him ...: the hold-up breaks`, `<captor>: stops holding ... (incoming fire: ...)`, `<prisoner> under
+   fire (...): cover ...; draw ...; his gun ...; -> ...`, `cover N m away, hidden from the fire`, `back
+   to his own AI (in cover from the fire ...)`. LOOK: the captor turns to fight (not to the prisoner),
+   the prisoner sprints to cover, no crouch-and-wait.
+2. Same, Fire at the captor; and Hit. Then Kneeling: escape rise (no sliding on the knees, no crossed
+   legs), then the sprint. Captor collecting the gear: the pick-up ends (`stops going for ...`), no
+   stuck hands, no `will take ... later`. Prisoner dropping his gear: drops stop, no busy hands.
+3. Prisoner going for his gun + Near miss: `fire while going for his gun: keeps going (out of the
+   line of fire)` or `leaves it`; the pick-up completes or he ends in cover; never stands still.
+4. Hostile bot (real): the third party actually fires (no `blocked at trigger` while it aims at the
+   captor with you nearby); the INCOMING FIRE line comes from a real near miss/hit.
+5. Squad 2: the guard `stops covering ...`; nobody re-takes the prisoner for 8 s after the last round
+   (`no surrender to ...: ... still under the fire`).
+6. "Retreat from captivity", Let go, gun removed, kit none: `retreat ends`, `back to his own AI
+   (away, nothing to fight with; unarmed, N m from where he was held ...)`, then `after release +15/+30/
+   +60 s ...` with growing distance or a target; never STILL NEAR THE CAPTURE SPOT. Indoors (crosshair
+   into a building), at a door (he stops and opens it), on stairs, in a dead end (no wall-walking).
+7. Earlier "friendly" scenarios (PMC captures Scav, multiple encounters): third parties and squads
+   fight; Scenario shield blocks only when you are really in the line.
+8. Natural raid: SurrenderStats `hold-ups broken by incoming fire N`; Profile: FireBreak is inside the
+   Shot / Registry sections.
+
 **0.20.1 (2026-11-20): performance pass (from Joel's pasted 9-part performance spec). No gameplay,
 balance or config change. Release packed (dist/HandsAreHigh-0.20.1.zip, DLL only) and installed in H:\SPT4.1.X
 (0.20.0 DLL backed up in that session's scratchpad, backup-0.20.0). Committed and pushed to main
@@ -1657,13 +1764,15 @@ Order (none / follow / kneel) is separate from the phase: a following bot is sti
 - **Retreating**: NavMesh path to a point ~35 m from your last-known position, preferring
   hidden ones; sprints. 4 s grace. Stuck 3 s -> new route, 3 retries, then Hiding. Arrived or
   15 s -> Regrouping.
-- **Regrouping**: watches your last position 4-12 s, then: draw a kept gun (slung first); own
+- **Regrouping** (0.21.0: decides at once, standing): draw a kept gun (slung first); own
   gun if still there, reachable and you were last seen > 20 m from it; else nearest reachable
-  loose gun / gun on a body within 60 m, not claimed; else knife if nerve >= 0.75; else Hiding.
+  loose gun / gun on a body within 60 m, not claimed (2 tries at most); else knife if nerve >=
+  0.75; else **Released** (his own AI).
 - **Recovering / PickingUp**: walks; gives up if gone, stuck, unreachable or 30 s; success only
   if the gun is then in one of his weapon slots, then draws. 5 s pick-up limit.
-- **Hiding**: out of sight of your last position, crouches, looks again every 8 s (only the
-  first hide after being caught is logged).
+- **Hiding** (0.21.0): a move to a reachable spot hidden from the threat (the fire, or your last
+  position), then **Released**; no spot, stuck, no route or 8 s -> Released. No crouch-and-wait.
+- **Released** (0.21.0): arms down, legs free, no hands request open -> handed to his own AI.
 - **Caught again** (after grace): a human within 12 m aiming within 10 deg for 0.4 s. With a
   gun on him, 0.5 x nerve chance he draws instead.
 - **Orders** (OrderMenu.cs): look at a held bot within 3 m, `/` opens, `.`/`=` choose, `/` gives.

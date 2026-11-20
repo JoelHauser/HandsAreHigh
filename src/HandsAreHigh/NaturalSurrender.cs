@@ -107,6 +107,13 @@ namespace HandsAreHigh
                     if (Scenarios.Watching(bot)) Blocked(bot, $"surrender cooldown {h.CooldownUntil - now:0} s");
                     continue;
                 }
+                // 0.21.0: the fire that broke a hold-up he was in is still coming (FireBreak).
+                if (now < h.FireBreakUntil && Settings.FireBreaks.Value)
+                {
+                    SurrenderStats.Gate(NaturalGate.UnderBreakingFire);
+                    if (Scenarios.Watching(bot)) Blocked(bot, $"still under the fire that broke a hold-up ({h.FireBreakUntil - now:0} s)");
+                    continue;
+                }
                 try { Evaluate(bot, owner, h); }
                 catch (System.Exception e) { HandsAreHighPlugin.Report("surrender check", e); }
             }

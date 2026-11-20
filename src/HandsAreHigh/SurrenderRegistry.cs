@@ -50,6 +50,17 @@ namespace HandsAreHigh
         internal string Personality;
         internal object SainComponent;          // SAIN BotComponent (reflection), cached
         internal float SainLookupAt = -1000f;
+
+        // 0.21.0: incoming fire (FireBreak.cs). Until then he can't be taken or give up again (the
+        // fire that broke his last hold-up is still on); every new near miss or hit extends it.
+        // FireBy: who fired the last near miss or hit he took, when known (Suppression.Record,
+        // BotMemory.SetUnderFire's source).
+        internal float FireBreakUntil = -1000f;
+        // ...and, as the captor in such a hold-up, until then he takes nobody (he may still give up
+        // himself: that is a new encounter, decided by his own pressure).
+        internal float NoCustodyUntil = -1000f;
+        internal Player FireBy;
+        internal float FireByAt = -1000f;
     }
 
     // Who is surrendered, keyed by the bot's Player so the layer (BotOwner) and the arm
@@ -109,6 +120,8 @@ namespace HandsAreHigh
             ScenarioStaging.Clear();
             OrbitAdapter.ReleaseAll();
             Runtime.Menu.Reset();   // nothing bound to the old raid's bots, no key blocked
+            FireBreak.Clear();      // 0.21.0: captors' hit hooks, queued fire
+            ReleaseWatch.Clear();
             UnhookAll();
             States.Clear();
             Finished.Clear();
@@ -165,6 +178,7 @@ namespace HandsAreHigh
             if ((object)bot == null || !ByPlayer.TryGetValue(bot, out BotHistory h)) return;
             h.DemandBy = null;
             h.SainComponent = null;
+            h.FireBy = null;
             ByPlayer.Remove(bot);
         }
 
@@ -177,6 +191,16 @@ namespace HandsAreHigh
         {
             if (bot == null || captor == null || !Settings.Enabled.Value) return;
             EnsureRaid();
+
+            // 0.21.0: the fire that broke his last hold-up (or that he or this captor is under) is
+            // still on: nobody gives up or is taken in the middle of it. Debug keys and scenario
+            // setups are deliberate and pass.
+            if ((source == SurrenderSource.Natural || source == SurrenderSource.Demand || source == SurrenderSource.Recapture) && FireBreak.Blocks(bot))
+            {
+                if (Settings.LogFireBreak.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{Scenarios.Label(bot)}: no surrender to {Restraint.Name(captor)} ({reason}): he is still under the fire that broke his hold-up");
+                return;
+            }
 
             if (States.TryGetValue(bot, out SurrenderState existing))
             {
@@ -243,6 +267,8 @@ namespace HandsAreHigh
                 s.KneelEscape = false;
                 Presence.OnHit(s);   // a hit is not a flinch: the layer's hit response owns him
                 try { Restraint.OnPrisonerHit(s, info); } catch (System.Exception e) { HandsAreHighPlugin.Report("prisoner hit", e); }
+                // 0.21.0: a hit from outside the hold-up breaks it (queued; FireBreak.Tick acts).
+                try { FireBreak.OnHit(s, bot, false, info); } catch (System.Exception e) { HandsAreHighPlugin.Report("prisoner hit (fire break)", e); }
             };
             bot.BeingHitAction += s.HitHandler;
             // Death or despawn (Player.OnDead / unspawn raise it): everything of ours on him
@@ -411,6 +437,24 @@ namespace HandsAreHigh
             return true;
         }
 
+        // 0.21.0: no hands request of ours still open at a hand-back without a draw: an unanswered
+        // drop gets its usual limit (twice DropRetrySeconds), then is abandoned (its callback is
+        // ignored by token), exactly as CheckDrop gives one up.
+        private static bool HandsSettled(SurrenderState s)
+        {
+            if (!s.HandsPending && !s.DrawPending) return true;
+            float now = Time.time;
+            if (s.HandsPending && now - s.HandsSince < Mathf.Max(1f, 2f * Settings.DropRetrySeconds.Value)) return false;
+            if (s.DrawPending && now - s.DrawSince < Settings.DrawHandoffTimeout.Value) return false;
+            if (s.HandsPending)
+            {
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: no answer to the hands change ({Arsenal.DescribeHands(s.Bot)}); given up before the hand-back");
+                AbandonRequest(s);
+            }
+            if (s.DrawPending) { s.DrawPending = false; s.DrawToken++; }
+            return true;
+        }
+
         private static void LogDrawTimeline(SurrenderState s)
         {
             if (s.TDrawAsked < 0f || s.TDecided < 0f) return;
@@ -497,7 +541,11 @@ namespace HandsAreHigh
         internal static void Tick(float dt)
         {
             EnsureRaid();
-            if (States.Count == 0) return;
+            // 0.21.0: bots handed back are followed in the log for a while (ReleaseWatch), and
+            // queued incoming fire is acted on (FireBreak) before anything reads the phases.
+            ReleaseWatch.Tick();
+            if (States.Count == 0) { FireBreak.Idle(); return; }
+            FireBreak.Tick();
             Finished.Clear();
             bool enabled = Settings.Enabled.Value;
 
@@ -527,7 +575,7 @@ namespace HandsAreHigh
                 UpdateSuspension(bot, s);
                 // try/catch inline: a lambda here would allocate a closure per bot per frame.
                 try { Voice.Tick(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("voice", e); }
-                if (s.ArmedPending != null && (s.Phase == Phase.HandsUp || s.Phase == Phase.Retreating || s.Phase == Phase.Hiding || s.Phase == Phase.Regrouping)) s.ArmedPending = null;
+                if (s.ArmedPending != null && (s.Phase == Phase.HandsUp || s.Phase == Phase.Retreating || s.Phase == Phase.Hiding || s.Phase == Phase.Regrouping || s.Phase == Phase.Released)) s.ArmedPending = null;
                 if (!s.Dead && s.ArmedPending != null && (Reactions.Shows(s) != null || Time.time - s.ArmedPendingSince > 1.5f))
                 {
                     string what = s.ArmedPending;
@@ -573,6 +621,12 @@ namespace HandsAreHigh
                     if (s.TArmsDown < 0f && s.TDrawAsked >= 0f) s.TArmsDown = Time.realtimeSinceStartup;
                     if (DrawSettled(s)) Finished.Add(bot);
                 }
+                // 0.21.0: free without a draw (let go and away, in cover, no gun to get, under fire):
+                // the same hand-back once his arms are down, his legs are his own and no hands
+                // request of ours is still open (a drop answered, or given up on after its limit), so
+                // the AI never inherits a pending hands change (the busy-hands glitch).
+                else if (s.Phase == Phase.Released && s.Progress <= 0f && !Kneel.Posing(s) && HandsSettled(s))
+                    Finished.Add(bot);
             }
 
             foreach (Player p in Finished)
@@ -586,7 +640,16 @@ namespace HandsAreHigh
                         LogDrawTimeline(s);
                         HandsAreHighPlugin.Log.LogInfo($"{s.Name}: back to normal AI");
                     }
+                    else if (s.Phase == Phase.Released)
+                        HandsAreHighPlugin.Log.LogInfo($"{s.Name}: back to his own AI ({s.HandBackWhy ?? "free"}; {Arsenal.DescribeArmed(p)}" +
+                            $"{(s.HeldSet ? $", {Perception.Flat(p.Position, s.HeldAt):0} m from where he was held" : "")}" +
+                            $"{(s.LeftHeldAt > 0f ? $", {Time.time - s.LeftHeldAt:0.0} s after leaving captivity" : "")})");
                     HistoryOf(p).CooldownUntil = Time.time + Settings.SurrenderCooldown.Value;
+                    // His own AI starts from here, not from our last path (a non-SAIN brain would
+                    // otherwise keep walking it: an outdated destination).
+                    try { BotOwner o = p.AIData?.BotOwner; if (s.Moving) o?.StopMove(); o?.Sprint(false); } catch { }
+                    s.Moving = false;
+                    ReleaseWatch.Start(s, p);
                     Release(s, "left surrender");
                 }
                 else
@@ -671,9 +734,9 @@ namespace HandsAreHigh
             else if (awake && s.Suspended)
             {
                 s.Suspended = false;
-                if (s.Phase != Phase.HandsUp && s.Phase != Phase.Rearmed)
+                if (s.Phase != Phase.HandsUp && s.Phase != Phase.Rearmed && s.Phase != Phase.Released)
                 {
-                    s.RegroupUntil = Time.time + 1f;
+                    // 0.21.0: decides straight away what he does now (no waiting where he stands).
                     s.SetPhase(Phase.Regrouping, "woke up");
                 }
                 else
@@ -691,6 +754,8 @@ namespace HandsAreHigh
                 HandsAreHighPlugin.Log?.LogInfo($"Teardown: releasing {States.Count} surrendered bot(s)");
             foreach (SurrenderState s in States.Values) Release(s, "teardown");
             SurrenderStats.EndRaid();
+            FireBreak.Clear();      // 0.21.0: captors' hit hooks off (an old assembly's handler must not stay on a Player)
+            ReleaseWatch.Clear();
             UnhookAll();
             Restraint.Clear();
             Captors.Clear();

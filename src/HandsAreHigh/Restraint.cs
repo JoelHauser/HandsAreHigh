@@ -410,7 +410,7 @@ namespace HandsAreHigh
 
         // Only a man who looks surrendered gets a choice: hands up, or running unarmed.
         private static bool Restrainable(SurrenderState s) =>
-            s.Phase == Phase.HandsUp || s.Phase == Phase.Retreating || s.Phase == Phase.Regrouping || s.Phase == Phase.Hiding;
+            s.Phase == Phase.HandsUp || s.Phase == Phase.Retreating || s.Phase == Phase.Regrouping || s.Phase == Phase.Hiding || s.Phase == Phase.Released;
 
         private static void Decide(SurrenderState s, BotOwner o, EnemyInfo info)
         {
@@ -602,19 +602,15 @@ namespace HandsAreHigh
         {
             prisoner = null;
             if (!HeldFireBy.TryGetValue(shooter, out List<Player> list)) return false;
-            Vector3 eye = Perception.Eye(shooter);
-            Vector3 look = shooter.LookDirection;
             for (int i = 0; i < list.Count; i++)
             {
                 Player p = list[i];
-                if (!Perception.Alive(p)) continue;
-                Vector3 to = Perception.Chest(p) - eye;
-                if (to.sqrMagnitude > 150f * 150f) continue;
-                // Any part of him, not only the chest: a flat 6 deg round the chest let aimed
-                // shots at the head, arms or legs through at close range (0.13.1 log: hits
-                // with no blocked press before them).
-                float cone = Mathf.Max(6f, Mathf.Atan2(1.1f, Mathf.Max(to.magnitude, 0.5f)) * Mathf.Rad2Deg);
-                if (Vector3.Angle(look, to) > cone) continue;
+                // Any part of him (feet to head, his width), not only the chest (0.13.1: aimed shots
+                // at the head, arms or legs got through a chest cone). 0.21.0: his body's extent on
+                // the line, not a flat 6 deg at any range, and not when the shooter's own target
+                // stands in front of him on it (Perception.InLineOfFire): a captor's squad could
+                // not fire past a prisoner at a third party behind him.
+                if (!Perception.InLineOfFire(shooter, p, 150f)) continue;
                 prisoner = p;
                 return true;
             }
