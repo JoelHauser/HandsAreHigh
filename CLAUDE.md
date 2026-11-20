@@ -53,6 +53,24 @@ spike" lines name the section). 7. Scenario spawns separately: Scenarios section
 8. Repeated raids: held/history/live/loot-cache counts return to ~0 at each raid start. Watch the log
 for "compiled reader disagreed" (should never appear).
 
+### First 0.20.1 raid (2026-11-20, LogOutput 18:05): "bots forgot how to fight each other, knife at range"
+Joel's report after a raid with 30 scenario launches (#1-#30, up to 6 bots each, 30-45 m ahead).
+Diagnosis from the log + SAIN 4.5.1 decompile; no code change made:
+- No ordinary raid bot was ever held: the raid summary says Natural 0/0, Demand 0/0; all 25 Scenario,
+  2 DebugKey (scenario bots #S1/#S4) and 2 Recapture surrenders were test bots. 0 mod errors/warnings.
+- Cleanup worked: 35 participants removed via BotLeaveData.RemoveFromMap ("left in the raid": 0);
+  truce/observer pairs and restraint ignore flags are lifted on cleanup (ScenarioShield.Remove,
+  Restraint.ForgetPrisoner). #29/#30 still running at log end (CleanupAll at raid end).
+- Knife charges at range: the "PMC captures Scav" preset's Scav ammo = No spare ammo removed 21-22
+  spare mags every run, and captors took prisoners' guns. A dry gun -> the game switches to melee;
+  SAIN then decides MeleeAttack whenever WeaponManager.IsMelee (BotDecisionManager.getDecision, any
+  distance) and its RunToEnemyUpdatePatch sprints him at his GoalEnemy. SAIN behaviour on a state
+  our presets create; not a leak to ordinary bots.
+- Not fighting: within scenarios by design (setup truce; "Multiple simultaneous encounters" keeps 24
+  truce pairs for its whole run; captors/guards held by our layer; observers hold fire at prisoners).
+- Open: Joel to compare a raid with no scenarios launched (and, if still odd, one with Enabled off)
+  before anything is changed.
+
 **0.20.0 (2026-11-20): coordinated squad cover during captivity (Overwatch.cs, from Joel's pasted
 6-part spec). Release packed (dist/HandsAreHigh-0.20.0.zip) and installed in H:\SPT4.1.X (0.19.0 DLL
 backed up in that session's scratchpad, backup-0.19.0). Committed and pushed to main (no tag/release). NEVER RUN IN GAME: a role line
