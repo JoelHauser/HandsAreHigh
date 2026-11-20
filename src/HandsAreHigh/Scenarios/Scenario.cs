@@ -59,6 +59,8 @@ namespace HandsAreHigh
         internal Player Player;
         internal BotOwner Owner2;       // BotOwner (Owner is the scenario)
         internal bool Requested, Spawned, Failed, Dead, Removed;
+        internal int Raid;              // Scenarios.RaidSerial when requested: a later raid ignores the answer
+        internal BotOwner Created;      // made by the game's creator, not yet handed to us (partial-failure cleanup)
         internal string FailWhy;
         internal float SpawnedAt = -1f;
         internal float RequestedAt;

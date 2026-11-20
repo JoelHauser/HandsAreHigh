@@ -135,7 +135,8 @@ namespace HandsAreHigh
             p.NextGlanceAt = Time.time + Dice.Range(1.5f, 3.5f);
             p.WarningShot = false;
             p.FlinchAmp = 0f;
-            p.HeadAxisOk = false;
+            // HeadAxisOk is kept: the head bone's axis belongs to the rig, not the encounter (a
+            // reset here left a man recaptured on his knees with no head look until he stood).
             if (s.Bot == null) return;
             if (!Settings.DemeanorEnabled.Value) { p.Demeanor = p.Base = DemeanorKind.Resigned; p.Chosen = true; return; }
 
@@ -257,7 +258,15 @@ namespace HandsAreHigh
             p.FlinchGate = Mathf.MoveTowards(p.FlinchGate, flinchOk ? 1f : 0f, dt / (flinchOk ? 0.3f : 0.1f));
             p.FlinchHab = Mathf.Min(1f, p.FlinchHab + dt * 0.2f);
 
-            if (p.W <= 0f) { p.Glance = GlanceKind.Captor; return; }
+            if (p.W <= 0f)
+            {
+                // Look off: the next one starts from straight ahead (the animated head), not from
+                // the last encounter's turn (a stale yaw turned the torso before the head axis
+                // was measured, and skewed it for good).
+                p.Glance = GlanceKind.Captor;
+                p.Yaw = p.Pitch = p.YawVel = p.PitchVel = p.Assist = 0f;
+                return;
+            }
             Glances(s, now);
         }
 
@@ -576,8 +585,9 @@ namespace HandsAreHigh
             if (!p.HeadAxisOk)
             {
                 // The head bone's own forward, from the animated pose (standing: head looks along
-                // his body). Measured once per surrender; no assumption about the rig's axes.
-                if (Kneel.Posing(s)) return;
+                // his body). Measured once per bot; no assumption about the rig's axes. Not on a
+                // frame whose torso we already turned or hunched (the measurement would keep it).
+                if (Kneel.Posing(s) || Mathf.Abs(p.Assist) > 0.5f || fl > 0.01f) return;
                 Vector3 bf = pl.Transform.Original.forward;
                 p.HeadFwdLocal = Quaternion.Inverse(head.rotation) * bf;
                 p.HeadAxisOk = true;

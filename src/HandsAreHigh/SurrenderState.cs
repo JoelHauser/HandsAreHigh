@@ -261,6 +261,15 @@ namespace HandsAreHigh
         internal readonly bool[] KneelArmBad = new bool[2];
         internal float KneelLimbsAt = -1000f;
 
+        // Each arm's own elbow hinge, in the upper arm's and the forearm's local space, measured
+        // once from the animator's pose (ArmPose.MeasureAxes; index 0 left, 1 right). With it the
+        // arm is posed by full rotations (direction and roll), not swings (ArmPose.PoseArm).
+        internal readonly Vector3[] ArmUpAlong = new Vector3[2], ArmUpHinge = new Vector3[2], ArmForeAlong = new Vector3[2], ArmForeHinge = new Vector3[2];
+        internal readonly bool[] ArmAxisOk = new bool[2];
+        internal int ArmAxisTries;
+        internal HandRig Hands;             // finger and twist bones (ArmPose.HandsOf, found once)
+        internal bool HandsLooked;
+
         // Demeanor, head attention, kneeling idle, flinch (Presence.cs).
         internal readonly PresenceState Look = new PresenceState();
         internal readonly Vector3[] GizmoKnee = new Vector3[2], GizmoFoot = new Vector3[2], GizmoPalm = new Vector3[2];

@@ -226,6 +226,9 @@ namespace HandsAreHigh
             s.HitHandler = (info, part, absorbed) =>
             {
                 s.WasHit = true;
+                // A man shot while escaping from his knees runs: hits are never reconsidered
+                // (ReassessEscape would otherwise call off the bolt if his captor covered him).
+                s.KneelEscape = false;
                 Presence.OnHit(s);   // a hit is not a flinch: the layer's hit response owns him
                 try { Restraint.OnPrisonerHit(s, info); } catch (System.Exception e) { HandsAreHighPlugin.Report("prisoner hit", e); }
             };

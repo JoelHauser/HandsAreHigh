@@ -41,6 +41,9 @@ namespace HandsAreHigh
         private static bool _inListener;
         private static float _nextDiff;
 
+        // Bumped when a raid's scenarios are forgotten: a spawn answer from an older raid is stale.
+        internal static int RaidSerial;
+
         internal static List<Scenario> List => Running;
         internal static bool Any => Running.Count > 0;
 
@@ -64,6 +67,11 @@ namespace HandsAreHigh
             if (!Settings.Enabled.Value) return "the mod is disabled (01. General: Enabled)";
             if (!ScenarioSpawner.Ready(out string notReady)) return notReady;
             if (Running.Count > 0 && !Settings.ScenarioConcurrent.Value) return $"scenario {Running[0].Title} is still running: clean it up first (or allow concurrent scenarios)";
+            // Even with concurrent scenarios: not a second copy of one whose bots are still on
+            // their way (repeated Enter presses queued six copies of a failing spawn).
+            foreach (Scenario r in Running)
+                if (r.Preset == preset && !r.Cancelled && ScenarioSpawner.Spawning(r))
+                    return $"scenario {r.Title} is still spawning its bots: wait for it (or clean it up)";
             string missing = preset.Unavailable?.Invoke();
             if (missing != null) return $"unavailable: {missing}";
 
@@ -459,6 +467,7 @@ namespace HandsAreHigh
         // A new raid (or back in the menus): the old world is gone; nothing to despawn.
         internal static void ForgetRaid()
         {
+            RaidSerial++;
             if (Running.Count == 0 && !Active) { ScenarioUi.Reset(); return; }
             foreach (Scenario sc in Running) { sc.Cancelled = true; sc.Stage = Stage.Ended; }
             HandsAreHighPlugin.Log.LogInfo($"New raid: {Running.Count} debug scenario(s) forgotten (their raid ended)");

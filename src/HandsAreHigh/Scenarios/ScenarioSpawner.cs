@@ -12,8 +12,8 @@ namespace HandsAreHigh
     // Spawn (Assembly-CSharp 0.16.9, verified against C:\HUH 2026-11-19): the same steps as the
     // game's own BotSpawner.SpawnBotsInZoneOnPositions -> method_10, with our own group action:
     //   BotCreationData.Create(GetProfileDataParams(side, role, difficulty), BotSpawner._botCreator,
-    //     1, spawner)      profile from the server (SPT generates it; SPT's PmcBotSidePatch sets a
-    //                      PMC's side from its role)
+    //     1, spawner)      profile from the server; PMCs are asked for as side Savage (RequestSide:
+    //                      the server sends them as Savage, SPT's PmcBotSidePatch sets Bear/Usec)
     //   data.AddPosition(spot, nearest AICorePoint id)   (BotCreatorClient.CreateBot needs a core point)
     //   spawner._inSpawnProcess++                       (method_7's bookkeeping; ActivateBotCallback --)
     //   IBotCreator.ActivateBot(data, closest zone, false, groupAction, bot =>
@@ -135,45 +135,151 @@ namespace HandsAreHigh
 
         // ---- spawning ---------------------------------------------------------------------------
 
+        // A scenario with a bot still on its way (requested, neither here nor failed).
+        internal static bool Spawning(Scenario sc)
+        {
+            foreach (Participant p in sc.People)
+                if (p.Existing == null && p.Requested && !p.Spawned && !p.Failed) return true;
+            return false;
+        }
+
         internal static void Request(Scenario sc, Participant p)
         {
+            // One request per participant: a second one (a repeated RequestNext, a retry racing
+            // the first answer) would spawn a second bot for the same slot.
+            if (p.Requested && !p.Failed)
+            {
+                HandsAreHighPlugin.Log.LogWarning($"Scenario {sc.Title}: {p.Tag}: spawn already requested {Time.time - p.RequestedAt:0.0} s ago; second request ignored");
+                return;
+            }
             p.Requested = true;
+            p.Failed = false;
+            p.FailWhy = null;
+            p.Created = null;
             p.SpawnedAt = -1f;
             p.RequestedAt = Time.time;
+            p.Raid = Scenarios.RaidSerial;
             sc.Note(TL.Real, $"{p.Tag}: spawn requested ({p.Role}, {p.Side}, squad {p.Squad}) at {p.Spot} ({Vector3.Distance(sc.Anchor, p.Spot):0} m from the centre)");
             RequestAsync(sc, p);
         }
 
+        // The side to ask the profile cache for. SPT's server sends every PMC (Bear/Usec) with
+        // Info.Side "Savage" (SPTarkov.Server.Core BotController.TryGenerateSingleBot), and the
+        // game's GetProfileDataParams.ChooseProfile keeps only profiles whose Side, Role and
+        // BotDifficulty all equal the request; SPT's PmcBotSidePatch (postfix on
+        // BotCreationData.ChooseProfile) sets Bear/Usec from the role on the profile it chose.
+        // Asking for Bear/Usec therefore matched nothing: ChooseProfile returned null and
+        // BotProfileClient.CreateProfile dereferenced it (profile.GetAllPrefabPaths, the
+        // NullReferenceException in 0.10.0-0.13.0). The vanilla debug spawn
+        // (BotSpawner.DebugSpawnAnyway) asks for Savage too.
+        internal static EPlayerSide RequestSide(WildSpawnType role, EPlayerSide side) =>
+            role == WildSpawnType.pmcBEAR || role == WildSpawnType.pmcUSEC ? EPlayerSide.Savage : side;
+
+        // Stale: the scenario was cleaned up, or the raid this request belongs to is over.
+        private static string Stale(Scenario sc, Participant p)
+        {
+            if (p.Raid != Scenarios.RaidSerial || !SurrenderRegistry.InRaid) return "its raid ended";
+            if (sc.Cancelled) return "the scenario was cleaned up";
+            return null;
+        }
+
         private static async void RequestAsync(Scenario sc, Participant p)
         {
+            BotSpawner sp = null;
+            bool counted = false, answered = false;
+            string stage = "checks";
             try
             {
+                // Prerequisites, checked again here (the menu checked them at launch; a squad's
+                // later members are requested seconds after).
+                if (!Ready(out string notReady)) { Fail(sc, p, notReady); return; }
                 IBotGame game = Singleton<IBotGame>.Instance;
-                BotSpawner sp = game?.BotsController?.BotSpawner;
-                if (sp == null) { Fail(sc, p, "no bot spawner"); return; }
-                var spawnParams = new BotSpawnParams { ShallBeGroup = new ShallBeGroupParams(false, false) };
-                var profileData = new GetProfileDataParams(p.Side, p.Role, BotDifficulty.normal, 0f, spawnParams);
-                BotCreationData data = await BotCreationData.Create(profileData, sp._botCreator, 1, sp);
-                if (sc.Cancelled || !SurrenderRegistry.InRaid) return;
-                if (data == null || data.Count == 0) { Fail(sc, p, $"the server returned no {p.Role} profile"); return; }
-                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"Scenario {sc.Title}: {p.Tag}: profile ready after {Time.time - p.RequestedAt:0.0} s");
+                sp = game.BotsController.BotSpawner;
+                if (sp._gameEnd) { Fail(sc, p, "the raid is ending (the game stopped spawning)"); return; }
+                string stale = Stale(sc, p);
+                if (stale != null) { Fail(sc, p, $"not requested: {stale}"); return; }
                 int core = NearestCorePoint(game.BotsController, p.Spot);
-                if (core < 0) { Fail(sc, p, "no AI core point"); return; }
-                data.AddPosition(p.Spot, core);
+                if (core < 0) { Fail(sc, p, "no AI core point near the spot"); return; }
                 BotZone zone = sp.GetClosestZone(p.Spot, out _);
-                if (zone == null) { Fail(sc, p, "no bot zone"); return; }
+                if (zone == null) { Fail(sc, p, "no bot zone near the spot"); return; }
+
+                stage = "profile";
+                EPlayerSide ask = RequestSide(p.Role, p.Side);
+                var spawnParams = new BotSpawnParams { ShallBeGroup = new ShallBeGroupParams(false, false) };
+                var profileData = new GetProfileDataParams(ask, p.Role, BotDifficulty.normal, 0f, spawnParams);
+                BotCreationData data = await BotCreationData.Create(profileData, sp._botCreator, 1, sp);
+                stale = Stale(sc, p);
+                if (stale != null)
+                {
+                    // Nothing exists yet: a profile was taken from the cache, no player was made.
+                    if (p.Raid == Scenarios.RaidSerial) Fail(sc, p, $"profile arrived after {stale}; nothing created");
+                    return;
+                }
+                if (data == null || data.Count == 0) { Fail(sc, p, $"the server returned no {p.Role} profile (asked as side {ask}, difficulty normal)"); return; }
+                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"Scenario {sc.Title}: {p.Tag}: profile ready after {Time.time - p.RequestedAt:0.0} s");
+                data.AddPosition(p.Spot, core);
                 if (!sc.Groups.ContainsKey(p.Squad)) sc.Zones[p.Squad] = zone;
                 else if (sc.Zones.TryGetValue(p.Squad, out BotZone z0) && z0 != null) zone = z0;
+
+                // The game's bookkeeping, as BotSpawner.method_7 does it: ++ here, -- in
+                // ActivateBotCallback. ActivateBot can finish without ever calling back
+                // (cancelled, SpawnStopped, no position, player creation failed); the count is
+                // then given back below, or the raid's bot cap (AllBotsWithLoaded) stays lowered.
+                stage = "activation";
                 sp._inSpawnProcess++;
-                Func<BotOwner, BotZone, BotsGroup> groupAction = (bot, z) => GroupFor(sc, p, sp, bot, z);
+                counted = true;
+                Func<BotOwner, BotZone, BotsGroup> groupAction = (bot, z) => { p.Created = bot; return GroupFor(sc, p, sp, bot, z); };
                 await sp._botCreator.ActivateBot(data, zone, false, groupAction,
-                    bot => sp.ActivateBotCallback(bot, data, b => Spawned(sc, p, b), false, new System.Diagnostics.Stopwatch()),
+                    bot => { answered = true; sp.ActivateBotCallback(bot, data, b => Spawned(sc, p, b), false, new System.Diagnostics.Stopwatch()); },
                     sp.GetCancelToken());
+                if (!answered)
+                {
+                    sp._inSpawnProcess--;
+                    counted = false;
+                    Fail(sc, p, data.SpawnStopped ? "the game stopped this spawn (SpawnStopped)" : "the game's bot creator finished without a bot (cancelled or the player couldn't be created)");
+                }
             }
             catch (Exception e)
             {
-                Fail(sc, p, $"spawn threw {e.GetType().Name}: {e.Message}");
+                // Give back what this attempt took, and nothing else.
+                if (counted && !answered && sp != null) sp._inSpawnProcess--;
+                string cleanup = "";
+                if (p.Created != null && !p.Spawned)
+                {
+                    cleanup = $"; the half-made bot: {RemoveHalfMade(p.Created)}";
+                    p.Created = null;
+                }
+                Fail(sc, p, Diagnose(stage, p, e) + cleanup);
                 HandsAreHighPlugin.Report("scenario spawn", e);
+            }
+        }
+
+        // What went wrong, in words. The ChooseProfile case is told apart by where it threw.
+        private static string Diagnose(string stage, Participant p, Exception e)
+        {
+            string at = e.StackTrace ?? "";
+            if (e is NullReferenceException && at.Contains("BotProfileClient.CreateProfile"))
+                return $"no {p.Role} profile from the server matched the request (side {RequestSide(p.Role, p.Side)}, role {p.Role}, difficulty normal): " +
+                       "the game's ChooseProfile found none and its CreateProfile used the missing profile (NullReferenceException). " +
+                       "If this is a PMC, a server mod may be changing PMC side/difficulty (SPT pmc.json useDifficultyOverride)";
+            return $"{stage} threw {e.GetType().Name}: {e.Message}";
+        }
+
+        // A bot the creator made but never handed over (our group action or the activation threw):
+        // the game's own leave path if it got that far, else left alone and said so.
+        private static string RemoveHalfMade(BotOwner bot)
+        {
+            try
+            {
+                if (bot == null) return "gone";
+                if (bot.LeaveData == null) return "not activated, no leave data: left as the game made it";
+                bot.LeaveData.RemoveFromMap();
+                return "removed (BotLeaveData.RemoveFromMap)";
+            }
+            catch (Exception e)
+            {
+                HandsAreHighPlugin.Report("scenario half-made bot", e);
+                return $"removal failed ({e.GetType().Name})";
             }
         }
 
@@ -215,22 +321,40 @@ namespace HandsAreHigh
             return best;
         }
 
+        // Runs inside the game's ActivateBotCallback, before its own _inSpawnProcess--: nothing
+        // here may throw into it (the count would stay taken for the rest of the raid).
         private static void Spawned(Scenario sc, Participant p, BotOwner bot)
         {
-            if (bot == null) { Fail(sc, p, "the game returned no bot"); return; }
-            p.Owner2 = bot;
-            p.Player = bot.GetPlayer;
-            p.Spawned = true;
-            p.SpawnedAt = Time.time;
-            Scenarios.Register(sc, p);
-            if (sc.Cancelled)
+            try
             {
-                sc.Note(TL.Info, $"{p.Tag}: arrived after the scenario was cleaned up: {Despawn(p)}");
-                return;
+                p.Created = null;
+                if (bot == null) { Fail(sc, p, "the game returned no bot"); return; }
+                if (p.Spawned) { HandsAreHighPlugin.Log.LogWarning($"Scenario {sc.Title}: {p.Tag}: a second bot arrived for one request; removed: {RemoveHalfMade(bot)}"); return; }
+                p.Owner2 = bot;
+                p.Player = bot.GetPlayer;
+                p.Spawned = true;
+                p.SpawnedAt = Time.time;
+                string stale = Stale(sc, p);
+                if (stale != null)
+                {
+                    // Not registered with a scenario that is gone: removed on arrival.
+                    string what = Despawn(p);
+                    if (p.Raid == Scenarios.RaidSerial) sc.Note(TL.Info, $"{p.Tag}: arrived after {stale}: {what}");
+                    return;
+                }
+                Scenarios.Register(sc, p);
+                // SPT's PmcBotSidePatch gives a PMC its side from the role; check it took.
+                EPlayerSide got = p.Player.Profile?.Info?.Side ?? EPlayerSide.Savage;
+                string sideNote = got != p.Side ? $" (side {got}, expected {p.Side})" : "";
+                sc.Note(TL.Real, $"{p.Tag} spawned after {Time.time - p.RequestedAt:0.0} s: {p.Player.Profile?.Nickname} ({p.ProfileId()}, {p.Role}, {got}){sideNote}, group {bot.BotsGroup?.Id}, " +
+                    $"{Vector3.Distance(p.Spot, p.Player.Position):0.0} m from the validated spot, {Vector3.Distance(sc.Anchor, p.Player.Position):0} m from the centre, state {bot.BotState}");
+                Scenarios.RequestNext(sc, p.Squad);
             }
-            sc.Note(TL.Real, $"{p.Tag} spawned after {Time.time - p.RequestedAt:0.0} s: {p.Player.Profile?.Nickname} ({p.ProfileId()}, {p.Role}, {p.Side}), group {bot.BotsGroup?.Id}, " +
-                $"{Vector3.Distance(p.Spot, p.Player.Position):0.0} m from the validated spot, {Vector3.Distance(sc.Anchor, p.Player.Position):0} m from the centre, state {bot.BotState}");
-            Scenarios.RequestNext(sc, p.Squad);
+            catch (Exception e)
+            {
+                Fail(sc, p, $"after spawning: {e.GetType().Name}: {e.Message}");
+                HandsAreHighPlugin.Report("scenario spawned", e);
+            }
         }
 
         // ---- removal ---------------------------------------------------------------------------

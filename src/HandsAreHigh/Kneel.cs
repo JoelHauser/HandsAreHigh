@@ -993,7 +993,7 @@ namespace HandsAreHigh
             return leg;
         }
 
-        private static Transform FindDeep(Transform t, string name, int depth)
+        internal static Transform FindDeep(Transform t, string name, int depth)
         {
             for (int i = 0; i < t.childCount; i++)
             {
@@ -1401,8 +1401,24 @@ namespace HandsAreHigh
             return false;
         }
 
-        // Hands from the hands-up pose to the back of his skull, elbows out, along a path pushed
-        // out around the head (helmet included). Weighted by the arms' own raise.
+        // Hands from the hands-up pose to the back of his skull (0.13.1 rewrite). What 0.11.0-
+        // 0.13.0 got wrong (offline, tools/armsim, defaults, look 0 / +-25 / 38 deg,
+        // helmet on/off):
+        //   - arms swung (ArmPose.Aim) from hands-up: the forearm ended up to ~120 deg rolled
+        //     against the upper arm's hinge, the upper arm ~80 deg off its own: twisted arms;
+        //   - the wrist was never set: the palm faced 19-56 deg away from the head;
+        //   - the IK target was the wrist bone at the palm's resting place, so the palm centre and
+        //     fingers ended 1-4 cm inside the head (helmet worst);
+        //   - the path was a straight line from hands-up to behind the skull, projected onto a
+        //     sphere when it cut through the head.
+        // Now: the palm's centre rests on the back of the skull (Hands behind head), fingers
+        // round it towards the middle, thumb down, palm to the skull; the wrist bone sits a palm
+        // back from that. The wrist travels a curve beside the head (control point out by the
+        // ear), never inside the skull sphere. The arm is posed by full rotations on its own hinge
+        // (ArmPose.PoseArm), the roll eased in over the first 40% of the move; the wrist turns
+        // over the last 65%. Offline: elbow twist 0, palm 0 deg from the skull, palm centre and
+        // fingertips >= 3.5 cm clear (helmet incl.), wrist bend 25-45 deg, elbow 105-130 deg, no
+        // elbow flips, hand/elbow steps <= 0.75 cm per 1/120 of the move.
         internal static void ApplyHands(Player p, SurrenderState s)
         {
             KneelStyle st = s.KneelStyle;
@@ -1414,32 +1430,58 @@ namespace HandsAreHigh
             if (!ArmPose.TorsoFrame(p, b, out Vector3 right, out Vector3 up, out Vector3 fwd)) return;
 
             float helmet = s.KneelHelmet ? Settings.HelmetExtra.Value : 0f;
-            // The head may be turned (Presence.ApplyHead, applied just before): the skull centre
-            // and the hands' place on the back of it turn with it, so the clearance round the
+            // The head may be turned (Presence.ApplyHead, applied just before): the skull centre,
+            // the hands' place on it and the elbows' lead turn with it, so the clearance round the
             // skull (and helmet) is kept wherever he looks.
             Quaternion look = Presence.HeadDelta(s);
-            Vector3 skull = b.Head.Original.position + look * (up * Settings.HandsAboveNeck.Value);
+            Vector3 upL = look * up, rightL = look * right, fwdL = look * fwd;
+            Vector3 skull = b.Head.Original.position + upL * Settings.HandsAboveNeck.Value;
             float minR = HeadRadius + helmet + 0.02f;
             float elbowsOut = Settings.ElbowsOut.Value + Presence.IdleElbow(s);
+            HandRig hr = ArmPose.HandsOf(p, s);
+            float roll = Ss(0f, 0.4f, h), ww = Ss(0.35f, 1f, h);
             for (int side = -1; side <= 1; side += 2)
             {
                 if (!Arm(b, side, right, out Transform upper, out Transform fore, out Transform palm)) continue;
+                int hi = side > 0 ? 1 : 0;
                 Vector3 sh = upper.position, el = fore.position, pa = palm.position;
                 float a = Vector3.Distance(sh, el), c = Vector3.Distance(el, pa);
                 if (a < 0.05f || c < 0.05f) continue;
+                bool hand = hr != null && hr.Ok(hi);
 
-                Vector3 target = skull + look * (-fwd * (Settings.HandsBehindHead.Value + helmet) + right * (side * 0.05f));
-                Vector3 pos = Vector3.Lerp(pa, target, h);
-                Vector3 fromSkull = pos - skull;
-                if (fromSkull.sqrMagnitude < minR * minR)
-                    pos = skull + (fromSkull.sqrMagnitude > 1e-6f ? fromSkull.normalized : -fwd) * minR;
+                // Where the palm ends: its centre on the back of the skull, a little to his side
+                // of the middle (the two hands overlap there), fingers round towards the middle.
+                Vector3 palmAt = skull - fwdL * (Settings.HandsBehindHead.Value + helmet) + rightL * (side * 0.05f);
+                Vector3 faceEnd = skull - palmAt;
+                Vector3 fingEnd = Vector3.ProjectOnPlane(-rightL * side + upL * 0.25f, faceEnd).normalized;
+                Vector3 wristAt = hand ? palmAt - fingEnd * PalmCentre : palmAt;
 
+                // The way there: a quadratic curve in skull space from where the hand is now,
+                // past the side of his head (out at least 0.22 m, at the ear), to the back.
+                Vector3 p0 = pa - skull, p2 = wristAt - skull;
+                float lat = Mathf.Max(Mathf.Abs(Vector3.Dot(p0, rightL)), 0.22f);
+                Vector3 p1 = rightL * (side * lat) + upL * 0.06f - fwdL * 0.02f;
+                float u = 1f - h;
+                Vector3 off = p0 * (u * u) + p1 * (2f * h * u) + p2 * (h * h);
+                if (off.sqrMagnitude < minR * minR) off = (off.sqrMagnitude > 1e-6f ? off.normalized : -fwdL) * minR;
+                Vector3 pos = skull + off;
+
+                // Elbow: from where it is towards out to his side (a little forward and up), so it
+                // bends the way an elbow bends all the way there; then the arm on its own hinge.
                 Vector3 bendNow = Perp(el - sh, pa - sh, right * side);
-                Vector3 bendOut = (look * (right * (side * elbowsOut)) + fwd * 0.35f + up * 0.25f).normalized;
-                TwoBone(sh, pos, a, c, Vector3.Slerp(bendNow, bendOut, h), out Vector3 elbow, out Vector3 hand);
-                ArmPose.Aim(upper, fore, elbow - sh, 1f);
-                ArmPose.Aim(fore, palm, hand - elbow, 1f);
-                if (Settings.KneelGizmos.Value) s.GizmoPalm[side > 0 ? 1 : 0] = hand;
+                Vector3 bendOut = (rightL * (side * elbowsOut) + fwd * 0.35f + up * 0.25f).normalized;
+                TwoBone(sh, pos, a, c, Vector3.Slerp(bendNow, bendOut, h), out Vector3 elbow, out Vector3 wrist);
+                ArmPose.PoseArm(upper, fore, palm, elbow - sh, wrist - elbow, s, hi, 1f, roll);
+
+                // Wrist: palm to the skull, fingers round it towards the middle, thumb down.
+                if (hand)
+                {
+                    Vector3 face = skull - palm.position;
+                    Vector3 fingers = Vector3.ProjectOnPlane(-rightL * side + upL * 0.25f, face);
+                    ArmPose.SetWrist(palm, hr.Middle[hi], hr.Thumb[hi], hr.TwistA[hi], hr.TwistB[hi],
+                                     palm.position - fore.position, fingers, -upL, face, ww);
+                }
+                if (Settings.KneelGizmos.Value) s.GizmoPalm[hi] = wrist;
             }
         }
 
@@ -1510,52 +1552,14 @@ namespace HandsAreHigh
             Vector3 bendNow = Perp(el - sh, pa - sh, outward);
             Vector3 bendOut = (outward * 0.8f - f * 0.3f + Vector3.up * 0.2f).normalized;
             TwoBone(sh, pos, a, c, Vector3.Slerp(bendNow, bendOut, e), out Vector3 elbow, out Vector3 hand);
-            ArmPose.Aim(upper, fore, elbow - sh, 1f);
-            ArmPose.Aim(fore, palm, hand - elbow, 1f);
+            // On the arm's own hinge (0.13.1; swings before), the roll eased in with the reach.
+            ArmPose.PoseArm(upper, fore, palm, elbow - sh, hand - elbow, s, hi, 1f, Ss(0f, 0.5f, e));
 
-            // Wrist: fingers along the thigh towards the knee, thumb inwards, palm down (the
-            // thumb root sits ThumbTilt palm-ward of the side), bent at most WristMax. Eased in
-            // over the second half of the reach, so it turns as the hand arrives.
-            float ww = Ss(0.4f, 1f, e);
-            if (ww > 0.001f)
-            {
-                Vector3 fore2 = hand - elbow;
-                Vector3 fingersW = fingers;
-                float bend = Vector3.Angle(fore2, fingers);
-                if (bend > WristMax) fingersW = Vector3.Slerp(fore2.normalized, fingers, WristMax / bend);
-                Vector3 inward = Vector3.ProjectOnPlane(-outward, fingersW).normalized;
-                Vector3 thumbWant = inward * Mathf.Cos(ThumbTilt * Mathf.Deg2Rad) - n * Mathf.Sin(ThumbTilt * Mathf.Deg2Rad);
-                if (Settings.KneelBracePalmFlip.Value) thumbWant = -thumbWant;
-                thumbWant = Vector3.ProjectOnPlane(thumbWant, fingersW);
-                Vector3 fLive = middle.position - palm.position;
-                Vector3 tLive = Vector3.ProjectOnPlane(thumb.position - palm.position, fLive);
-                if (thumbWant.sqrMagnitude > 1e-6f && tLive.sqrMagnitude > 1e-8f && fLive.sqrMagnitude > 1e-6f)
-                {
-                    Quaternion turn = Quaternion.LookRotation(fingersW, thumbWant) * Quaternion.Inverse(Quaternion.LookRotation(fLive, tLive));
-                    Quaternion want = Quaternion.Slerp(palm.rotation, turn * palm.rotation, ww);
-                    // A third of the roll about the forearm on each twist bone, the rest (and
-                    // all of the bend) at the wrist. Twist bones sit on the forearm axis, so the
-                    // hand's position doesn't move.
-                    Transform ta = rig.TwistA[hi], tb = rig.TwistB[hi];
-                    if (ta != null && tb != null)
-                    {
-                        Quaternion part = Quaternion.Slerp(Quaternion.identity, TwistAbout(want * Quaternion.Inverse(palm.rotation), fore2), 1f / 3f);
-                        ta.rotation = part * ta.rotation;
-                        tb.rotation = part * tb.rotation;
-                    }
-                    palm.rotation = want;
-                }
-            }
+            // Wrist: fingers along the thigh towards the knee, thumb inwards, palm down onto the
+            // thigh, bent at most WristMax. Eased in over the second half of the reach, so it
+            // turns as the hand arrives.
+            ArmPose.SetWrist(palm, middle, thumb, rig.TwistA[hi], rig.TwistB[hi], palm.position - fore.position, fingers, -outward, -n, Ss(0.4f, 1f, e));
             if (Settings.KneelGizmos.Value) s.GizmoPalm[hi] = hand;
-        }
-
-        // The part of q that turns about axis (swing-twist decomposition).
-        private static Quaternion TwistAbout(Quaternion q, Vector3 axis)
-        {
-            Vector3 v = Vector3.Project(new Vector3(q.x, q.y, q.z), axis);
-            float m = Mathf.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z + q.w * q.w);
-            if (m < 1e-6f) return Quaternion.identity;
-            return new Quaternion(v.x / m, v.y / m, v.z / m, q.w / m);
         }
 
         // An escape from his knees called off (SurrenderLogic.ReassessEscape), continued from

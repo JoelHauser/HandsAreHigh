@@ -6,23 +6,102 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
-**0.13.0 IN PROGRESS (2026-11-19, work laptop): code written, `dotnet build` against `C:\HUH`
-succeeds with 0 warnings; NOT packed (no zip), not installed, never run in game, no offline sim
-run for it.** Committed mid-work at Joel's request. Eight-part request (kneel spot, rise-to-walk,
-head attention, interrupted escape, injury-aware kneel, kneeling idle, flinch, demeanor).
+**0.13.1 (2026-11-19, home PC): PMC scenario spawn fix + arm solver rewrite. Built against
+H:\SPT4.1.X, 0 warnings, dist/HandsAreHigh-0.13.1.zip, installed; uncommitted; never run in game.**
 
-Where it was left off (resume here):
-- Done in code: everything listed below. Last step done: review pass over Kneel.Update /
-  ApplyBody / ApplyHands; fixed freeze-before-reversal order, kept KneelAnchorFwd through the rise
-  (resetting it made legs jump), debug-opening guard in ReassessEscape, overlay/gizmo for the spot.
-- Still to do: (1) finish the review of Presence.cs (head axis measurement, sign conventions are
-  reasoned, not seen), SearchSpot, ReassessEscape; (2) offline check: extend scratchpad
-  kneel_sim2/brace_sim (old session c1653c59) for the new style `Free` hand-off points (0.20/0.20/
-  0.24) and the moved urgent brace windows (defensive out 0.31->0.21, escape 0.36->0.25), which
-  were NOT re-simulated; (3) `scripts\pack.ps1 -SPTPath C:\HUH -BigBrainDll <bigbrain>` to make
-  dist/HandsAreHigh-0.13.0.zip; (4) write the 0.13.0 in-game test plan here; (5) report to Joel.
-- Changed default: "Crouch when kneeling is impossible" now false (spec: stay standing). Joel's
-  existing cfg keeps `true`; tell him to flip it.
+Scenario spawn NullReferenceException (Joel's log, scenarios #6, #18-#28, every PMC):
+- Trace: `BotProfileClient.CreateProfile` IL_0232-023b `profile_0.GetAllPrefabPaths` on a null
+  profile, from `BotCreationData.Create` <- `ScenarioSpawner.RequestAsync`. Scavs fine.
+- Cause (verified in the decompiles): SPT's server sends every Bear/Usec bot with Info.Side
+  "Savage" (`SPTarkov.Server.Core BotController.TryGenerateSingleBot`); the game's
+  `GetProfileDataParams.ChooseProfile` keeps only profiles whose Side + Role + BotDifficulty all
+  equal the request; SPT's `PmcBotSidePatch` (postfix on `BotCreationData.ChooseProfile`) sets
+  Bear/Usec only on the profile already chosen. We asked for side Bear/Usec -> no match -> null.
+  Vanilla `BotSpawner.DebugSpawnAnyway` asks for Savage too. pmc.json useDifficultyOverride is
+  false here, so difficulty matches.
+- Fix: `ScenarioSpawner.RequestSide` asks Savage for pmcBEAR/pmcUSEC; the spawned bot's side is
+  checked and logged. Also: readiness re-checked per request (raid running, spawner, `_gameEnd`,
+  core point, zone) with a clear message; `_inSpawnProcess` (feeds `AllBotsWithLoaded`, the
+  raid's bot cap) is given back when `ActivateBot` finishes without calling back (cancel,
+  SpawnStopped, no position, player not created) or throws before it; our callback can't throw
+  into `ActivateBotCallback` (its `--` runs after our callback); a bot the creator made but never
+  handed over is removed via LeaveData; one request per participant; `Scenarios.RaidSerial`
+  makes answers from an ended raid stale; a second copy of a scenario that is still spawning is
+  refused even with concurrent scenarios on (Joel's Enter presses launched #23-#28 together). A
+  ChooseProfile miss still logs the stack and now says what didn't match.
+- The game's own `_bundlesLoading` counter leaks +1 per such failure (its ++ is before the
+  deref); only the debug overlay reads it. Not ours to touch.
+
+Arms (twisted arms, hands not settling behind the head): offline `tools/armsim/` (frames with
+roll, not just points). From a realistic start (animator's hanging arm -> ArmPose swing ->
+hands-up -> behind the head) the old swing-only `Aim` ended with the forearm ~120 deg rolled
+against the upper arm's hinge and the upper arm ~80 deg off its own (hands-up alone ~30); the
+wrist was never set (palm 19-56 deg off the skull); the IK target was the wrist bone, so palm
+centre/fingers ended 1-4 cm inside the head/helmet; straight-line path projected onto a sphere.
+- `ArmPose.MeasureAxes`: each arm's elbow hinge in the upper arm's and forearm's local space,
+  from the game's pose (elbow 20-160 deg, before any of our writes; ~10 s of tries, then swing
+  fallback). `ArmPose.PoseArm`: full rotations from (direction, hinge), roll weight eased in
+  (hands-up 1; behind the head over h 0-0.4; brace with the reach). Used by the hands-up pose,
+  `Kneel.ApplyHands` and `Kneel.ApplyBrace`.
+- `ArmPose.SetWrist` (the brace's wrist code, shared): fingers/thumb/palm from the live finger
+  bones, bend <= 80, a third of the roll on each twist bone. Hands-up: palms to the captor,
+  fingers along the forearm, thumbs to the head (new: the palm used to face wherever the swings
+  left it). Behind the head: palm centre on the back of the skull, fingers round towards the
+  middle, thumb down, eased over h 0.35-1. Finger bones found once per surrender
+  (`ArmPose.HandsOf`), so this works standing too.
+- Path: quadratic curve in skull space past the ear (>= 0.22 m out) to the back; min radius kept.
+- Offline (armsim2.py, mirrors the C#): twist 0, no elbow flips, clear >= 3.7 cm (helmet) /
+  4.4 cm, wrist <= 41 deg, reach <= 0.76, at 20/30/60/144 fps, reversal at h 0.5, head sweep
+  -38..38 deg while holding, idle elbow settle. Not checkable offline: the real rig's local axes
+  (measured live), which side of the palm the thumb bone marks (Kneel brace palm flip mirrors
+  it), how it reads in game.
+
+### In-game test plan (0.13.1)
+
+Debug keys, Overlay, Log kneeling, Verbose logs on (14. Debug). Grep `spawn`, `hinge measured`,
+`finger bones`, `Scenario`.
+1. Scenario menu: Matched Scav and PMC, Captor reloads or looks away (PMC captor), Third party
+   (BEAR/USEC): `PMC spawned after ... (..., pmcBEAR/pmcUSEC, Bear/Usec)`, no `(side ..., expected
+   ...)`, no exception. Press Enter several times on one: second copy refused while spawning.
+2. Launch one, clean it up (or leave the raid) before the bots arrive: `arrived after ... removed`
+   or nothing at all after a raid change; no exception; later raid bots still spawn normally.
+3. Each surrendered bot logs `left/right arm hinge measured`. Hands-up from front/side/rear:
+   palms to you, no corkscrew at the elbows or wrists. Compare with 0.13.0 if anything looks
+   worse (Forearm twist in 12. Arm pose is still applied).
+4. Ctrl+K, watch both arms from front, side, rear at 60 fps and capped 30: hands go up past the
+   ears and round to the back of the head, elbows out, no twist on the way; palms on the back of
+   the head, fingers towards the middle, thumbs down, nothing inside the head; helmet on/off,
+   plate carrier + backpack. If palms face outwards: Kneel brace palm flip (also mirrors brace).
+5. While down: circle him (head turns), wait for idle settles: hands stay on the head, no twist.
+6. Shift+K (brace Always), Ctrl+Shift+K interruptions, Ctrl+K while rising, `]` escape: arms leave
+   the head the way they came, brace hand lands flat, no flick; kill him mid-move: vanilla ragdoll.
+
+**0.13.0 (2026-11-19): code complete, reviewed, built against H:\SPT4.1.X with 0 warnings
+(dist/HandsAreHigh-0.13.0.zip), installed in H:\SPT4.1.X; never run in game.** Eight-part request
+(kneel spot, rise-to-walk, head attention, interrupted escape, injury-aware kneel, kneeling idle,
+flinch, demeanor). Next: Joel runs the 0.13.0 plan below.
+
+Finished on the home PC (2026-11-19), after the work-laptop commit:
+- Review of Presence.cs, SearchSpot, ReassessEscape. Signs checked: SignedAngle(body, look, up)
+  and AngleAxis(yaw, up) agree; +pitch about Cross(up, fwd) = right is head down; flinch turns
+  away from the side the round passed; neck/head split leaves the head at exactly q x animated.
+  SearchSpot: the 8 angles are distinct (90, 45, 135, 0, 180, -45, 225, 270), rings nearest first.
+  Fixed: (a) HeadAxisOk was reset per encounter and skipped while kneeling: a man recaptured on his
+  knees had no head look until he stood; now measured once per bot (it is a rig property);
+  (b) stale Yaw/Pitch from the last encounter turned the torso (assist) on the measuring frame,
+  skewing the axis for good: look state is zeroed while the look is off, and the axis is not
+  measured on a frame with torso assist or a flinch; (c) a hit during an escape from the knees
+  left KneelEscape set, so ReassessEscape could call off a bolt caused by a hit (design: hits are
+  never reconsidered): the hit handler clears it.
+- Offline check (scratchpad free_check.py; the kneel_sim2 / brace_sim scripts stayed on the work
+  laptop): the hand-off points come from the windows alone. At each style's Free t the lead window
+  is 0.26-0.27 (hips ~11-12 cm under standing with a ~0.44 m drop), the trailing knee window is 0
+  (knee up), and Free is the first t where that holds (0.203/0.170/0.142/0.203/0.203/0.243). Brace
+  at hand-off: defensive 0, escape 0 (moved out-windows end above Free); compliant 0.76, released
+  by UpdateBrace's "about to walk" latch (0.10 s) as soon as MoveTo asks for a walk. The solver
+  itself is unchanged since the 0.12.1 sims.
+- "Crouch when kneeling is impossible" default is now false; Joel's cfg had no entry yet, so he
+  gets false (stays standing).
 
 0.13.0 contents:
 - Kneel spot (Kneel.cs TryBegin/SearchSpot/SpotWalk/SpotFailed; layer HandsUp Order.Kneel):
@@ -67,6 +146,40 @@ Where it was left off (resume here):
   no extra breathing. Flinch: Suppression.OnShot -> Presence.OnShot for any shooter, near miss
   past the head, cooldown 0.7 s + habituation; cancelled by hits. Config section 18.
 - Version bumped to 0.13.0 in csproj + plugin.
+
+### In-game test plan (0.13.0)
+
+F12: 14. Debug: Debug keys, Overlay, Log kneeling, Kneel gizmos, Log attention on. 18. Attention
+and demeanor at defaults. Grep `kneel:`, `demeanor`, `glances`, `flinches`, `covered again`,
+`steps`, `couldn't reach`, `lets go of his knee`.
+1. Kneel spot: `[` a Scav with his back to a wall or in a tight doorway, Ctrl+K: `no room where he
+   stands`, then `steps N m to a spot with room`; he walks there hands up, no sprint, facing you,
+   then kneels. Menu row reads "stepping to room to kneel". In a closet / dense clutter: `no room
+   to kneel within 2.0 m`, he stays standing, hands up (menu says why).
+2. Rise into walk: kneel him, then menu Follow (or walk off with him following): he stands and
+   walks off in one motion, body turns toward you as his knees leave the ground, feet don't slide,
+   no crouch dip at the first step. Log: `legs to the walk at t 0.20` (0.14-0.24 by style).
+   With Kneel test brace Always + rise Compliant + Follow: `lets go of his knee early (he's about
+   to walk)`, no hand flick.
+3. Interrupted escape: kneel him, `]` (opening) and look away; when he starts up, aim at him
+   again. Log: `covered again NN% of the way up (...)` with carry on / back down / stand weights,
+   sometimes `freezes N s first`. Force each outcome with Kneel test escape outcome: carry on (he
+   keeps going), back down (reverses from where he is, no restart), stand (finishes rising, hands
+   up). Shoot him while he flees from his knees: he keeps running, no `covered again` line.
+4. Injury: shoot a bot's leg (blacked or broken), `[`, Ctrl+K: `favours his healthy ... leg`,
+   slower down/up times; break the front-side arm: no brace. Both legs broken: `can't kneel (both
+   legs too badly hurt)`.
+5. Head and demeanor: several surrenders; each logs `demeanor X (weights ...)`. Head follows you
+   as you circle him (standing and kneeling), turns at most ~70 deg, torso helps past 25 deg;
+   glances at his dropped gun, his squad, the way out, the ground, back to you. Recapture a bot
+   while he is kneeling: head still tracks (0.13.0 fix). Defiant: chin up, few glances;
+   frightened: head down, quick glances.
+6. Kneeling idle: leave him kneeling 30 s: small hip shifts and elbow settles, never in step with
+   another kneeling bot; knees stay on their marks (K gizmo).
+7. Flinch: fire past his head (within 2 m, missing): `flinches (... passed X m away, left/right)`,
+   head ducks away from that side, shoulders hunch, settles in ~0.5 s; full-auto: weaker each
+   time, no constant shaking. Hit him: no flinch line, he reacts to the hit.
+8. Profile on with 4 held bots (2 kneeling): no `Profile spike:`.
 
 **0.12.0 (kneel styles, rise intents, knee brace, no crouch look), built against `C:\HUH` 2026-11-19
 (dist/HandsAreHigh-0.12.0.zip), 0 warnings; committed and pushed to `main` 2026-11-19 (0.11.0 in the same commit); not installed, never run in game.**
