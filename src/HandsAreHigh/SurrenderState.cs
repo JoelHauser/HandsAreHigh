@@ -99,10 +99,8 @@ namespace HandsAreHigh
         // kneeling). False for a man behind a kneeling prisoner: present, heard, but not watched;
         // the prisoner can't tell where that gun points.
         internal bool CaptorInView = true;
-        internal float CaptorOutOfViewSince = -1f;
         // 0.15.0: who gave the last order (logged; never a look target by itself). Captor is custody.
         internal Player OrderIssuer;
-        internal float OrderIssuedAt = -1000f;
         // 0.15.0: resistance decided but not yet visible to the bots around him.
         internal string ArmedPending;
         internal float ArmedPendingSince;
@@ -137,9 +135,7 @@ namespace HandsAreHigh
         internal readonly List<Item> KeptBack = new List<Item>(2);
         internal readonly List<Item> Dropped = new List<Item>(4);
         internal int Demands;
-        internal float LastDemandAt = -1000f;
         internal bool Deceiving;            // kept a weapon on purpose this surrender (weighs his draw later)
-        internal string ComplianceWhy;      // the last decision, for the report line
         internal float EscalateAt;          // > 0: he goes for what he kept at this time (Compliance)
         internal float DemandDoneAt = -1f;  // a Drop your weapons answered (dropped, partly, refused): a captor judges it once
 
@@ -161,6 +157,8 @@ namespace HandsAreHigh
         // custody). Until then it lasts until OfferUntil (longer while the captor closes in), then
         // he seeks safety or reassesses. Distance alone never cancels it.
         internal bool Accepted;
+        internal SurrenderSource Source;     // 0.19.0: natural, recapture, debug, scenario (SurrenderStats)
+        internal bool CountedAccept;         // counted once in SurrenderStats
         internal float OfferUntil;
         internal float ClosestDist = float.MaxValue;   // captor's closest approach seen this encounter
         internal float OfferRef = float.MaxValue;      // distance the next "he is coming for me" is measured from
@@ -211,7 +209,6 @@ namespace HandsAreHigh
         internal float DrawSince;
         internal EquipmentSlot DrawSlot;
         internal bool DrawQuick;
-        internal bool DrawOk;
         internal float DrawCommitUntil;     // decided to draw but the game refused: retried until then
         // Draw timeline (Time.realtimeSinceStartup), logged at the hand-off.
         internal float TDecided = -1f, TDrawAsked = -1f, TArmsDown = -1f, TDrawReady = -1f;
@@ -412,7 +409,6 @@ namespace HandsAreHigh
             KneelSpotMoving = false;
             KneelFaceSet = false;
             CaptorInView = true;
-            CaptorOutOfViewSince = -1f;
             KneelSearchI = -1;
             KneelTestLeft = 0;
             KneelTestArmed = false;
@@ -424,8 +420,6 @@ namespace HandsAreHigh
             HeadHandsLogged = false;
             Facing.Clear(this);
             Demands = 0;
-            LastDemandAt = -1000f;
-            ComplianceWhy = null;
             EscalateAt = 0f;
             OfferUntil =Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * Nerve);
             Gestures.Cancel(this, "new surrender");
@@ -436,6 +430,7 @@ namespace HandsAreHigh
         {
             if (Accepted) return;
             Accepted = true;
+            SurrenderStats.Acknowledged(this, botCustody: false);
             if (Settings.LogDecisions.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{Name}: surrender acknowledged by {Restraint.Name(Captor)} ({how})");
         }

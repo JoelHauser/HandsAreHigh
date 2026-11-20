@@ -34,6 +34,13 @@ namespace HandsAreHigh
         private const float RetryStep = 0.25f;
         private const float HighGap = 2.5f;
         private const float VerifyAfter = 0.15f;
+        // 0.19.0: the surrender line is the one cue a player has for a natural surrender behind
+        // cover; in a firefight the bot's speaker is busy with combat callouts, and it was skipped
+        // ("no chance to speak within 2 s", 0.18.0 log). After this long it overwrites the busy
+        // speaker: BaseSpeaker.Play replaces the current phrase when the new one's importance is
+        // higher (verified, 0.16.9).
+        private const float SurrenderInterrupt = 0.4f;
+        private const int SurrenderImportance = 1000;
 
         private static readonly AccessTools.FieldRef<Player, BetterSource> SpeechSourceRef =
             AccessTools.FieldRefAccess<Player, BetterSource>("_speechSource");
@@ -168,11 +175,12 @@ namespace HandsAreHigh
             }
             BaseSpeaker speaker = s.Bot.Speaker;
             if (speaker == null) { s.PendingVoice = null; return; }
-            if (speaker.Speaking || speaker.Busy) return;
+            bool force = e == VoiceEvent.Surrender && now - s.PendingVoiceAt >= SurrenderInterrupt;
+            if ((speaker.Speaking || speaker.Busy) && !force) return;
             if (s.PendingPriority < VoicePriority.Urgent && FloorTaken(s, now)) return;
             // His captor (a bot) is speaking: answer after him, not over him.
             if (s.PendingPriority < VoicePriority.Urgent && s.Custody != null && CaptorVoice.Talking(s.Custody.Bot)) return;
-            Play(s, e, speaker, now);
+            Play(s, e, speaker, now, force);
         }
 
         // Now and then, unprompted, while he stands there with his hands up.
@@ -209,7 +217,7 @@ namespace HandsAreHigh
             return false;
         }
 
-        private static void Play(SurrenderState s, VoiceEvent e, BaseSpeaker speaker, float now)
+        private static void Play(SurrenderState s, VoiceEvent e, BaseSpeaker speaker, float now, bool force = false)
         {
             Lines(s, e, out EPhraseTrigger[] first, out EPhraseTrigger[] fallback);
             Options.Clear();
@@ -236,7 +244,8 @@ namespace HandsAreHigh
                 EPhraseTrigger line = Options[i];
                 Options.RemoveAt(i);
                 TagBank played = null;
-                HandsAreHighPlugin.Try("voice", () => played = speaker.Play(line, mask, true));
+                int? importance = force ? SurrenderImportance : (int?)null;
+                HandsAreHighPlugin.Try("voice", () => played = speaker.Play(line, mask, true, importance));
                 if (played == null) continue;
 
                 s.PendingVoice = null;

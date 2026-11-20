@@ -396,7 +396,7 @@ namespace HandsAreHigh
             HighNerve = c.Bind(NerveSec, "High nerve from", 0.75f, Range("Bots at or above this will come back with only a knife.", 0f, 1f));
 
             // 03 Surrendering on their own
-            EvalInterval = c.Bind(Natural, "Check every (s)", 5f, Range("How often each bot weighs giving up. One roll per check, never caught up after a pause.", 1f, 60f));
+            EvalInterval = c.Bind(Natural, "Check every (s)", 3f, Range("How often each bot in a fight weighs giving up (a hit or near miss brings the next check forward). One roll per check, never caught up after a pause.", 1f, 60f));
             SurrenderCooldown = c.Bind(Natural, "Cooldown after a surrender (s)", 30f,
                 Range("Once he's fighting again, how long before he can give up again.", 0f, 300f));
             // 0.9.0: no distance limit ("Within (m)" removed). He gives up at any range to a threat
@@ -410,7 +410,7 @@ namespace HandsAreHigh
                 Range("Below this pressure the chance is 0; it rises to the role's full base chance at pressure 1.", 0f, 0.9f));
 
             // 04 Pressure
-            InjuryThreshold = c.Bind(Pressure, "Hurt below (health fraction)", 0.35f, Range("Where injury starts to count.", 0.05f, 1f));
+            InjuryThreshold = c.Bind(Pressure, "Hurt below (health fraction)", 0.6f, Range("Where injury starts to count (0.3 of the injury factor here, rising to 1 near death).", 0.05f, 1f));
             InjuryWeight = c.Bind(Pressure, "Weight: injury", 0.45f, Range("", 0f, 1f));
             AmmoWeight = c.Bind(Pressure, "Weight: out of ammo", 0.35f, Range("No rounds left for his gun and none to reload, or no gun at all.", 0f, 1f));
             SuppressionWeight = c.Bind(Pressure, "Weight: suppression", 0.40f,
@@ -428,7 +428,7 @@ namespace HandsAreHigh
             AloneFactor = c.Bind(Pressure, "Squad too far away", 0.5f,
                 Range("Squad factor when his squad is alive but nobody is within the ally radius.", 0f, 1f));
             AllyRadius = c.Bind(Pressure, "Allies within (m)", 40f, Range("", 5f, 150f));
-            VitalThreshold = c.Bind(Pressure, "Head or thorax below (fraction)", 0.4f,
+            VitalThreshold = c.Bind(Pressure, "Head or thorax below (fraction)", 0.6f,
                 Range("Injury also counts a badly hurt head or thorax, a destroyed limb and bleeding; the worst of these is used, never their sum.", 0.05f, 1f));
             SevereInjury = c.Bind(Pressure, "Severe injury from", 0.6f,
                 Range("Injury this bad lets him consider surrender on its own, without a second reason. Still a roll; still nerve and personality.", 0.1f, 1.1f));
@@ -440,11 +440,11 @@ namespace HandsAreHigh
             NearMissRadius = c.Bind(Pressure, "Near miss within (m)", 2f,
                 Range("A shot from an enemy passing this close to him (with nothing solid in between) counts as fire at him; closer counts more.", 0.25f, 6f));
             NearMissRange = c.Bind(Pressure, "Near miss checked up to (m)", 150f, Range("", 10f, 500f));
-            PromptCheckDelay = c.Bind(Pressure, "Recheck after a hit within (s)", 0.5f,
-                Range("Being hit or shot at brings his next surrender check forward to this soon (at most every 1.5 s).", 0.1f, 5f));
+            PromptCheckDelay = c.Bind(Pressure, "Recheck after a hit within (s)", 0.25f,
+                Range("Being hit or shot at brings his next surrender check forward to this soon (at most every 0.8 s): in a real firefight a man is often dead a second after the first hit.", 0.1f, 5f));
 
             // 05 Who he is
-            // Role sets the base odds and the bar to clear. Per check (every 5 s, every 1.5 s under
+            // Role sets the base odds and the bar to clear. Per check (every 3 s, every 0.8 s under
             // fire): chance = base x pressure curve x (1 - nerve resistance x nerve) x personality
             // x kit x experience (x2 severe injury), capped at max.
             ScavChance = c.Bind(Role, "Scav base chance", 0.35f,
@@ -453,7 +453,7 @@ namespace HandsAreHigh
             ScavMax = c.Bind(Role, "Scav max chance", 0.5f, Range("Per check, after everything.", 0f, 1f));
             PmcChance = c.Bind(Role, "PMC base chance", 0.12f,
                 Range("PMCs are trained and committed: about a third of a Scav's odds.", 0f, 1f));
-            PmcThreshold = c.Bind(Role, "PMC pressure needed", 0.55f, Range("", 0f, 1f));
+            PmcThreshold = c.Bind(Role, "PMC pressure needed", 0.5f, Range("", 0f, 1f));
             PmcMax = c.Bind(Role, "PMC max chance", 0.25f, Range("", 0f, 1f));
             BossChance = c.Bind(Role, "Boss and follower base chance", 0.03f,
                 Range("Only with Bosses and followers can surrender on (section 01).", 0f, 1f));
@@ -812,6 +812,7 @@ namespace HandsAreHigh
             BindKneel(c);
             BindScenarios(c);
             BindRealism(c);
+            BindV19(c);
         }
 
         private static void BindKneel(ConfigFile c)

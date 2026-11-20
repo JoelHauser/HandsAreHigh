@@ -46,7 +46,7 @@ namespace HandsAreHigh
             Perf.End(Perf.Sec.Registry, t0);
 
             t0 = Perf.Begin();
-            try { NaturalSurrender.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("surrender checks", e); }
+            try { NaturalSurrender.Tick(); SurrenderStats.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("surrender checks", e); }
             // Bot captors (each every 0.25 s) and one prisoner's observer scan per frame.
             try { Captors.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("captors", e); }
             try { Restraint.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("restraint", e); }
@@ -114,7 +114,7 @@ namespace HandsAreHigh
                     outcome = "already has his hands up";
                 else
                 {
-                    SurrenderRegistry.Surrender(target, me, "debug key");
+                    SurrenderRegistry.Surrender(target, me, "debug key", source: SurrenderSource.DebugKey);
                     outcome = SurrenderRegistry.HoldsBot(target) ? "surrenders" : "didn't surrender (mod disabled?)";
                 }
             }
@@ -129,7 +129,7 @@ namespace HandsAreHigh
                 {
                     // Towards where he knows his enemy to be, as a natural surrender would.
                     SurrenderRegistry.Surrender(target, foe, "debug key: to his enemy",
-                        Perception.KnownPosition(target.AIData?.BotOwner, foe, out _));
+                        Perception.KnownPosition(target.AIData?.BotOwner, foe, out _), source: SurrenderSource.DebugKey);
                     outcome = SurrenderRegistry.HoldsBot(target) ? $"surrenders to {foe.Profile?.Nickname} (see the log for his decision)" : "didn't surrender";
                 }
             }

@@ -377,6 +377,7 @@ namespace HandsAreHigh
                 NextGlanceAt = now + Dice.Range(4f, 9f)
             };
             BuildPlan(cs);
+            SurrenderStats.Acknowledged(s, botCustody: true);
             try { Judgement.Intend(cs, s); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor intent", e); }
             cs.DemandSeen = s.DemandDoneAt;   // 0.16.0: an earlier demand (someone else's) isn't his to judge
             ByBot[c] = cs;
@@ -908,7 +909,7 @@ namespace HandsAreHigh
             return list.ToArray();
         }
 
-        private static float PathLength(Vector3[] c)
+        internal static float PathLength(Vector3[] c)
         {
             float l = 0f;
             for (int i = 1; i < c.Length; i++) l += Vector3.Distance(c[i - 1], c[i]);
@@ -1357,44 +1358,70 @@ namespace HandsAreHigh
 
         // 0.16.0: one path to a point just short of the item, at a walk; eyes on the prisoner until
         // close, then on the item; then still, looking down at it, for the game's pick-up.
+        // 0.19.0: to ~0.7 m (in reach), slowing over the last 2 m; a distant item is a real walk (eyes
+        // where he goes, a look back at the man every few seconds); the look goes down to the item
+        // from his eyes at a human speed; after the pick-up he straightens up and looks back (Recover)
+        // before CaptorLoot hands him back to guarding. Why it snapped: CaptorLoot's header.
+        private const float LookDownSpeed = 150f;   // deg/s
+        private const float LookBackSpeed = 140f;
+
         private void Fetch(LootJob j)
         {
             if (Mathf.Abs(_pose - 1f) > 0.01f) { _pose = 1f; BotOwner.SetPose(1f); }
             Player me = BotOwner.GetPlayer;
+            SurrenderState p = j.Prisoner;
+            bool watchable = !j.AfterRelease && p?.Bot != null && Perception.Alive(p.Bot);
+            float now = Time.time;
             if (j.Stage == LootStage.Walk)
             {
                 if (!j.PathIssued)
                 {
                     j.PathIssued = true;
                     if (!Perception.PathTo(me.Position, j.At, out Vector3[] corners, out _)) { j.ProgressSince = -1000f; return; }
-                    Vector3[] way = Captors.Shorten(corners, 0.8f);
+                    Vector3[] way = Captors.Shorten(corners, 0.7f);
                     if (way.Length >= 2)
                     {
                         if (!_moving) Relink();
                         _moving = true;
                         _stopped = false;
                         BotOwner.Sprint(false);
-                        BotOwner.SetTargetMoveSpeed(0.65f);
+                        BotOwner.SetTargetMoveSpeed(j.Distant ? 0.8f : 0.65f);
                         BotOwner.MovementResume();
-                        BotOwner.Mover.GoToByWay(way, 0.4f);
+                        BotOwner.Mover.GoToByWay(way, 0.3f);
                     }
                 }
-                bool close = (me.Position - j.At).sqrMagnitude < 3f * 3f;
-                SurrenderState p = j.Prisoner;
-                if (!close && !j.AfterRelease && p?.Bot != null && Perception.Alive(p.Bot)) BotOwner.Steering.LookToPoint(Perception.Chest(p.Bot));
-                else BotOwner.Steering.LookToPoint(j.At + Vector3.up * 0.1f);
+                float sq = (me.Position - j.At).sqrMagnitude;
+                if (_moving && sq < 2f * 2f) BotOwner.SetTargetMoveSpeed(0.4f);   // eases into the stop
+                bool close = sq < 3f * 3f;
+                if (j.Distant && !close)
+                {
+                    if (watchable && now >= j.NextGlanceBack)
+                    {
+                        j.GlanceBackUntil = now + Dice.Range(0.6f, 1f);
+                        j.NextGlanceBack = now + Dice.Range(2.2f, 3.5f);
+                    }
+                    if (watchable && now < j.GlanceBackUntil) BotOwner.Steering.LookToPoint(Perception.Chest(p.Bot), LookBackSpeed);
+                    else BotOwner.Steering.LookToMovingDirection();
+                }
+                else if (!close && watchable) BotOwner.Steering.LookToPoint(Perception.Chest(p.Bot));
+                else BotOwner.Steering.LookToPoint(j.At + Vector3.up * 0.1f, LookDownSpeed);
                 return;
             }
             if (_moving || !_stopped) { BotOwner.StopMove(); BotOwner.SetTargetMoveSpeed(0f); BotOwner.Sprint(false); _stopped = true; _moving = false; }
-            // As BotItemTaker.LookAndTakeItem: look at it, a little down.
-            Vector3 v = j.At - me.Position;
-            if (new Vector2(v.x, v.z).sqrMagnitude > 0.0225f)
+            if (j.Stage == LootStage.Recover)
             {
-                v.Normalize();
-                if (v.y > -0.3f) { v.y = -0.3f; v.Normalize(); }
-                BotOwner.Steering.LookToDirection(v);
+                if (watchable) BotOwner.Steering.LookToPoint(Perception.Chest(p.Bot), LookBackSpeed);
+                else
+                {
+                    Vector3 f = me.LookDirection; f.y = 0f;
+                    if (f.sqrMagnitude > 1e-4f) BotOwner.Steering.LookToDirection(f.normalized, LookBackSpeed);
+                }
+                return;
             }
-            CaptorLoot.Settled(j, Time.time);
+            // From his eyes to the item: a look over 60 deg down is what makes the game's pick-up
+            // lower his body to the floor (PickUpState.Enter); from the feet it was ~17 deg.
+            if (j.Stage == LootStage.Settle) BotOwner.Steering.LookToDirection(CaptorLoot.PickupLook(me, j.At), LookDownSpeed);
+            CaptorLoot.Settled(j, now);
         }
 
         // As SurrenderLogic.Relink: the mover's last-good-link fields set to where he stands, so

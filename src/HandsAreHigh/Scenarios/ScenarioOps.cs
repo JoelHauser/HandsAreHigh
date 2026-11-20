@@ -238,7 +238,7 @@ namespace HandsAreHigh
             if (!Perception.Alive(bot)) return $"{prisoner.Tag} is dead";
             if (!Perception.Alive(captor)) return "the captor is dead";
             Vector3 knownAt = captor.Position;
-            SurrenderRegistry.Surrender(bot, captor, $"scenario {sc.Title}: {why}", knownAt, decideNow);
+            SurrenderRegistry.Surrender(bot, captor, $"scenario {sc.Title}: {why}", knownAt, decideNow, SurrenderSource.Scenario);
             if (!SurrenderRegistry.HoldsBot(bot)) return "the registry refused the surrender (mod disabled?)";
             sc.Force($"{prisoner.Tag} surrenders to {Restraint.Name(captor)} ({why})");
             return null;

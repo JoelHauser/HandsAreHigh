@@ -94,6 +94,7 @@ namespace HandsAreHigh
         {
             GameWorld world = Singleton<GameWorld>.Instance;
             if (world == _world) return;
+            SurrenderStats.EndRaid();   // 0.19.0: the last raid's natural-surrender summary
             if (States.Count > 0 || History.Count > 0)
                 HandsAreHighPlugin.Log.LogInfo("New raid: surrender state cleared");
             _world = world;
@@ -170,7 +171,8 @@ namespace HandsAreHigh
         // sighting); null when the captor is right there (debug keys, being caught again).
         // decideNow false (debug scenarios, forced custody only): a bot captor's decision is not
         // asked here; the caller gives custody through Captors.ForceAccept straight after.
-        internal static void Surrender(Player bot, Player captor, string reason, Vector3? knownAt = null, bool decideNow = true)
+        internal static void Surrender(Player bot, Player captor, string reason, Vector3? knownAt = null, bool decideNow = true,
+            SurrenderSource source = SurrenderSource.Natural)
         {
             if (bot == null || captor == null || !Settings.Enabled.Value) return;
             EnsureRaid();
@@ -200,6 +202,9 @@ namespace HandsAreHigh
                 existing.DebugOpeningUntil = 0f;
                 existing.FaceSet = false;
                 existing.ResetEncounter();
+                existing.Source = source;
+                existing.CountedAccept = false;
+                SurrenderStats.Start(existing);
                 AcknowledgeIfClose(existing, captor);
                 existing.SetPhase(Phase.HandsUp, reason);
                 if (existing.Moving) { bot.AIData?.BotOwner?.StopMove(); existing.Moving = false; }
@@ -222,7 +227,8 @@ namespace HandsAreHigh
                 CaptorLastSeen = knownAt ?? captor.Position,
                 DropPosition = bot.Position,
                 LastPosition = bot.Position,
-                Reaction = h.Reaction
+                Reaction = h.Reaction,
+                Source = source
             };
             s.Personality = PersonalityOf(bot, h);
             SainAdapter.Leanings(s.Personality, out s.Fight, out s.Flee);
@@ -243,6 +249,7 @@ namespace HandsAreHigh
             s.DeathHandler = p => OnDeadOrGone(s);
             bot.OnPlayerDeadOrUnspawn += s.DeathHandler;
             States[bot] = s;
+            SurrenderStats.Start(s);
             s.OfferUntil = Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * s.Nerve);
             AcknowledgeIfClose(s, captor);
             HandsAreHighPlugin.Log.LogInfo(
@@ -271,7 +278,10 @@ namespace HandsAreHigh
             if (captor == null || captor.IsAI) return;
             float d = Vector3.Distance(captor.Position, s.Bot.Position);
             if (d <= Settings.AcknowledgeDistance.Value && Perception.LineClear(Perception.Eye(s.Bot), Perception.Eye(captor)))
+            {
                 s.Accepted = true;
+                SurrenderStats.Acknowledged(s, botCustody: false);
+            }
         }
 
         // Personality never changes in a raid: one reflection call per bot, not per check.
@@ -383,7 +393,6 @@ namespace HandsAreHigh
             if (s == null || s.Dead || s.Bot == null || !States.TryGetValue(s.Bot, out SurrenderState now) || now != s) return;
             if (s.DrawToken != token || !s.DrawPending) return;
             s.DrawPending = false;
-            s.DrawOk = ok;
             s.TDrawReady = Time.realtimeSinceStartup;
             if (!ok) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: the game didn't complete the draw ({Arsenal.DescribeHands(s.Bot)}); the normal AI takes it from here");
         }
@@ -680,6 +689,7 @@ namespace HandsAreHigh
             if (States.Count > 0)
                 HandsAreHighPlugin.Log?.LogInfo($"Teardown: releasing {States.Count} surrendered bot(s)");
             foreach (SurrenderState s in States.Values) Release(s, "teardown");
+            SurrenderStats.EndRaid();
             UnhookAll();
             Restraint.Clear();
             Captors.Clear();

@@ -47,7 +47,6 @@ namespace HandsAreHigh
             // 0.15.0: who gave it, kept apart from custody and from where he looks (Presence
             // looks at his captor only while he can see him; an old issuer is never a target).
             s.OrderIssuer = by;
-            s.OrderIssuedAt = Time.time;
             HandsAreHighPlugin.Log.LogInfo($"{s.Name}: ordered {order} by {(human ? "you" : Restraint.Name(by))}{(debug ? " (debug key)" : "")}");
             if (!debug) { s.KneelTestLeft = 0; s.KneelTestArmed = false; }   // a real order ends a kneel test
 

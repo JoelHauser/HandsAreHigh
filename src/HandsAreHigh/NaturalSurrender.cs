@@ -34,7 +34,10 @@ namespace HandsAreHigh
     internal static class NaturalSurrender
     {
         private const float ReasonFloor = 0.2f;    // a factor this small (one stray shot ~0.15) isn't a reason
-        private const float PromptGap = 1.5f;
+        // 0.19.0: 1.5 -> 0.8 s. A bot hit twice in a second used to get one check 0.5 s after the
+        // first hit and none after the second: in an ordinary firefight he was dead before the
+        // second check (natural surrender never seen in a raid; tools/natsim).
+        private const float PromptGap = 0.8f;
         private const float LogFloor = 0.15f;      // pressure below this is only logged with Verbose logs
         private static readonly EBodyPart[] Vitals = { EBodyPart.Head, EBodyPart.Chest };
         private static readonly EBodyPart[] Limbs =
@@ -73,23 +76,34 @@ namespace HandsAreHigh
                 if (!EligibleRole(h.Role) || SurrenderRegistry.HoldsBot(bot))
                 {
                     h.NextEval = now + Settings.EvalInterval.Value;
-                    if (!EligibleRole(h.Role) && Scenarios.Watching(bot)) Blocked(bot, $"role {h.Role} not eligible (01. General: PMCs / bosses)");
+                    if (!EligibleRole(h.Role))
+                    {
+                        SurrenderStats.Gate(NaturalGate.Role);
+                        if (Scenarios.Watching(bot)) Blocked(bot, $"role {h.Role} not eligible (01. General: PMCs / bosses)");
+                    }
                     continue;
                 }
                 BotOwner owner = bot.AIData?.BotOwner;
-                if (owner == null || owner.BotState != EBotState.Active || owner.IsDead) { h.NextEval = now + Settings.EvalInterval.Value; continue; }
+                if (owner == null || owner.BotState != EBotState.Active || owner.IsDead)
+                {
+                    h.NextEval = now + Settings.EvalInterval.Value;
+                    SurrenderStats.Gate(NaturalGate.NotActive);
+                    continue;
+                }
 
                 budget--;
                 h.NextEval = now + Settings.EvalInterval.Value * Dice.Range(0.8f, 1.2f);
                 // Your teammates (your group, Pit Fireteam followers) stay under your orders.
                 if (!Settings.TeammatesSurrender.Value && Teammates.IsPlayerTeammate(owner))
                 {
+                    SurrenderStats.Gate(NaturalGate.Teammate);
                     if (Scenarios.Watching(bot)) Blocked(bot, "your teammate (Your teammates can surrender is off)");
                     continue;
                 }
                 TrackSquad(owner, h);
                 if (now < h.CooldownUntil)
                 {
+                    SurrenderStats.Gate(NaturalGate.Cooldown);
                     if (Scenarios.Watching(bot)) Blocked(bot, $"surrender cooldown {h.CooldownUntil - now:0} s");
                     continue;
                 }
@@ -159,6 +173,7 @@ namespace HandsAreHigh
             // he knows of him; or to the player whose Stop demand he heard (StopDemand checks range
             // and line when it is made: a spoken demand carries DemandRange, no further).
             float now = Time.time;
+            SurrenderStats.Checked(bot);
             bool demanded = Settings.DemandEnabled.Value && now < h.DemandUntil && Perception.Alive(h.DemandBy);
             Player enemy;
             bool seenNow;
@@ -172,13 +187,13 @@ namespace HandsAreHigh
                 // The usual exits (no human target, far away): no message is built unless
                 // Verbose logs are on.
                 EnemyInfo goal = owner.Memory?.GoalEnemy;
-                if (goal == null) { if (Verbose(bot)) Blocked(bot, "no enemy targeted"); return; }
+                if (goal == null) { SurrenderStats.Gate(NaturalGate.NoTarget); if (Verbose(bot)) Blocked(bot, "no enemy targeted"); return; }
                 Player foe = Perception.PlayerOf(goal.Person);
-                if (foe == null || !Perception.Alive(foe)) { if (Verbose(bot)) Blocked(bot, "his target isn't a living player"); return; }
+                if (foe == null || !Perception.Alive(foe)) { SurrenderStats.Gate(NaturalGate.TargetNotLiving); if (Verbose(bot)) Blocked(bot, "his target isn't a living player"); return; }
                 if (foe.IsAI)
                 {
                     string no = BotFoeBlocked(bot, foe);
-                    if (no != null) { if (Verbose(bot)) Blocked(bot, no); return; }
+                    if (no != null) { SurrenderStats.Gate(NaturalGate.BotTarget); if (Verbose(bot)) Blocked(bot, no); return; }
                 }
                 enemy = foe;
                 seenNow = goal.IsVisible;
@@ -190,6 +205,7 @@ namespace HandsAreHigh
                 bool fire = now - h.FireAt < 3f || (owner.Memory != null && owner.Memory.IsUnderFire);
                 if (!seenNow && since > Settings.SeenWithin.Value && !(fire && goal.HaveSeen && since < Settings.EnemyMemory.Value))
                 {
+                    SurrenderStats.Gate(NaturalGate.NotPerceived);
                     if (Verbose(bot)) Blocked(bot, $"hasn't seen {Restraint.Name(foe)} for {since:0} s and isn't under fire");
                     return;
                 }
@@ -202,7 +218,7 @@ namespace HandsAreHigh
 
             // Mid weapon change: wait for the next check. (Mid-reload is fine: the surrender
             // cuts the reload short and drops the gun.)
-            if (owner.WeaponManager?.Selector?.IsChanging == true) return;
+            if (owner.WeaponManager?.Selector?.IsChanging == true) { SurrenderStats.Gate(NaturalGate.WeaponChange); return; }
 
             Arsenal.AssessKit(bot, h);
             float armourDull = 1f - Settings.ArmourConfidence.Value * h.Protection;
@@ -261,11 +277,13 @@ namespace HandsAreHigh
             else if (reasons < Settings.RequiredFactors.Value)
             {
                 eligible = false;
+                SurrenderStats.Gate(NaturalGate.TooFewReasons);
                 gate = $"not eligible: {reasons} reason(s), needs {Settings.RequiredFactors.Value}";
             }
             else if (pressure < threshold)
             {
                 eligible = false;
+                SurrenderStats.Gate(NaturalGate.LowPressure);
                 gate = $"not eligible: pressure {pressure:0.00} < {threshold:0.00} for a {rc}";
             }
             else
@@ -305,6 +323,7 @@ namespace HandsAreHigh
             chance = Mathf.Clamp01(chance);
             float roll = Dice.Value;
             bool gives = eligible && roll < chance;
+            if (eligible) SurrenderStats.Rolled(rc, gives);
             if (demanded) h.DemandUntil = 0f;   // one evaluation per demand: it never stacks
 
             var sb = new StringBuilder();
@@ -323,9 +342,12 @@ namespace HandsAreHigh
             HandsAreHighPlugin.Log.LogInfo(sb.ToString());
 
             if (!gives) return;
-            SurrenderRegistry.Surrender(bot, enemy, $"gave up ({gate}, pressure {pressure:0.00}, chance {chance:0.000}, {dist:0} m)", knownAt);
-            HandsAreHighPlugin.Log.LogInfo(SurrenderRegistry.HoldsBot(bot)
-                ? $"{Restraint.Name(bot)}: surrender activated (layer will take him on its next brain update)"
+            SurrenderRegistry.Surrender(bot, enemy, $"gave up ({gate}, pressure {pressure:0.00}, chance {chance:0.000}, {dist:0} m)", knownAt,
+                source: Scenarios.Watching(bot) ? SurrenderSource.ScenarioNatural : demanded ? SurrenderSource.Demand : SurrenderSource.Natural);
+            bool held = SurrenderRegistry.HoldsBot(bot);
+            SurrenderStats.Activation(held);
+            HandsAreHighPlugin.Log.LogInfo(held
+                ? $"{Restraint.Name(bot)}: surrender activated ({(Scenarios.Watching(bot) ? "natural decision, scenario bot" : "NATURAL")}; layer will take him on its next brain update)"
                 : $"{Restraint.Name(bot)}: surrender activation FAILED (mod disabled or registry refused)");
         }
 
@@ -353,6 +375,9 @@ namespace HandsAreHigh
             HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(bot)} ({bot.Profile?.Info?.Settings?.Role}): no surrender check: {why}");
 
         // The worst of several views of the same wounds (never a sum).
+        // 0.19.0: a destroyed limb 0.45 -> 0.55, stomach 0.6 -> 0.65, bleeding 0.5/0.25 -> 0.55/0.3
+        // (with the thresholds at 60%): a man with a shattered leg who is bleeding is a reason on
+        // his own; before, nothing short of near-death was (0.3.0 raid log, tools/natsim).
         internal static float Injury(Player bot, out string why)
         {
             why = "none";
@@ -374,12 +399,12 @@ namespace HandsAreHigh
             }
 
             foreach (EBodyPart part in Limbs)
-                if (hc.IsBodyPartDestroyed(part)) Worst(ref worst, ref why, part == EBodyPart.Stomach ? 0.6f : 0.45f, $"{part} destroyed");
+                if (hc.IsBodyPartDestroyed(part)) Worst(ref worst, ref why, part == EBodyPart.Stomach ? 0.65f : 0.55f, $"{part} destroyed");
 
             foreach (EBodyPart part in Parts)
             {
-                if (hc.FindActiveEffect<IHeavyBleeding>(part) != null) { Worst(ref worst, ref why, 0.5f, "heavy bleeding"); break; }
-                if (hc.FindActiveEffect<ILightBleeding>(part) != null) Worst(ref worst, ref why, 0.25f, "light bleeding");
+                if (hc.FindActiveEffect<IHeavyBleeding>(part) != null) { Worst(ref worst, ref why, 0.55f, "heavy bleeding"); break; }
+                if (hc.FindActiveEffect<ILightBleeding>(part) != null) Worst(ref worst, ref why, 0.3f, "light bleeding");
             }
             return Mathf.Clamp01(worst);
         }
@@ -394,10 +419,13 @@ namespace HandsAreHigh
         private static int Count(float factor) => factor >= ReasonFloor ? 1 : 0;
 
         // 0..1 from level (0 at 1, 1 at 40+) and difficulty (easy 0 .. impossible 1).
+        // 0.19.0: a Scav's level is not his experience: SPT rolls Scav levels around the player's
+        // own (the 0.3.0 raid log: Scavs at 48-78 against a high-level player, every one of them
+        // "experienced", x0.79 on every roll). Scavs: difficulty only.
         internal static float Experience(Player bot, BotOwner owner)
         {
             int level = bot.Profile?.Info?.Level ?? 1;
-            float lvl = Mathf.Clamp01((level - 1) / 39f);
+            float lvl = ClassOf(bot) == RoleClass.Scav ? 0f : Mathf.Clamp01((level - 1) / 39f);
             float diff;
             switch (owner.Settings?._difficulty)
             {

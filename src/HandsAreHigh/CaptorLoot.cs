@@ -48,7 +48,40 @@ namespace HandsAreHigh
     // BotItemTaker is going for is left alone; a race lost to anyone else is a failed transaction
     // (the game allows one move), logged. Looting Bots, if installed, is asked not to start its own
     // looting on a captor while he guards or fetches (LootingBotsAdapter; only an exact API match).
-    internal enum LootStage { Walk, Settle, Pickup }
+    //
+    // 0.19.0, where things are: each item is TRACKED (its real LootItem, sampled every 0.4 s), and
+    // nothing is decided while it is still moving (thrown, rolling). The captor only KNOWS where it
+    // lies if he saw it there (Notices: in front of him with a clear line, or at the feet of the man
+    // he is watching); otherwise he looks for it (LootSearchSeconds) and then forgets it. He walks to
+    // where he believes it is and re-acquires it on the way by sight; it isn't there: he stops.
+    // Close items (walking distance <= LootNearDistance) are weighed as before (Reweigh, risk of the
+    // few steps), and so are items at the man's feet (walking to them is walking up to him, eyes on
+    // him). Distant ones (a walk away from him) get a deliberate decision (WeighDistant): benefit (denying the man a
+    // gun near him, a gap it fills, its value; appetite for non-demanded items) against cost (the
+    // walk, the time the man is unwatched unless a squadmate covers him, made worse by a weapon he
+    // still has, better by kneeling / turned away / hands on head; by caution and experience).
+    // Outcomes: take now; postpone (another enemy about, under fire, or the man would be left
+    // unwatched) and weigh again after LootReweighSeconds or when the situation changes, at most
+    // LootMaxPostpone times; then after the release, or leave it. A distant walk is a real walk: he
+    // looks where he goes, with a look back every few seconds, so the man gets a genuine opening; he
+    // only stops for the man moving when he sees it (Captors.Check notices resistance by sight).
+    //
+    // 0.19.0, the pick-up itself (why it snapped):
+    //   - Pickup(false) on a man who is no longer in PickUpState STARTS a new pick-up: the game's
+    //     IdlePlayerState.Pickup ignores its flag (OverrideState(PickUpState)), and that state holds
+    //     him for up to 5 s with his rotation clamped. Every exit here now goes through
+    //     LeavePickupState, which (as the player's own pick-up, InteractionContextHelper) only acts
+    //     on a man actually in PickUpState.
+    //   - He looked at the item from his FEET (as BotItemTaker.LookAndTakeItem does), so his pitch
+    //     stayed ~17 deg and, stopped 1.45 m away, the reach went into the air while the item jumped
+    //     into his slot; PickUpState only lowers the body (PoseLevel / 3, smoothed by the game) when
+    //     the look is over 60 deg down. He now walks to ~0.7 m, eases his eyes down to the item from
+    //     his EYES (a 150 deg/s turn), and starts the pick-up only once the look has arrived (6 deg)
+    //     and his hands are idle (the game's SetInteractInHands plays the reach only then; aiming is
+    //     lowered first), within 1.5 s.
+    //   - After the transaction he straightens up (Recover, 0.6 s: no walk, the look eased back to
+    //     the man at 140 deg/s) before guarding resumes, instead of the look snapping back at once.
+    internal enum LootStage { Walk, Settle, Pickup, Recover }
 
     internal sealed class LootCandidate
     {
@@ -63,6 +96,19 @@ namespace HandsAreHigh
         internal bool Wanted;
         internal bool Demanded;         // 0.18.0: a weapon he made him drop
         internal int Tries;             // fetches started
+        // 0.19.0: tracking and what he knows (see the header).
+        internal LootItem Loose;
+        internal Vector3 Sample;
+        internal float StillSince = -1f;
+        internal bool Landed;
+        internal bool Seen;
+        internal Vector3 KnownAt;
+        internal float NextTrack;
+        internal float FirstAt;
+        internal float PathLen = -1f;
+        internal bool Distant;
+        internal int Postponed;
+        internal float NextWeigh;
     }
 
     internal sealed class LootJob
@@ -83,6 +129,11 @@ namespace HandsAreHigh
         internal float ProgressSince;
         internal bool Asked, Answered, Animated;
         internal float AskedAt;
+        // 0.19.0
+        internal bool Distant;
+        internal int Repaths;
+        internal float NextSeek;
+        internal float NextGlanceBack, GlanceBackUntil;
     }
 
     internal sealed class LootPlan
@@ -132,11 +183,15 @@ namespace HandsAreHigh
             if (!TryJob(captor, out LootJob j) || j.AfterRelease) return false;
             if (j.Stage == LootStage.Walk)
             {
+                // 0.19.0: walking off to a distant item is busy all the way (he looks where he goes).
+                if (j.Distant) { what = $"walking off to his {j.C.Name}"; return true; }
                 if ((j.Bot.Position - j.At).sqrMagnitude > 3f * 3f) return false;
                 what = $"walking over to his {j.C.Name}";
                 return true;
             }
-            what = j.Stage == LootStage.Pickup ? $"picking up his {j.C.Name}" : $"bending for his {j.C.Name}";
+            what = j.Stage == LootStage.Pickup ? $"picking up his {j.C.Name}"
+                 : j.Stage == LootStage.Recover ? $"straightening up with his {j.C.Name}"
+                 : $"bending for his {j.C.Name}";
             return true;
         }
 
@@ -144,6 +199,8 @@ namespace HandsAreHigh
 
         internal static void Clear()
         {
+            // Raid teardown / hot reload: nobody is left frozen in a pick-up.
+            foreach (LootJob j in Jobs.Values) if (j.Asked && !j.Answered) LeavePickupState(j.Bot);
             Jobs.Clear();
             Later.Clear();
             Claimed.Clear();
@@ -164,15 +221,30 @@ namespace HandsAreHigh
             if (!plan.Assessed || HasNew(s, plan))
             {
                 if (!Perception.TakeHeavy()) return false;   // a few slot/grid searches and a loot scan: a frame with budget
-                Assess(cs, s, plan, situation);
+                Assess(cs, s, plan, situation, now);
             }
-            else if (situation != plan.SituationAt)
+            else
             {
-                // The situation improved (he knelt, turned away, a squadmate covers him): the risk of
-                // what he wanted but didn't dare fetch is weighed again (never the appetite).
+                // 0.19.0: items still in the air (or not seen land) are tracked until they can be
+                // weighed; postponed ones are weighed again when the situation changes (he knelt,
+                // turned away, a squadmate covers him) or after LootReweighSeconds, a bounded number
+                // of times. Never the appetite again.
+                bool changed = situation != plan.SituationAt;
                 plan.SituationAt = situation;
                 foreach (LootCandidate c in plan.Items)
-                    if (c.Decision == "later") Reweigh(cs, s, c);
+                {
+                    if (c.Decision == "pending" || c.Decision == "unseen")
+                    {
+                        Track(cs.Bot, s, c, now);
+                        if (c.Landed && Perception.TakeHeavy()) Weigh(cs, s, c, now);
+                    }
+                    else if (c.Decision == "later" && (changed || (c.Distant && now >= c.NextWeigh)) && Perception.TakeHeavy())
+                    {
+                        c.Postponed++;
+                        Track(cs.Bot, s, c, now);
+                        Weigh(cs, s, c, now);
+                    }
+                }
             }
             LootCandidate next = Pick(plan.Items, "take");
             if (next != null) return Start(cs.Owner, s, next, afterRelease: false, now);
@@ -226,7 +298,7 @@ namespace HandsAreHigh
         private static bool IsDemanded(Item it) => Settings.CollectDemanded.Value && (it is Weapon || Arsenal.IsMelee(it));
 
         // Every item on the ground not weighed yet (all of them the first time).
-        private static void Assess(CaptorState cs, SurrenderState s, LootPlan plan, int situation)
+        private static void Assess(CaptorState cs, SurrenderState s, LootPlan plan, int situation, float now)
         {
             bool first = !plan.Assessed;
             plan.Assessed = true;
@@ -242,9 +314,11 @@ namespace HandsAreHigh
             {
                 if (it == null || Has(plan, it)) continue;
                 added++;
-                var c = new LootCandidate { Item = it, Name = Compliance.Name(it), Demanded = IsDemanded(it) };
+                var c = new LootCandidate { Item = it, Name = Compliance.Name(it), Demanded = IsDemanded(it), FirstAt = now };
                 plan.Items.Add(c);
                 LootItem loose = ScenarioOps.FindLoose(it);
+                c.Loose = loose;
+                if (loose != null) Track(cs.Bot, s, c, now);
                 if (loose == null) { c.Decision = "leave"; c.Why = $"not on the ground any more{WhoHas(it)}"; }
                 else if (Claimed.Contains(it) || ClaimedByOther(cs, it, loose, out _)) { ClaimedByOther(cs, it, loose, out string by); c.Decision = "leave"; c.Why = $"{by ?? "another captor"} is going for it"; }
                 else
@@ -257,7 +331,7 @@ namespace HandsAreHigh
                         c.Want = 1f;
                         c.Wanted = true;
                         c.Why = $"the weapon he made him drop ({c.Value:0} roubles, into his {c.Fit})";
-                        Reweigh(cs, s, c);
+                        Weigh(cs, s, c, now);
                     }
                     else if (n >= Settings.LootMaxItems.Value) { c.Decision = "leave"; c.Why = "has taken enough"; }
                     else
@@ -270,7 +344,7 @@ namespace HandsAreHigh
                         string valueTxt = $"{c.Value:0} roubles{(c.Gap ? $", fills his empty {c.Fit}" : $", into his {c.Fit}")}";
                         if (worth <= 0f) { c.Decision = "leave"; c.Why = $"{valueTxt}: not worth the walk"; }
                         else if (!c.Wanted) { c.Decision = "leave"; c.Why = $"{valueTxt}: want {c.Want:0.00}, roll {roll:0.00}: doesn't bother"; }
-                        else { n++; c.Why = $"{valueTxt}: want {c.Want:0.00}, roll {roll:0.00}"; Reweigh(cs, s, c); }
+                        else { n++; c.Why = $"{valueTxt}: want {c.Want:0.00}, roll {roll:0.00}"; Weigh(cs, s, c, now); }
                     }
                 }
                 log.Append($"\n    {c.Name}: {c.Decision} ({c.Why})");
@@ -294,12 +368,130 @@ namespace HandsAreHigh
             return "";
         }
 
+        // ---- 0.19.0: tracking, knowledge, distance ---------------------------------------------
+
+        private const float TrackGap = 0.4f;
+
+        // The item's LootItem, re-found only when the cached one no longer holds it.
+        private static LootItem LooseOf(LootCandidate c)
+        {
+            LootItem li = c.Loose;
+            if (li != null && li.isActiveAndEnabled && li.Item == c.Item) return li;
+            c.Loose = ScenarioOps.FindLoose(c.Item);
+            return c.Loose;
+        }
+
+        // Where it is (moving or landed) and whether he sees it there.
+        private static void Track(Player captor, SurrenderState s, LootCandidate c, float now)
+        {
+            if (now < c.NextTrack) return;
+            c.NextTrack = now + TrackGap;
+            LootItem li = LooseOf(c);
+            if (li == null) return;
+            Vector3 pos = li.transform.position;
+            if (c.StillSince < 0f || (pos - c.Sample).sqrMagnitude > 0.06f * 0.06f) { c.Sample = pos; c.StillSince = now; c.Landed = false; }
+            else if (now - c.StillSince >= 0.6f) c.Landed = true;
+            if (captor != null && Notices(captor, s, pos)) { c.Seen = true; c.KnownAt = pos; }
+        }
+
+        // He sees where it lies: within sight range, in front of him (65 deg of his look) with a
+        // clear line to it; or at the feet of the man he is looking at.
+        internal static bool Notices(Player captor, SurrenderState s, Vector3 pos)
+        {
+            Vector3 eye = Perception.Eye(captor);
+            float range = Settings.LootSightRange.Value;
+            if ((pos - eye).sqrMagnitude > range * range) return false;
+            if (s?.Bot != null && (pos - s.Bot.Position).sqrMagnitude < 2.5f * 2.5f &&
+                Vector3.Angle(captor.LookDirection, Perception.Chest(s.Bot) - eye) < 65f && Perception.LineClear(eye, Perception.Chest(s.Bot)))
+                return true;
+            Vector3 at = pos + Vector3.up * 0.15f;
+            return Vector3.Angle(captor.LookDirection, at - eye) < 65f && Perception.LineClear(eye, at);
+        }
+
+        // What to do about it now, from what he knows (see the header).
+        private static void Weigh(CaptorState cs, SurrenderState s, LootCandidate c, float now)
+        {
+            if (LooseOf(c) == null) { Decide(cs, c, "leave", "gone since"); return; }
+            if (!c.Landed) { Decide(cs, c, "pending", "still moving: waits for it to come to rest"); return; }
+            if (!c.Seen)
+            {
+                if (now - c.FirstAt > Settings.LootSearchSeconds.Value) Decide(cs, c, "leave", "never saw where it went");
+                else Decide(cs, c, "unseen", "didn't see where it came to rest: keeps an eye out for it");
+                return;
+            }
+            if (!Perception.PathTo(cs.Bot.Position, c.KnownAt, out Vector3[] corners, out string pw)) { Decide(cs, c, "leave", $"can't get to it ({pw})"); return; }
+            c.PathLen = Captors.PathLength(corners);
+            if (c.PathLen > Settings.LootMaxDistance.Value) { Decide(cs, c, "leave", $"a {c.PathLen:0} m walk: too far"); return; }
+            // Distant = a walk AWAY from the man: far to walk, and not by his feet (walking to a gun at
+            // his feet is walking up to him, eyes on him: the close-range risk rule covers that).
+            c.Distant = c.PathLen > Settings.LootNearDistance.Value && (s?.Bot == null || (c.KnownAt - s.Bot.Position).sqrMagnitude > 3f * 3f);
+            if (!c.Distant) Reweigh(cs, s, c);
+            else WeighDistant(cs, s, c, now);
+            if (c.Decision == "later")
+            {
+                c.NextWeigh = now + Settings.LootReweighSeconds.Value;
+                if (c.Postponed >= Settings.LootMaxPostpone.Value)
+                    Decide(cs, c, Settings.LootAfterRelease.Value ? "after release" : "leave",
+                        $"postponed {c.Postponed} time(s): keeps his hands on the man{(Settings.LootAfterRelease.Value ? ", fetches it after letting him go" : "")}");
+            }
+        }
+
+        private static void Decide(CaptorState cs, LootCandidate c, string decision, string why)
+        {
+            string before = c.Decision;
+            c.Decision = decision;
+            int cut = c.Why?.IndexOf("; now: ") ?? -1;
+            if (cut >= 0) c.Why = c.Why.Substring(0, cut);
+            c.Why += $"; now: {why}";
+            if (before != null && before != decision && Settings.LogLoot.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {c.Name}: {decision} ({why})");
+        }
+
+        // A distant item: worth the walk and the time away from the man?
+        private static void WeighDistant(CaptorState cs, SurrenderState s, LootCandidate c, float now)
+        {
+            string wait = null;
+            if (Restraint.OtherThreat(cs.Owner, s.Bot, out string threat)) wait = $"{threat} about";
+            else if (cs.Owner.Memory != null && cs.Owner.Memory.IsUnderFire) wait = "under fire";
+
+            float near = Settings.LootNearDistance.Value, far = Settings.LootMaxDistance.Value;
+            float walk = Settings.LootDistanceWeight.Value * Mathf.InverseLerp(near, far, c.PathLen);
+            bool covered = SquadCover(cs, s, out string who);
+            float away = 2f * c.PathLen / 1.4f + 2f;   // there and back at a walk, plus the pick-up
+            float custody;
+            var cw = new StringBuilder();
+            if (covered) { custody = 0.1f; cw.Append($"{who} covers him"); }
+            else
+            {
+                custody = Mathf.Clamp01(away / 25f);
+                cw.Append($"{away:0} s with nobody on him");
+                if (cs.SawKept != null) { custody *= 1.8f; cw.Append($", a {Compliance.Name(cs.SawKept)} still on him"); }
+                if (s.Kneel == KneelPhase.Down) { custody *= 0.6f; cw.Append(", kneeling"); }
+                if (s.TurnedAway) { custody *= 0.6f; cw.Append(", turned away"); }
+                if (s.HeadHands >= 1f) { custody *= 0.85f; cw.Append(", hands on his head"); }
+            }
+            float caution = Caution(cs.Bot) * (1f + 0.2f * NaturalSurrender.Experience(cs.Bot, cs.Owner));
+            float cost = (walk + custody) * caution;
+
+            float toMan = Vector3.Distance(c.KnownAt, s.Bot.Position);
+            float denial = c.Demanded ? (toMan <= Settings.ScrambleRange.Value ? 0.6f : 0.25f) : 0f;
+            float use = c.Gap ? 0.5f : Mathf.Lerp(0f, 0.45f, Mathf.Clamp01(c.Value / 100000f));
+            float appetite = c.Demanded ? 1f : Greed(cs.Bot, out _);
+            float benefit = (denial + use) * appetite;
+            string why = $"{c.PathLen:0} m walk, {toMan:0} m from him: benefit {benefit:0.00} (denial {denial:0.00}, use {use:0.00}, appetite x{appetite:0.00}) " +
+                         $"vs cost {cost:0.00} (walk {walk:0.00}, custody {custody:0.00}: {cw}; caution x{caution:0.00})";
+            if (wait != null) Decide(cs, c, "later", $"{why}; {wait}: not now");
+            else if (benefit >= cost) Decide(cs, c, "take", $"{why}: goes for it");
+            else if (!covered && custody > walk) Decide(cs, c, "later", $"{why}: would leave him unwatched; waits");
+            else Decide(cs, c, Settings.LootAfterRelease.Value ? "after release" : "leave", $"{why}: not worth leaving his post for");
+        }
+
         // Take now, later or leave, from the risk of walking over to it now.
         private static void Reweigh(CaptorState cs, SurrenderState s, LootCandidate c)
         {
-            LootItem loose = ScenarioOps.FindLoose(c.Item);
+            LootItem loose = LooseOf(c);
             if (loose == null) { c.Decision = "leave"; c.Why += "; gone since"; return; }
-            float risk = Risk(cs, s, loose.transform.position, out string riskWhy);
+            float risk = Risk(cs, s, c.Seen ? c.KnownAt : loose.transform.position, out string riskWhy);
             float accepts = c.Demanded ? Mathf.Max(Settings.LootRisk.Value, Settings.DemandedRisk.Value) : Settings.LootRisk.Value;
             string before = c.Decision;
             c.Decision = risk <= accepts ? "take" : Settings.LootAfterRelease.Value || c.Demanded ? "later" : "leave";
@@ -440,9 +632,11 @@ namespace HandsAreHigh
 
         private static bool Start(BotOwner o, SurrenderState s, LootCandidate c, bool afterRelease, float now)
         {
-            LootItem loose = ScenarioOps.FindLoose(c.Item);
+            LootItem loose = LooseOf(c);
             if (loose == null) { c.Decision = "leave"; c.Why += "; gone before he went"; return false; }
-            if (!Perception.PathTo(o.GetPlayer.Position, loose.transform.position, out _, out string pw))
+            // 0.19.0: to where he believes it is (he saw it there), not where it really is.
+            Vector3 at = c.Seen ? c.KnownAt : loose.transform.position;
+            if (!Perception.PathTo(o.GetPlayer.Position, at, out _, out string pw))
             {
                 c.Decision = "leave";
                 c.Why += $"; no way to it ({pw})";
@@ -451,7 +645,7 @@ namespace HandsAreHigh
             }
             var job = new LootJob
             {
-                Bot = o.GetPlayer, Owner = o, Name = Restraint.Name(o.GetPlayer), C = c, Loose = loose, At = loose.transform.position,
+                Bot = o.GetPlayer, Owner = o, Name = Restraint.Name(o.GetPlayer), C = c, Loose = loose, At = at, Distant = c.Distant,
                 Prisoner = s, PrisonerFrom = s.Bot != null ? s.Bot.Position : Vector3.zero, AfterRelease = afterRelease,
                 Stage = LootStage.Walk, Since = now, StageSince = now, ProgressFrom = o.GetPlayer.Position, ProgressSince = now
             };
@@ -461,27 +655,56 @@ namespace HandsAreHigh
             c.Tries++;
             LootingBotsAdapter.Hold(o, Settings.LootTimeLimit.Value + 5f);
             if (Settings.LogLoot.Value)
-                HandsAreHighPlugin.Log.LogInfo($"{job.Name}: goes to take {s.Name}'s {c.Name}{(c.Demanded ? " (the weapon he made him drop)" : "")} ({Vector3.Distance(job.Bot.Position, job.At):0.0} m{(afterRelease ? (s.Dead ? ", after the kill" : ", after letting him go") : $", {Vector3.Distance(job.At, job.PrisonerFrom):0.0} m from him")}{(c.Tries > 1 ? $", try {c.Tries}" : "")})");
+                HandsAreHighPlugin.Log.LogInfo($"{job.Name}: goes to take {s.Name}'s {c.Name}{(c.Demanded ? " (the weapon he made him drop)" : "")}{(c.Distant ? $" (distant: {c.PathLen:0} m walk)" : "")} ({Vector3.Distance(job.Bot.Position, job.At):0.0} m{(afterRelease ? (s.Dead ? ", after the kill" : ", after letting him go") : $", {Vector3.Distance(job.At, job.PrisonerFrom):0.0} m from him")}{(c.Tries > 1 ? $", try {c.Tries}" : "")})");
             return true;
         }
 
         private static void TickJob(LootJob j, float now, ThreatLevel t)
         {
+            // 0.19.0: the item is his; straightening up ends early on any interruption.
+            if (j.Stage == LootStage.Recover)
+            {
+                if (now - j.StageSince >= RecoverSeconds || t != ThreatLevel.None || !Perception.Alive(j.Bot)) End(j, null, failed: false);
+                return;
+            }
             string stop = null;
             if (!Perception.Alive(j.Bot) || j.Owner == null || j.Owner.IsDead) stop = "he is down";
             else if (t != ThreatLevel.None) stop = "something else needs his attention";
             else if (!j.AfterRelease && (j.Prisoner == null || j.Prisoner.Dead || j.Prisoner.Phase != Phase.HandsUp)) stop = "the prisoner stopped complying";
-            else if (!j.AfterRelease && j.Prisoner.Bot != null && (j.Prisoner.Bot.Position - j.PrisonerFrom).sqrMagnitude > 1.5f * 1.5f) stop = "the prisoner moved";
+            // 0.19.0: only when he sees it (a man walking off while the captor looks the other way
+            // is the prisoner's opening; Captors.Check notices resistance by sight in its own time).
+            else if (!j.AfterRelease && j.Prisoner.Bot != null && (j.Prisoner.Bot.Position - j.PrisonerFrom).sqrMagnitude > 1.5f * 1.5f &&
+                     Perception.Covering(j.Bot, j.Prisoner.Bot, 70f)) stop = "the prisoner moved";
             // Taken by anyone: its LootItem is destroyed (or recycled for another item).
             else if (!j.Asked && (j.Loose == null || !j.Loose.isActiveAndEnabled || j.Loose.Item != j.C.Item)) stop = $"someone else took it{WhoHas(j.C.Item)}";
-            else if (now - j.Since > Settings.LootTimeLimit.Value) stop = "took too long";
+            // A distant walk gets its walking time on top (1 s per metre of path).
+            else if (now - j.Since > Settings.LootTimeLimit.Value + (j.Distant ? Mathf.Max(0f, j.C.PathLen) : 0f)) stop = "took too long";
             else if (j.Stage == LootStage.Walk)
             {
                 if ((j.Bot.Position - j.ProgressFrom).sqrMagnitude >= 0.25f) { j.ProgressFrom = j.Bot.Position; j.ProgressSince = now; }
                 else if (now - j.ProgressSince > 2.5f) stop = "stuck on the way";
+                // 0.19.0: re-acquired by sight on the way (it was kicked, or he only had a glimpse):
+                // the new spot replaces the old, a few times at most.
+                LootItem li = j.Loose != null && j.Loose.isActiveAndEnabled && j.Loose.Item == j.C.Item ? j.Loose : null;
+                if (stop == null && li != null && now >= j.NextSeek)
+                {
+                    j.NextSeek = now + 0.5f;
+                    Vector3 real = li.transform.position;
+                    if ((real - j.At).sqrMagnitude > 1f && Notices(j.Bot, j.Prisoner, real))
+                    {
+                        if (++j.Repaths > 3) stop = "it keeps moving";
+                        else { j.At = real; j.C.KnownAt = real; j.PathIssued = false; }
+                    }
+                }
                 Vector3 d = j.At - j.Bot.Position; d.y = 0f;
-                // Within the game's own reach for a bot pick-up (BotItemTaker.DIST_TO_TAKE 1.5 m).
-                if (stop == null && d.magnitude <= 1.45f) { j.Stage = LootStage.Settle; j.StageSince = now; }
+                float dist = d.magnitude;
+                // 0.19.0: he walks to ~0.7 m (in reach for a look over 60 deg down: the game's crouch
+                // to the floor); a path that ends short of that settles once he has come to a stop.
+                if (stop == null && (dist <= 0.95f || (dist <= 1.45f && j.Bot.Velocity.sqrMagnitude < 0.2f * 0.2f && now - j.StageSince > 1f)))
+                {
+                    if (li == null || (li.transform.position - j.At).sqrMagnitude > 1.6f * 1.6f) stop = "it isn't where he saw it";
+                    else { j.Stage = LootStage.Settle; j.StageSince = now; }
+                }
             }
             else if (j.Stage == LootStage.Pickup && j.Asked && !j.Answered && now - j.AskedAt > 4f)
             {
@@ -494,6 +717,7 @@ namespace HandsAreHigh
             // situation changes (twice at most), never retried at once. Anything else (gone, stuck,
             // too long, no room) ends it for good.
             bool interrupted = stop == "something else needs his attention" || stop == "the prisoner moved" || stop == "the prisoner stopped complying";
+            if (stop == "it isn't where he saw it") j.C.Seen = false;   // what he knew is wrong now
             End(j, stop, failed: true);   // always the full cleanup (a pick-up animation cut short)
             if (interrupted && j.C.Tries < 2)
             {
@@ -512,6 +736,21 @@ namespace HandsAreHigh
                 if (now - j.StageSince > 1.5f) { j.Stage = LootStage.Pickup; j.Asked = true; j.AskedAt = now - 5f; }   // never idle: the fallback next check
                 return;
             }
+            // 0.19.0: the look has arrived on the item and his hands are free for the reach (the
+            // game's SetInteractInHands skips the hands' TakeItem unless FirearmsAnimator.IsIdling);
+            // aiming is lowered first. At most 1.5 s of waiting, then he picks it up as he is.
+            Player bot = j.Bot;
+            if (bot.HandsController is Player.FirearmController fc && fc.IsAiming) { try { fc.SetAim(false); } catch { } }
+            bool late = now - j.StageSince > 1.5f;
+            if (!late)
+            {
+                Vector3 want = PickupLook(bot, j.At);
+                if (Vector3.Angle(bot.LookDirection, want) > 6f) return;
+                FirearmsAnimator fa = bot.HandsController?.FirearmsAnimator;
+                if (fa != null && !fa.IsIdling()) return;
+            }
+            // Still lying there (taken in the last quarter second: TickJob's check runs 4x a second).
+            if (j.Loose == null || !j.Loose.isActiveAndEnabled || j.Loose.Item != j.C.Item) { End(j, $"someone else took it{WhoHas(j.C.Item)}", failed: true); return; }
             j.Stage = LootStage.Pickup;
             j.StageSince = now;
             Player p = j.Bot;
@@ -528,11 +767,28 @@ namespace HandsAreHigh
             {
                 p.CurrentManagedState.Pickup(true, () =>
                 {
-                    if (!Jobs.TryGetValue(p, out LootJob cur) || cur != j || j.Answered) { try { p.CurrentManagedState?.Pickup(false, null); } catch { } return; }
+                    if (!Jobs.TryGetValue(p, out LootJob cur) || cur != j || j.Answered) { LeavePickupState(p); return; }
                     Run(j, move, lastOwner);
                 });
             }
             catch (System.Exception e) { HandsAreHighPlugin.Report("captor pick-up", e); Fallback(j); }
+        }
+
+        // Where his eyes go for the pick-up: from his eyes to the item (not from his feet).
+        internal static Vector3 PickupLook(Player bot, Vector3 item)
+        {
+            Vector3 v = item + Vector3.up * 0.05f - Perception.Eye(bot);
+            return v.sqrMagnitude > 1e-4f ? v.normalized : bot.LookDirection;
+        }
+
+        internal const float RecoverSeconds = 0.6f;
+
+        // The game's own rule (InteractionContextHelper, the player's pick-up): only a man still in
+        // the pick-up state is taken out of it. IdlePlayerState.Pickup ignores its flag and STARTS a
+        // pick-up, so Pickup(false) on anyone else replayed the animation and held him up to 5 s.
+        internal static void LeavePickupState(Player p)
+        {
+            try { if (p != null && p.CurrentManagedState is PickUpState ps) ps.Pickup(false, null); } catch { }
         }
 
         private static void Fallback(LootJob j)
@@ -541,7 +797,7 @@ namespace HandsAreHigh
             j.Animated = false;
             Player p = j.Bot;
             InventoryController ic = p.InventoryController;
-            try { p.CurrentManagedState?.Pickup(false, null); } catch { }
+            LeavePickupState(p);
             var op = ItemManipulator.QuickFindAppropriatePlace(j.C.Item, ic, new CompoundItem[] { ic.Inventory.Equipment }, ItemManipulator.EMoveItemOrder.PickUp, simulate: true);
             if (op.Failed) { End(j, $"no place for it ({op.Error})", failed: true); return; }
             if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo($"{j.Name}: no pick-up animation (state {p.CurrentManagedState?.GetType().Name}); takes the {j.C.Name} directly");
@@ -553,6 +809,14 @@ namespace HandsAreHigh
         {
             Player p = j.Bot;
             j.Answered = true;
+            // 0.19.0: as the player's own pick-up (InteractionContextHelper): the move was planned
+            // 0.6 s ago; if the item has left that place since (someone took it), it is refused.
+            if (move is IItemOperationResult planned && planned.From != null && !planned.From.Equals(j.C.Item.CurrentAddress))
+            {
+                LeavePickupState(p);
+                End(j, "someone else took it during the pick-up", failed: true);
+                return;
+            }
             try
             {
                 if (move is MoveResult && lastOwner != null && lastOwner.ProfileId != p.ProfileId)
@@ -566,7 +830,7 @@ namespace HandsAreHigh
                 {
                     bool ok = result != null && result.Succeed;
                     try { if (ok) p.UpdateInteractionCast(); } catch { }
-                    try { p.CurrentManagedState?.Pickup(false, null); } catch { }
+                    LeavePickupState(p);
                     if (Jobs.TryGetValue(p, out LootJob cur) && cur == j) Finish(j, ok, ok ? null : (result?.Error?.ToString() ?? "refused"));
                     else if (Settings.LogLoot.Value)
                         HandsAreHighPlugin.Log.LogInfo($"{j.Name}: the {j.C.Name} transaction finished after the fetch had ended ({(ok ? "it is his now" : "refused")})");
@@ -592,20 +856,24 @@ namespace HandsAreHigh
             }
             catch { }
             j.C.Decision = "taken";
+            Claimed.Remove(j.C.Item);
             if (Settings.LogLoot.Value)
-                HandsAreHighPlugin.Log.LogInfo($"{j.Name}: took {j.Prisoner?.Name}'s {j.C.Name} into {where} ({j.C.Value:0} roubles; {(j.Animated ? "pick-up animation" : "no animation")}; {Time.time - j.Since:0.0} s)");
-            End(j, null, failed: false);
+                HandsAreHighPlugin.Log.LogInfo($"{j.Name}: took {j.Prisoner?.Name}'s {j.C.Name} into {where} ({j.C.Value:0} roubles; {(j.Animated ? "pick-up animation" : "no animation")}; {Time.time - j.Since:0.0} s); straightens up");
+            // 0.19.0: a moment to straighten up and look back before he guards (or moves on) again.
+            j.Stage = LootStage.Recover;
+            j.StageSince = Time.time;
         }
 
         private static void End(LootJob j, string why, bool failed)
         {
+            if (j.Stage == LootStage.Recover) failed = false;   // already his: nothing failed
             if (Jobs.TryGetValue(j.Bot, out LootJob cur) && cur == j) Jobs.Remove(j.Bot);
             Claimed.Remove(j.C.Item);
             if (failed)
             {
                 j.C.Decision = "failed";
                 j.C.Why += $"; stopped: {why}";
-                try { if (j.Asked && !j.Answered) j.Bot.CurrentManagedState?.Pickup(false, null); } catch { }
+                if (j.Asked && !j.Answered) LeavePickupState(j.Bot);
                 if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo($"{j.Name}: stops going for the {j.C.Name}: {why}");
             }
         }
@@ -634,7 +902,8 @@ namespace HandsAreHigh
             if (bot == null) return;
             var d = new Deferred { Owner = o, Ex = ex, Since = Time.time, NextAt = Time.time + 1f };
             foreach (LootCandidate c in plan.Items)
-                if (c.Wanted && (c.Decision == "later" || c.Decision == "take" || (c.Decision == "failed" && (c.Why.Contains("let him go first") || c.Why.Contains("custody over")))))
+                if (c.Wanted && (c.Decision == "later" || c.Decision == "take" || c.Decision == "after release" ||
+                                 (c.Decision == "failed" && (c.Why.Contains("let him go first") || c.Why.Contains("custody over")))))
                 { c.Decision = "later"; d.Items.Add(c); }
             if (d.Items.Count == 0) return;
             Later[bot] = d;
@@ -674,12 +943,14 @@ namespace HandsAreHigh
                     if (!away) continue;   // waits for the man to be well away
                     LootCandidate next = Pick(d.Items, "later");
                     if (next == null) { Later.Remove(p); continue; }
-                    LootItem li = ScenarioOps.FindLoose(next.Item);
-                    if (li == null || (li.transform.position - p.Position).sqrMagnitude > 25f * 25f)
+                    LootItem li = LooseOf(next);
+                    if (li != null && !next.Seen) Track(p, null, next, now);   // what he can see of it from here
+                    float far = Settings.LootMaxDistance.Value;
+                    if (li == null || !next.Seen || (next.KnownAt - p.Position).sqrMagnitude > far * far)
                     {
                         next.Decision = "leave";
-                        next.Why += li == null ? "; gone before he could fetch it" : "; he has moved on (over 25 m from it)";
-                        if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(p)}: leaves {d.Ex?.Name}'s {next.Name} ({(li == null ? "gone" : "he has moved on")})");
+                        next.Why += li == null ? "; gone before he could fetch it" : !next.Seen ? "; he doesn't know where it is" : $"; he has moved on (over {far:0} m from it)";
+                        if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(p)}: leaves {d.Ex?.Name}'s {next.Name} ({(li == null ? "gone" : !next.Seen ? "doesn't know where it is" : "he has moved on")})");
                         continue;
                     }
                     Start(d.Owner, d.Ex, next, afterRelease: true, now);

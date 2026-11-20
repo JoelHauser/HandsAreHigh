@@ -400,7 +400,6 @@ namespace HandsAreHigh
         // between each participant and the one he faces (enforced where the preset asks).
         private static string Validate(Scenario sc)
         {
-            sc.Validated = true;
             var notes = new List<string>();
             foreach (Participant p in sc.People)
             {
@@ -492,7 +491,6 @@ namespace HandsAreHigh
         {
             if (!Running.Contains(sc)) return;
             sc.Cancelled = true;
-            sc.EndWhy = why;
             sc.Events.Clear();
             int staged = ScenarioStaging.Release(sc, "cleanup");
             foreach (Participant p in sc.People)

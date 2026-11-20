@@ -22,7 +22,6 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> HandsOnHeadUp;
         internal static ConfigEntry<float> HandsOnHeadYaw;
         internal static ConfigEntry<float> TurnSpeed;
-        internal static ConfigEntry<float> TurnLead;
         internal static ConfigEntry<bool> TurnFromKneeling;
         internal static ConfigEntry<bool> TurnSteps;
         internal static ConfigEntry<float> CaptorHandsOnHeadChance;
@@ -83,8 +82,6 @@ namespace HandsAreHigh
             HandsOnHeadYaw = c.Bind(HandsSec, "Head turn max with hands on head (deg)", 50f,
                 Range("Standing with his hands on his head (kneeling uses Kneeling head turn max): the hands go round with the head.", 15f, 80f));
             TurnSpeed = c.Bind(HandsSec, "Turn speed (deg per s)", 110f, Range("How fast he turns round on his feet (eased in and out).", 40f, 300f));
-            TurnLead = c.Bind(HandsSec, "Turn led by the upper body (deg)", 25f,
-                Range("While he turns his look runs this far ahead of his hips (the game's animator turns the upper body towards the look); 0: hips and look together.", 0f, 40f));
             TurnSteps = c.Bind(HandsSec, "Turn with stepping feet", true,
                 "A standing prisoner who must turn more than 70 deg (Turn around, facing a captor who walked round him, turning before he kneels) turns with the game's own standing-turn animation (the feet step, the clip turns him). Smaller turns are a short pivot. Off: always the pivot.");
             TurnFromKneeling = c.Bind(HandsSec, "Turn around from his knees", true,

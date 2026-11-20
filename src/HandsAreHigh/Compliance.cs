@@ -48,7 +48,6 @@ namespace HandsAreHigh
             PruneKept(s);
             bool repeat = s.KeptBack.Count > 0 && s.Demands > 0;
             s.Demands++;
-            s.LastDemandAt = now;
             ComplianceChoice forced = Forced.TryGetValue(s.Bot, out ComplianceChoice f) ? f : Settings.ComplianceTest.Value;
             string who = human ? "you" : Restraint.Name(by);
             var log = new StringBuilder($"{s.Name}: told to drop his weapons by {who} (demand {s.Demands}{(repeat ? ", again: he kept something back" : "")}; covers {Covers}; he carries {Describe(all)}): ");
@@ -253,7 +252,6 @@ namespace HandsAreHigh
 
         private static void Done(SurrenderState s, string line)
         {
-            s.ComplianceWhy = line;
             if (Settings.LogDecisions.Value || Scenarios.Watching(s.Bot)) HandsAreHighPlugin.Log.LogInfo(line);
         }
 

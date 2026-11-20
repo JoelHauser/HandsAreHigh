@@ -388,7 +388,7 @@ namespace HandsAreHigh
                     if (s.KneelSpotMoving) { SpotWalk(s, now); break; }
                     if (s.KneelSearchI >= 0) { SearchSpot(s); break; }
                     // 0.17.0: the turn to KneelFaceDir is TurnDriver's (Facing.Update), with the
-                    // game's stepping turn for a big one; TurnRoot's pivot is no longer used.
+                    // game's stepping turn for a big one (0.19.0: the old TurnRoot pivot removed).
                     TryBegin(s, now);
                     break;
 
@@ -783,7 +783,6 @@ namespace HandsAreHigh
         // look; so the layer keeps his look on that direction (PreTurn) and the root is turned here
         // at a walking-turn pace (MovementContext.ApplyRotation, the call the game's own states use
         // for the root). Standing, hands up, not moving: a turn on the spot, bounded in time.
-        private const float FaceTurnSpeed = 150f;   // deg/s
         private const float FaceTolerance = 10f;
         private const float FaceTurnLimit = 6f;     // s: then he kneels the way he faces (a step turn takes ~1 s per 90 deg)
 
@@ -799,19 +798,6 @@ namespace HandsAreHigh
             Vector3 f = s.Bot.Transform.Original.forward; f.y = 0f;
             if (f.sqrMagnitude < 1e-4f) return 0f;
             return Vector3.SignedAngle(f, s.KneelFaceDir, Vector3.up);
-        }
-
-        private static void TurnRoot(SurrenderState s, float dt, float now)
-        {
-            if (!PreTurn(s, out _) || !s.ArmsUp || s.Progress < 1f || s.Moving) return;
-            if (s.KneelFaceSince >= 0f && now - s.KneelFaceSince > FaceTurnLimit) return;
-            float off = FaceOff(s);
-            if (Mathf.Abs(off) <= 1f) return;
-            if (s.KneelFaceSince < 0f) s.KneelFaceSince = now;
-            MovementContext mc = s.Bot.MovementContext;
-            if (mc == null) return;
-            float step = Mathf.Sign(off) * Mathf.Min(Mathf.Abs(off), FaceTurnSpeed * dt);
-            mc.ApplyRotation(Quaternion.AngleAxis(step, Vector3.up) * mc.TransformRotation);
         }
 
         private static bool FacingSettled(SurrenderState s, float now)

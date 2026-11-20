@@ -141,7 +141,6 @@ namespace HandsAreHigh
         internal readonly Dictionary<string, BotZone> Zones = new Dictionary<string, BotZone>();
         internal bool KeepTruce;            // the truce between participants lasts the whole scenario
         internal float CancelAt;            // test: cleaned up mid-spawn at this time (0: never)
-        internal bool Validated;
         internal readonly List<KeyValuePair<string, string>> KeptTruces = new List<KeyValuePair<string, string>>();   // or only these pairs (both ways)
         internal bool TruceLifted;
         internal readonly List<string> Forced = new List<string>();
@@ -153,7 +152,6 @@ namespace HandsAreHigh
         internal readonly List<string> Overrides = new List<string>();   // temporary test overrides in force
         internal int StepIndex;
         internal bool Cancelled;
-        internal string EndWhy;
 
         internal string Title => $"#{Id} {Preset.Name}";
 

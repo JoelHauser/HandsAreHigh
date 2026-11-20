@@ -242,6 +242,18 @@ namespace HandsAreHigh
             bool hit = s.WasHit;
             s.WasHit = false;
             if (hit) Gestures.Cancel(s, "hit");
+            // 0.19.0: hit in the first moments after giving up, by a shooter who can't have seen the
+            // hands go up yet (a natural surrender happens mid-firefight: the next rounds are already
+            // on their way). Running from that made almost every natural surrender to a player look
+            // like an ordinary retreat. He stays down and pleads; a later hit still makes him run.
+            if (hit && s.TStart > 0f && Time.realtimeSinceStartup - s.TStart < Settings.HitGrace.Value)
+            {
+                SurrenderStats.HitGrace();
+                if (Settings.LogDecisions.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: hit {Time.realtimeSinceStartup - s.TStart:0.0} s after giving up (by {Restraint.Name(s.LastHitBy)}, who can't have seen his hands go up yet): stays down");
+                Voice.Say(s, VoiceEvent.Hurt);
+                hit = false;
+            }
             if (hit && Settings.BoltWhenShot.Value)
             {
                 Voice.Say(s, VoiceEvent.Hurt);
@@ -298,7 +310,6 @@ namespace HandsAreHigh
             bool inView = seen && Presence.InView(s, Perception.Eye(captor));
             if (inView != s.CaptorInView)
             {
-                s.CaptorOutOfViewSince = inView ? -1f : now;
                 if (Settings.LogDecisions.Value || Settings.LogAttention.Value)
                     HandsAreHighPlugin.Log.LogInfo(inView
                         ? $"{s.Name}: has {Restraint.Name(captor)} in view again"
@@ -499,8 +510,9 @@ namespace HandsAreHigh
             if (Arsenal.StillThere(s.DroppedWeapon, s.DropPosition)) return;
             s.GunGone = true;
             bool you = captor != null && s.CaptorSeen && Vector3.Distance(captor.Position, s.DropPosition) < 3f;
+            // 0.19.0: "you" was printed for bot captors too.
             if (Settings.LogDecisions.Value)
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: sees his {s.DroppedWeapon.ShortName.Localized()} is gone{(you ? " (you took it)" : "")}");
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: sees his {s.DroppedWeapon.ShortName.Localized()} is gone{(you ? (captor.IsAI ? $" ({Restraint.Name(captor)} took it)" : " (you took it)") : "")}");
             if (you) Voice.Reply(s, VoiceEvent.Plead);
             if (!s.LastCovered)
             {
@@ -1468,7 +1480,7 @@ namespace HandsAreHigh
                 }
             }
             s.HidCount = 0;
-            SurrenderRegistry.Surrender(Me, aiming, s.Scrambling ? "caught mid-scramble" : "caught again");
+            SurrenderRegistry.Surrender(Me, aiming, s.Scrambling ? "caught mid-scramble" : "caught again", source: SurrenderSource.Recapture);
             return true;
         }
 

@@ -57,6 +57,7 @@ namespace HandsAreHigh
         private const float MinEventGap = 0.1f;
         private const float SameBulletWindow = 0.5f;
         private const float Cap = 40f;
+        private const float HitWeight = 2f;
         private static readonly List<Player> Candidates = new List<Player>();
 
         internal static void OnShot(Player shooter, Vector3 from, Vector3 dir)
@@ -138,7 +139,9 @@ namespace HandsAreHigh
             if (!NaturalSurrender.Eligible(bot)) return;
             BotHistory h = SurrenderRegistry.HistoryOf(bot);
             if (Time.time - h.NearMissAt < SameBulletWindow) return;   // the near miss already counted it
-            Record(bot, 1f, nearMiss: false, null, 0f);
+            // 0.19.0: a hit weighs two near misses (one hit was 1/6 of full suppression: below the
+            // 0.2 a reason needs, so the first hit of a fight never counted as being under fire).
+            Record(bot, HitWeight, nearMiss: false, null, 0f);
         }
 
         // Debug scenarios only: a synthetic fire event (no shot, no near-miss geometry). It tests

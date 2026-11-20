@@ -6,6 +6,126 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.19.0 (2026-11-20): natural surrender made reachable in ordinary fights, natural-pipeline
+diagnostics, captor pick-up fixed at its source, deliberate decisions about distant dropped weapons,
+SAIN kill steering actually applied, dead code removed. Release packed (dist/HandsAreHigh-0.19.0.zip,
+DLL only) and installed in H:\SPT4.1.X (0.18.0 DLL backed up in that session's scratchpad).
+Committed and pushed to main (no tag/release). NEVER RUN IN GAME: no natural surrender and no pick-up animation has been seen yet.**
+
+Why natural surrender never happened (evidence):
+- The only natural-raid log on disk is 0.3.0's (scratchpad hah-log3): rolls ran (the pipeline
+  worked) but every chance was 0.011-0.046 per check, even a Scav at pressure 0.99 (out of ammo, leg
+  destroyed, pinned, 3 of 5 squad dead): 0.046. Every log since 0.4.0 is scenarios only (the 13:24
+  0.18.0 log: 0 natural bots).
+- tools/natsim (a model of NaturalSurrender against ordinary firefights): with 0.18.0's defaults a
+  Scav gave up in 3.5% of fast fights (the player's usual 3-15 s, 2 hits/s) and a PMC in 0.5%; 12% /
+  4% even in drawn-out ones. Causes, all in the timing and scaling, none in registration: one hit was
+  1/6 of full suppression (below the 0.2 a reason needs); injury counted only below 35% health (the
+  man is usually dead first); a destroyed leg + bleeding was 0.45 + nothing (worst, not sum), so the
+  Scav threshold 0.4 x weight 0.45 was out of reach; the re-check after a hit came 0.5 s later and at
+  most every 1.5 s (the second hit of a burst got no check); checks every 5 s; Scav levels (rolled
+  around the player's, 48-78 in that log) counted as experience (x0.79 on every roll).
+- Everything else traced and verified equal for natural and scenario bots: brains (Assault,
+  CursAssault, PmcBear, PmcUsec: decompile ShortName strings; SPT pmc.json/bot.json brain types are
+  pmcBEAR/pmcUSEC/assault), role classes, registration (one SurrenderRegistry.Surrender path),
+  SAIN mirrors its target into BotMemory.GoalEnemy (setGoalEnemy), BotsGroup.IsEnemy compares by Id
+  (so bot-vs-bot isn't blocked by the BotOwner key), no distance gate, cooldown only after a surrender.
+- Two things that hid a surrender that did happen: a hit in the first moments (the shooter can't have
+  seen the hands yet) made him bolt at once; the surrender shout was dropped when his speaker was busy
+  with combat callouts ("no chance to speak within 2 s", 13:24 log).
+
+Changes (natural):
+- Defaults: Check every 5 -> 3 s; Recheck after a hit 0.5 -> 0.25 s (gap 1.5 -> 0.8 s); Hurt below
+  0.35 -> 0.6; Head or thorax below 0.4 -> 0.6; PMC pressure needed 0.55 -> 0.5. A hit counts as two
+  near misses. Injury: destroyed limb 0.55 (was 0.45), stomach 0.65 (0.6), heavy/light bleeding
+  0.55/0.3 (0.5/0.25). Scav experience = difficulty only. natsim with these: Scav 22% / PMC 3% of
+  fast fights (40% / 10% drawn-out); Scavs ~7x PMCs.
+- Migration: Settings.V19.cs, hidden "Config version (set by the mod)" (14. Debug): a value still at
+  its 0.18.0 default moves to the new one once; values set by hand are kept (tested on a copy of
+  Joel's cfg: all five moved, a hand-set 7 s kept, second load no-op). TurnLead (unused since 0.17.0)
+  is no longer bound; its line stays orphaned in the cfg.
+- Hits ignored right after giving up (06. While held, 2 s): he stays down and pleads.
+- Voice: the Surrender line overwrites a busy speaker after 0.4 s (BaseSpeaker.Play with importance
+  1000: the game replaces the current phrase when the new one's importance is higher; verified).
+- SurrenderStats.cs: per raid, every 2 min while something changed and at raid end: bots checked,
+  checks stopped per gate (Role, Teammate, Cooldown, NotActive, NoTarget, TargetNotLiving, BotTarget,
+  NotPerceived, WeaponChange, TooFewReasons, LowPressure), rolls / gave up (Scav, PMC), activated,
+  activation failures, hits ignored in the grace; surrenders started / acknowledged (bot custody) by
+  source: Natural, Demand, Recapture, ScenarioNatural, DebugKey, Scenario. Activation line says
+  NATURAL. Only Natural and Demand are raid evidence.
+
+Captor pick-up (why it snapped; CaptorLoot header):
+- IdlePlayerState.Pickup IGNORES its flag and enters PickUpState; only PickUpState.Pickup exits. Our
+  Pickup(false) calls (End, Fallback, stale callback, transaction callback) on a man no longer in
+  PickUpState started a second, action-less pick-up holding him up to 5 s with rotation clamped.
+  Every exit is now LeavePickupState (only `is PickUpState`), as the player's own pick-up does
+  (InteractionContextHelper). Raid teardown leaves the state too.
+- He looked at the item from his FEET (BotItemTaker.LookAndTakeItem does too): pitch ~17 deg, and he
+  stopped 1.45 m away: the reach went into the air and the item jumped into his slot. PickUpState.Enter
+  only lowers the body (PoseLevel / 3, smoothed by SmoothPoseLevel) with the look over 60 deg down
+  (pitch positive = down: MovementContext look = Euler(pitch, yaw)). Now: path to ~0.7 m, slowing for
+  the last 2 m; the look eased down from his EYES at 150 deg/s; Pickup(true) once the look is within 6
+  deg and FirearmsAnimator.IsIdling (SetInteractInHands skips the reach otherwise; aiming lowered),
+  1.5 s at most. Then Recover (0.6 s): no walking, the look eased back to the man (140 deg/s).
+- The item must still lie there right before the pick-up, and the planned move is refused if the item
+  left its address since (IItemOperationResult.From, as the player's pick-up checks).
+
+Distant weapons (CaptorLoot Track/Notices/Weigh/WeighDistant; 21. Captors taking surrendered gear):
+- Each item is tracked (its real LootItem, sampled every 0.4 s): no decision while it moves. He knows
+  where it lies only if he saw it there (in front of him, 65 deg, clear line, within "Sees where
+  things land within" 40 m) or at the feet of the man he watches; unseen: kept an eye out for
+  ("Searches for an item he never saw land for" 12 s), then forgotten. He walks to where he believes it
+  is, re-acquires it by sight on the way (3 re-paths), stops if it isn't there.
+- Close (walking distance <= "Close by within" 4 m) or at the man's feet: the 0.16-0.18 risk rule.
+  Distant (a walk away from him, <= "Never walks farther than" 30 m): benefit = (denial 0.6 if within
+  scramble range of the man, else 0.25, demanded weapons only) + (0.5 fills a gap, else value up to
+  0.45) x appetite; cost = ("Distance weighs" x walk 0..1 + custody: time unwatched / 25 s, x1.8 a
+  weapon still on him, x0.6 kneeling, x0.6 turned away, x0.85 hands on head; 0.1 if a squadmate covers)
+  x caution x experience. take / postpone (another enemy about, under fire, or custody is the larger
+  cost: weighed again every 4 s or on a situation change, at most 3 times, Turn around may be ordered)
+  / after release / leave. Table in this session: gun 6-8 m away: take; 12 m standing: postpone, kneeling
+  + turned: take; 20 m covered by a squadmate: take; with a pistol still on him: postpone.
+- On a distant walk he looks where he goes, a look back every 2.2-3.5 s (0.6-1 s): a real opening
+  (Reactions.Covered reads his LookDirection; Busy "walking off to"). The job stops for the man moving
+  only when the captor sees it (Perception.Covering 70 deg); Captors.Check notices resistance by sight.
+  Time limit + 1 s per metre of a distant walk.
+
+Also: SAIN kill steering used SAIN's PRIVATE GoalEnemy setter now (0.18.0 asked for a public one and
+never steered: "NO: GoalEnemy has no public setter" in the 13:24 log). "sees his X is gone (you took
+it)" printed "you" for bot captors.
+
+Dead code removed (references checked first, incl. reflection/Harmony/config): Kneel.TurnRoot and
+FaceTurnSpeed (no caller since 0.17.0), TurnLead config entry, write-only fields
+CaptorOutOfViewSince, ComplianceWhy, DrawOk, LastDemandAt, OrderIssuedAt (SurrenderState), EndWhy,
+Validated (Scenario), ScenarioPreset.ShieldDefault (26 sites; the shield param carries the default).
+Kept: SurrenderLayer.BuildDebugText (BigBrain), Scenarios LogEvent (BepInEx listener).
+
+Tests done: Release build 0 warnings; Settings.Bind on a copy of Joel's cfg through the built DLL
+(caught and fixed an apostrophe in a new key that would have killed Awake); natsim; distant-decision
+table. NOT done: anything in a raid.
+
+### In-game test plan (0.19.0)
+Settings for the natural test: Verbose logs OFF (the summary lines are enough; ON for every check),
+Log decisions on, Log gear decisions on, Scenario tools may stay on but launch nothing.
+1. Natural, you vs Scavs: an ordinary raid (Customs/Woods/Shoreline). Fight Scavs normally; also
+   shoot legs/arms, and keep a Scav behind cover under sustained fire for a few seconds. Every 2 min:
+   `Natural surrender, so far this raid: N bot(s) checked ...; rolls N (Scav N, PMC N), gave up N`.
+   A natural surrender: `-> surrenders`, `surrender activated (NATURAL ...)`, he shouts (Stop/Hold
+   fire), drops his gun; hits in the first 2 s: `stays down`. Walk up: `surrender acknowledged`.
+   rolls 0 with many checks: the gate counts say where they stop (NotPerceived / TooFewReasons /
+   LowPressure); send the summary lines.
+2. Natural, bot vs bot: watch PMC-vs-Scav fights (or a PMC squad clearing Scavs): `vs X (bot ...)`
+   rolls, `surrenders to him`, `takes him prisoner` / `spares him`; summary `Natural n/m (k)`.
+3. Pick-up (scenario "Weapon pickup opportunity", or any capture): the captor walks right up,
+   stops, his eyes go down, he crouches to the floor, the gun goes into his slot, he straightens up and
+   looks back at the prisoner. Log `took ... (pick-up animation; N s); straightens up`. Interruptions
+   (preset options): no second pick-up animation, no frozen captor.
+4. Distant: a prisoner's gun lying 8-25 m from him (e.g. let him walk off after the drop, or a capture
+   where the surrender happened away from the gun): `(distant: N m walk)` and the decision line
+   `benefit ... vs cost ...: goes for it / waits / not worth leaving his post for`; while walking off
+   he looks ahead and back; the prisoner's `opening (his captor is walking off to ...)`.
+5. Compare frame time with the mod on/off in one raid (14. Debug, Profile on: the section timings).
+
 **0.18.0 (2026-11-20): head set from the rig's real axes (sideways gaze / cocked head), the game's
 bot head free-look centred while held, captor lethal intent decided once at custody, SAIN steered
 onto a kill decision, demanded weapons collected, turn-around order bug, pick-up window for the

@@ -28,13 +28,17 @@ namespace HandsAreHigh
     // 0.18.0, the other way round: a bot that DECIDED to kill his prisoner (Judgement.Escalate) gets
     // that man as SAIN's target when SAIN chose someone (or nobody) else, the man is in SAIN's own
     // VisibleEnemies and nothing is shooting at the bot (a real threat still comes first). Set
-    // through SAIN's public GoalEnemy setter (its EnemyChanged event fires as for its own choice)
-    // and mirrored to BotMemory.GoalEnemy as SAIN's setGoalEnemy does. 0.17.0 only set the game's
+    // through SAIN's GoalEnemy setter (its EnemyChanged event fires as for its own choice) and
+    // mirrored to BotMemory.GoalEnemy as SAIN's setGoalEnemy does. 0.19.0: that setter is PRIVATE
+    // (SAIN 4.5.1: `public Enemy GoalEnemy { get; private set; }`, which is how ChooseEnemy itself
+    // assigns it); 0.18.0 asked for a public one, got none, and never steered (12:43 log: "NO:
+    // GoalEnemy has no public setter"). 0.17.0 only set the game's
     // GoalEnemy, which SAIN overwrites with its own pick: the retarget did nothing on SAIN bots.
     internal static class SainTargetFilter
     {
         private static bool _tried;
         private static PropertyInfo _owner, _visible, _known, _enemyId, _goalProp, _enemyInfo;
+        private static MethodInfo _goalSet;
         internal static bool Patched;
         private static FieldInfo _goal;
         internal static int Filtered;     // times a prisoner was kept out of SAIN's choice
@@ -62,6 +66,7 @@ namespace HandsAreHigh
                 _goal = ctrl != null ? AccessTools.Field(ctrl, "_goalEnemy") : null;
                 _enemyId = enemy != null ? AccessTools.Property(enemy, "EnemyProfileId") : null;
                 _goalProp = ctrl != null ? AccessTools.Property(ctrl, "GoalEnemy") : null;
+                _goalSet = _goalProp?.GetSetMethod(true);
                 _enemyInfo = enemy != null ? AccessTools.Property(enemy, "EnemyInfo") : null;
                 if (choose == null || _owner == null || _visible == null || _known == null || _goal == null || _enemyId == null ||
                     !typeof(IList).IsAssignableFrom(_visible.PropertyType) || HandsAreHighPlugin.Harmony == null)
@@ -75,7 +80,7 @@ namespace HandsAreHigh
                     postfix: new HarmonyMethod(typeof(SainTargetFilter), nameof(Postfix)));
                 Patched = true;
                 HandsAreHighPlugin.Log.LogInfo($"SAIN target filter on: a bot that holds fire at a prisoner doesn't pick him as SAIN's target; " +
-                    $"a bot that decided to kill one is steered to him ({(_goalProp?.GetSetMethod() != null ? "yes" : "NO: GoalEnemy has no public setter")})");
+                    $"a bot that decided to kill one is steered to him ({(_goalSet != null ? "yes" : "NO: SAIN's GoalEnemy has no setter")})");
             }
             catch (Exception e)
             {
@@ -151,7 +156,7 @@ namespace HandsAreHigh
                 string chosen = result != null ? _enemyId.GetValue(result, null) as string : null;
                 if (chosen == victim.ProfileId) { Judgement.NoteSainGoal(o, Restraint.Name(victim), steered: false, onVictim: true); return; }
                 string chosenName = chosen == null ? null : Restraint.Name(FindPlayer(chosen)) ?? chosen;
-                MethodInfo set = _goalProp?.GetSetMethod();
+                MethodInfo set = _goalSet;
                 if (set == null || Suppression.Decayed(SurrenderRegistry.HistoryOf(o.GetPlayer), UnityEngine.Time.time) >= 1f)
                 {
                     Judgement.NoteSainGoal(o, chosenName, steered: false);

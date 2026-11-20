@@ -94,7 +94,6 @@ namespace HandsAreHigh
         internal string Prereq;             // prerequisites / limits (shown in the menu)
         internal bool Natural = true, Forced = true;
         internal ScenarioMode Mode;         // the menu's current mode
-        internal bool ShieldDefault;
         internal readonly List<ParamDef> Params = new List<ParamDef>();
         internal ParamValues Values;
         internal Func<string> Unavailable;  // a missing prerequisite (null: available)
@@ -148,7 +147,6 @@ namespace HandsAreHigh
 
         private static void Common(ScenarioPreset p, bool shield)
         {
-            p.ShieldDefault = shield;
             p.Params.Add(ParamDef.Choice("shield", "Observer override", OnOff, shield ? 0 : 1));
             p.Params.Add(Seed());
         }
@@ -335,8 +333,7 @@ namespace HandsAreHigh
                 Name = "PMC captures Scav",
                 Tests = "A bot accepts a surrender, holds the prisoner, speaks and gives orders.",
                 Watch = "Forced: 'holds', the plan, 'ordered Stay/DropWeapons by', captor voice lines, 'let go'. Natural: the Scav's checks under the PMC's fire, then the PMC's decision line.",
-                Prereq = "Forced default (surrender + custody given). Natural: they fight; it may end with no surrender (valid).",
-                ShieldDefault = true
+                Prereq = "Forced default (surrender + custody given). Natural: they fight; it may end with no surrender (valid)."
             };
             p.Mode = ScenarioMode.Forced;
             p.Params.Add(Place()); p.Params.Add(Dist(40f)); p.Params.Add(Sep(12f));
@@ -364,7 +361,7 @@ namespace HandsAreHigh
                 Tests = "Squadmates recognise their captor's decision and hold fire at the prisoner only.",
                 Watch = "'Restraint: <squadmate> holds fire at ... (squad)' in the same second as the decision; zero RESTRAINT LEAK; squadmates watching.",
                 Prereq = "Forced surrender. Captor decision: the real roll (may refuse) or forced custody.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(40f)); p.Params.Add(Sep(12f));
             p.Params.Add(ParamDef.Number("squad", "Captor squad size", 2f, 4f, 1f, 3f));
@@ -394,7 +391,7 @@ namespace HandsAreHigh
                 Tests = "The captor puts cover and combat first; the prisoner reassesses what he sees.",
                 Watch = "'Guard -> Cover' or '-> Engage', 'takes over', the prisoner's opening line (gunfire heard / looks away), 'Engage -> Guard (quiet ...)'.",
                 Prereq = "Forced custody. Threat: a real hostile bot (spawned 40 m out), a SIMULATED suppression event (tests decisions only), or you fire near the captor.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(40f)); p.Params.Add(Sep(8f));
             p.Params.Add(ParamDef.Choice("threat", "Threat", new[] { "Hostile bot (real)", "Suppression (simulated)", "None (you shoot)" }));
@@ -426,7 +423,7 @@ namespace HandsAreHigh
                 Tests = "The prisoner sees a real opening and weighs fleeing, drawing or recovering his gun.",
                 Watch = "'reacts', 'takes an opening (...)' with every option weighed, or a roll where he stays (valid).",
                 Prereq = "Forced custody. The opening itself is the captor's real reload or real glance (or SIMULATED).",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(40f)); p.Params.Add(Sep(7f));
             p.Params.Add(ParamDef.Choice("op", "Opening", Openings)); p.Params.Add(Delay(10f));
@@ -454,7 +451,7 @@ namespace HandsAreHigh
                 Tests = "With nothing else to fight with, the prisoner goes for the gun he actually dropped.",
                 Watch = "'takes an opening' with 'scramble' weighed; 'Recovering' with that gun as target; 'picks up'; draw timeline.",
                 Prereq = "Forced custody (or held by you). Kit 'Disarmed' by default so his own gun is the main way back.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(40f)); p.Params.Add(Sep(10f));
             p.Params.Add(ParamDef.Choice("cap", "Captor", Captor)); p.Params.Add(ParamDef.Choice("op", "Opening", Openings)); p.Params.Add(Delay(10f));
@@ -486,7 +483,7 @@ namespace HandsAreHigh
                 Tests = "The prisoner's recovery target becomes invalid; he abandons it and decides again.",
                 Watch = "'sees his ... is gone' (if he can see the spot), or a recovery that gives up ('gone'), then another decision.",
                 Prereq = "Forced custody. The gun is removed through the game's loose-loot removal. A physically BLOCKED path cannot be created on demand (no supported obstacle placement): test that next to real geometry.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(40f)); p.Params.Add(Sep(10f));
             p.Params.Add(ParamDef.Choice("when", "Gun removed", new[] { "Before the opening", "When he goes for it" }));
@@ -521,7 +518,7 @@ namespace HandsAreHigh
                 Tests = "The same opening with a retained sidearm, a retained (slung) primary, a knife only, or nothing.",
                 Watch = "Which options 'takes an opening' weighs (draw slung / sidearm / knife / scramble / run) and the draw timeline.",
                 Prereq = "Forced. 'Keeps slung primary' needs a generated primary + sidearm (he drops the sidearm). Run once per kit.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(40f)); p.Params.Add(Sep(8f));
             p.Params.Add(Kit("k", "Prisoner keeps", 1)); p.Params.Add(ParamDef.Choice("cap", "Captor", Captor));
@@ -553,7 +550,7 @@ namespace HandsAreHigh
                 Tests = "The prisoner reacts to his captor's death; squadmates take over or reassess, no automatic execution.",
                 Watch = "'takes over' or 'nobody takes over, restraint stays as decided'; no squad volley; the prisoner's leave/decision lines.",
                 Prereq = "Forced custody; the captor is killed for real (health controller Kill) after the delay.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(40f)); p.Params.Add(Sep(8f));
             p.Params.Add(ParamDef.Number("squad", "Captor squad size", 1f, 4f, 1f, 2f)); p.Params.Add(Delay(10f, "Captor killed after (s)"));
@@ -582,7 +579,7 @@ namespace HandsAreHigh
                 Tests = "A bot outside the captor's squad notices the surrender and decides for himself.",
                 Watch = "'Restraint: <observer> holds fire at / ignores / lets go / refuses ...' with his reasons; a later re-decision when the prisoner runs.",
                 Prereq = "Forced custody. Optional FORCED truce between observer and captor so the test isolates the prisoner decision.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(40f)); p.Params.Add(Sep(8f));
             p.Params.Add(ParamDef.Choice("ob", "Observer", new[] { "USEC PMC", "Scav" }));
@@ -611,8 +608,7 @@ namespace HandsAreHigh
                 Name = "Long-range surrender",
                 Tests = "A surrender beyond 25 m stays an offer (acknowledged or unanswered) instead of being cancelled by distance.",
                 Watch = "No 'walked away' while you stand still; aim at him: 'acknowledged'; or wait: 'nobody came for his surrender'.",
-                Prereq = "Natural: pin him at range yourself (a DMR helps). Forced: he gives up to you at once at that range.",
-                ShieldDefault = false
+                Prereq = "Natural: pin him at range yourself (a DMR helps). Forced: he gives up to you at once at that range."
             };
             p.Mode = ScenarioMode.Forced;
             p.Params.Add(Place()); p.Params.Add(Dist(60f));
@@ -632,8 +628,7 @@ namespace HandsAreHigh
                 Name = "Pit Fireteam teammate capture",
                 Tests = "An enemy gives up to a real Pit Fireteam teammate; the teammate stays under your orders.",
                 Watch = "The teammate's decision line ('a player ally: holds fire, the player decides'), his active layer stays Pit Fireteam's, your Pit orders still work; take the prisoner over with the order menu.",
-                Prereq = "Needs a living Pit Fireteam follower already in this raid (found through its pitAIBossPlayer boss). A spawned friendly PMC is NOT Pit Fireteam and is never used instead.",
-                ShieldDefault = false
+                Prereq = "Needs a living Pit Fireteam follower already in this raid (found through its pitAIBossPlayer boss). A spawned friendly PMC is NOT Pit Fireteam and is never used instead."
             };
             p.Mode = ScenarioMode.Forced;
             p.Params.Add(Sep(12f)); p.Params.Add(Health("h", "Scav health", 2)); p.Params.Add(Ammo("a", "Scav ammo", 1)); p.Params.Add(NerveP("n", "Scav nerve"));
@@ -669,7 +664,7 @@ namespace HandsAreHigh
                 Tests = "Your orders, his acknowledgements, Scav babble, wiggles and the optional middle finger.",
                 Watch = "Order menu on him (he's close); 'ordered X' once each, 'says ...: audible'; Events: force a wiggle or the finger and see 'wiggle'/'middle finger' lines.",
                 Prereq = "Forced: he gives up to you a few metres ahead. Gestures still need their own start conditions (wall checks, you watching).",
-                Natural = false, ShieldDefault = false
+                Natural = false
             };
             p.Params.Add(Dist(6f)); p.Params.Add(ParamDef.Choice("role", "Prisoner", new[] { "Scav", "USEC PMC", "BEAR PMC" }));
             p.Params.Add(NerveP("n", "Nerve")); p.Params.Add(Pers("pe", "Personality"));
@@ -690,7 +685,7 @@ namespace HandsAreHigh
                 Tests = "Death at a chosen moment: everything of ours stops, the state leaves the registry, the ragdoll is the game's own.",
                 Watch = "'killed with his hands up' / state removed; no errors, no pose or hands work after death; the timeline's 'state removed' check.",
                 Prereq = "Forced surrender to you; 'going for his gun' uses the FORCED grab (no roll) to get him there. The kill is real (health controller Kill).",
-                Natural = false, ShieldDefault = false
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(12f));
             p.Params.Add(ParamDef.Choice("at", "Killed", new[] { "Mid-drop", "Hands up", "Going for his gun" }, 1)); p.Params.Add(Delay(5f, "Kill after (s)"));
@@ -735,7 +730,7 @@ namespace HandsAreHigh
                 Tests = "Several bot-held prisoners at once: ownership, reservations, coordination, cost.",
                 Watch = "Each captor 'holds' only his own; no shared gun claims; with Profile on: no 'Profile spike:' and bounded counts.",
                 Prereq = "Forced custody for every pair. FORCED truce between different encounters (optional) so they don't fight each other.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(45f));
             p.Params.Add(ParamDef.Number("pairs", "Encounters", 2f, 4f, 1f, 3f)); p.Params.Add(Sep(7f));
@@ -781,7 +776,7 @@ namespace HandsAreHigh
                 Tests = "A bot captor walks up to a disarmed prisoner and orders him onto his knees; the prisoner weighs resisting as he comes; kneeling facing and look limits.",
                 Watch = "'close in on', 'closes in on', 'stops closing in', 'puts ... on his knees' / 'can't kneel there', 'turned to face where the order came from', 'sees ... on his knees', 'opening (... range x, posture x)', 'is behind him, out of view', 'loses sight of his captor'. Pose: Log pose diagnostics on, walk round the kneeling man.",
                 Prereq = "Forced custody. Captor plan forces the choice (or leaves it to the real rolls). Ground: place it on flat open ground, then on stairs or in clutter for the unsuitable case.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(16f, 6f, 40f));
             p.Params.Add(ParamDef.Number("squad", "Captor squad size", 1f, 3f, 1f, 1f));
@@ -822,7 +817,7 @@ namespace HandsAreHigh
                 Tests = "A bot captor demands the weapons, judges what he sees, then weighs each dropped item (worth, room, risk, nature) and fetches some, all or none, now or after letting the man go.",
                 Watch = "'told to drop his weapons ... ->', 'order 'drop your weapons': ... on the ground ...; disarmed / NOT disarmed', 'after 'drop your weapons'', 'weighs what ... dropped' (one line per item), 'goes to take', 'took ... into his ... slot', 'stops going for'. The prisoner: 'opening (his captor is picking up ...)'.",
                 Prereq = "Forced custody and a forced plan (Stay, Drop your weapons, optional Turn around). Everything after is real: compliance (unless forced), notice, gear choices, the pick-up transaction.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(12f));
             p.Params.Add(ParamDef.Number("squad", "Captor squad size", 1f, 3f, 1f, 1f));
@@ -863,7 +858,7 @@ namespace HandsAreHigh
                 Tests = "Deceptive compliance: he drops one weapon and keeps another; the captor may notice it (a slung gun at any range, a holstered pistol only close) and demand it again; a real distraction (the captor fetching gear) may give him his opening, weighed against the other guards he can see.",
                 Watch = "'keeps the ... back', 'NOT disarmed: still carries', 'notices it; demands it again' or 'doesn't notice it', 'told again ... comply / refuse / escalate', 'opening (his captor is picking up ...)', 'takes an opening ... draw ... (kept back for this)', 'his resistance shows', 'DECIDES TO KILL' / 'lets him go'.",
                 Prereq = "Forced custody and plan (Stay, Drop your weapons). Kit: he holds his sidearm, keeps a slung gun (or keeps his sidearm). Which weapon he keeps back is forced; everything else is real.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(10f));
             p.Params.Add(ParamDef.Number("squad", "Captor squad size", 1f, 3f, 1f, 1f));
@@ -914,7 +909,7 @@ namespace HandsAreHigh
                 Tests = "Turn around (his back to where the issuer stood, kept while the issuer walks round him; from his knees: up, turn, down) and Hands on head standing and kneeling (posture unchanged, head within its hands-on-head limits).",
                 Watch = "'turns his back to', 'turned round in ... s', 'turn around from his knees: gets up', 'kneels again facing away', 'hands on his head (... posture unchanged)', 'is behind him, out of view', 'loses sight of his captor'. Walk round him: he must not turn back. Log pose diagnostics on for the head.",
                 Prereq = "Forced surrender (to you or to a bot captor with custody). The orders are given on a timer through the real order path (yours from wherever you stand: the test path, labelled).",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(8f));
             p.Params.Add(ParamDef.Choice("by", "Orders from", new[] { "You", "PMC bot" }));
@@ -965,7 +960,7 @@ namespace HandsAreHigh
                 Tests = "The captor's decision points: notice and repeat a demand, a refusal, the release decision (mercy or a lethal decision) with what he knows of the man; an observed draw is always fought.",
                 Watch = "'intent about ... (decided once, at custody): chance ... -> MEANS TO KILL HIM / means to let him go', 'after 'drop your weapons'', 'demands it again', 'lethal? chance', 'done with ...: carries out what he decided' / 'lets him go, as he decided' / 'something new since he took him', 'DECIDES TO KILL', 'FIRES at', 'KILL DECISION CARRIED OUT' or 'EXECUTION FAILURE', 'killed with his hands up by ...: as decided (...)' vs 'RESTRAINT LEAK'. Squadmates: their own 'holds fire' lines stand. Run 'His own roll' several times: both outcomes should appear (0.25 base x aggression x rivals).",
                 Prereq = "Forced custody and plan (Stay, Drop your weapons). The trigger is forced or SIMULATED as named; the outcome is the real roll unless forced.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(10f));
             p.Params.Add(ParamDef.Choice("trig", "Situation", new[] { "He complies", "He keeps a slung gun (seen)", "He refuses when told again", "He shot the captor before (SIMULATED)", "He draws during custody (FORCED)" }));
@@ -1011,7 +1006,7 @@ namespace HandsAreHigh
                 Tests = "Scenario start-up: every profile asked for at once, each bot held from creation until all are created, active and on the hold, the start state checked, all released together; failures and cancellation clean up with the stage each participant had reached.",
                 Watch = "'profile requested', 'profile ready after', 'spawned ... held until everyone is ready', 'everyone ready after ... released together; stage timings: ...', 'start state: ...'. Slow: the last one's activation 8 s late (SIMULATED), nobody moves meanwhile. Failure / cancel: 'setup failed: ... (stage: ...)', the report's 'spawn stages', nobody left frozen or spawned late.",
                 Prereq = "Then the same start as PMC squad captures a bot (forced custody), so the release is visible.",
-                Natural = false, ShieldDefault = true, NeedSight = false, MaxStart = 40f
+                Natural = false, NeedSight = false, MaxStart = 40f
             };
             p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(12f));
             p.Params.Add(ParamDef.Choice("test", "Test", new[] { "Normal start", "Slow last spawn (SIMULATED 8 s)", "One spawn fails (SIMULATED)", "Cancel mid-spawn" }));
@@ -1045,7 +1040,7 @@ namespace HandsAreHigh
                 Tests = "The whole path from a captor's lethal decision to real fire: Reject on that captor only (final), his target, the AI's own aim and trigger, his squadmates' restraint unchanged. Or the natural decision when the prisoner bolts.",
                 Watch = "'DECIDES TO KILL', 'Restraint: ... refuses the surrender of ... decides to kill him', 'restraint on ... now Reject (final); still holding fire at him: no; ignore flag: clear', 'has ... as his target', 'SAIN had chosen ...; his target set to ...', 'FIRES at ... (trigger pressed)', 'KILL DECISION CARRIED OUT' (or 'no shot ... yet, 3 s after' and 'EXECUTION FAILURE ... after 10 s: layer, game target, SAIN target, hands, sight, aim, restraint, shield'), 'killed with his hands up by ...: as decided'. Squadmates keep 'holds fire'. Natural: '... runs from his custody: fire on him? chance ...'. Ctrl+U (debug keys on) forces the same decision on any bot captor.",
                 Prereq = "Forced custody. 'Kill now' forces ONLY the decision; everything after is the real game. 'He bolts' forces his run; the captor's answer is his own roll unless forced.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(10f));
             p.Params.Add(ParamDef.Choice("what", "Trigger", new[] { "Kill now (FORCED decision only)", "He bolts (captor's own roll)", "He bolts (FORCED lethal answer)" }));
@@ -1087,7 +1082,7 @@ namespace HandsAreHigh
                 Tests = "A stationary prisoner with his captor directly in front: head straight ahead and upright, chest square, standing or kneeling, hands up or on his head. Then walk to his left and right: head and chest turn together, no head roll; standing, past 70 deg his feet step round.",
                 Watch = "'head rig checked: ... animated head N deg yaw ... (game free-look N deg)', then once a second 'gaze: ... captor at +0 deg ...; after: head yaw ~0 pitch small roll ~0; chest ~0'. Walking round him: 'after: head yaw' follows you, 'roll' stays within a degree or two, 'chest' and 'our torso turn' grow together. Variation On: glances come back, roll still ~0.",
                 Prereq = "Forced surrender (to you, or to a PMC standing in front of him). Pose diagnostics are on for this scenario; Variation Off is the Head neutral test (no glances, demeanor tilt, tremble, flinch, kneeling idle or gestures).",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(6f));
             p.Params.Add(ParamDef.Choice("by", "Captor", new[] { "You", "PMC bot (in front of him)" }));
@@ -1138,7 +1133,7 @@ namespace HandsAreHigh
                 Tests = "The captor demands the weapons and goes to collect the one he made him drop (the game's pick-up animation and transaction); a prisoner with a weapon still on him weighs that window (draw, run or keep still); a covering squadmate closes it; an interrupted pick-up ends cleanly and is weighed again, never retried at once.",
                 Watch = "'weighs what (else) ... dropped': '<weapon>: take (the weapon he made him drop ...)', 'goes to take ... (the weapon he made him drop)', 'took ... into his ... slot (... pick-up animation ...)' and the item in his kit, or 'stops going for the ...: <why>' + 'will weigh ... again'. Prisoner: 'opening (his captor is picking up ...)' with 'pick-up window x...', 'takes an opening ... draw' or 'keeps still'; captor: 'sees ... reaching for a weapon'. Squad 2: 'his captor isn't covering him, but ... is'. No 'transaction threw', no stuck hands.",
                 Prereq = "Forced custody and plan (Stay, Drop your weapons). What the prisoner keeps is forced by his kit and the first-demand answer; whether he acts is his own roll unless forced. Interruptions are FORCED (kill) or SIMULATED (the weapon removed), each at the moment the pick-up starts.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(8f));
             p.Params.Add(ParamDef.Number("squad", "Captor squad size", 1f, 2f, 1f, 1f));
@@ -1197,7 +1192,7 @@ namespace HandsAreHigh
                 Tests = "A man leaving captivity commits to it: a destination outside the captivity area along a route that doesn't pass his captor, legs through cover when there's no way straight out, no looping back to the gun he dropped there.",
                 Watch = "'flees to a spot ... m from where he was held', 'still inside ... keeps going (leg n)', 'another way', 'retreat ends (...): ... m from where he was held, ... covered in ... s', 'lies where he was held: not going back for it'. Place it in the open, inside a building, and in a dead end.",
                 Prereq = "Forced custody; the captor's answers forced to mercy so the flight itself is what is tested. Let go: his real Leave order. Bolts: a forced run.",
-                Natural = false, ShieldDefault = true
+                Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(25f)); p.Params.Add(Sep(8f));
             p.Params.Add(ParamDef.Choice("how", "He leaves", new[] { "Let go", "Bolts (FORCED run)" }));
