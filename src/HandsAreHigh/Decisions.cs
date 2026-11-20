@@ -23,11 +23,19 @@ namespace HandsAreHigh
         {
             bool covered = CoveredBy(s, captor, bot, seen, inView, watchAngle, out kind, out strength, out clear);
             if (covered) return true;
-            if (SquadCovers(s, captor, bot, watchAngle, out string who))
+            if (SquadCovers(s, captor, bot, watchAngle, out string who, out string idle))
             {
                 kind = null; strength = 0f; clear = false;
                 if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his captor isn't covering him, but {who} is");
                 return true;
+            }
+            // 0.20.0: another of them in plain sight but not on him right now (reloading, looking
+            // out, fighting someone else): still an armed man there, so the opening is a little
+            // smaller than with nobody about, and he can see it change.
+            if (idle != null)
+            {
+                strength *= 0.85f;
+                kind = $"{kind}; {idle}";
             }
             return false;
         }
@@ -112,9 +120,13 @@ namespace HandsAreHigh
 
         // The captor's squadmates who hold fire at him (decided with the squad), close, aiming
         // at him with a gun, and seen by him: at most three line checks.
-        private static bool SquadCovers(SurrenderState s, Player captor, Player bot, float watchAngle, out string who)
+        // 0.20.0: only what he can see of each (Overwatch.Visibly: gun, reload, running, a weapon
+        // change, firing elsewhere, where he looks, a line), never whether one was given a role or
+        // what he is paying attention to. idle: one he sees who isn't on him right now. "Behind
+        // him, assumed" only for a man he has seen (SeenSquad): an unseen squadmate is unknown to him.
+        private static bool SquadCovers(SurrenderState s, Player captor, Player bot, float watchAngle, out string who, out string idle)
         {
-            who = null;
+            who = null; idle = null;
             var map = Restraint.EntriesFor(bot);
             if (map == null) return false;
             Vector3 eye = Perception.Eye(bot);
@@ -127,15 +139,17 @@ namespace HandsAreHigh
                 // him only if close (heard); far behind him, unknown, so not counted either way.
                 if (!Presence.InView(s, Perception.Eye(e.Observer)))
                 {
+                    if (!s.SeenSquad.Contains(e.Observer)) continue;
                     if ((e.Observer.Position - bot.Position).sqrMagnitude > 8f * 8f || !Perception.LineClear(eye, Perception.Eye(e.Observer))) continue;
                     who = $"{Restraint.Name(e.Observer)} (behind him, assumed)";
                     return true;
                 }
                 if (tries++ >= 3) break;
-                if (!Perception.Covering(e.Observer, bot, watchAngle)) continue;
                 if (!Perception.LineClear(eye, Perception.Eye(e.Observer))) continue;
-                who = Restraint.Name(e.Observer);
-                return true;
+                if (s.SeenSquad.Count < 8) s.SeenSquad.Add(e.Observer);
+                string not = Overwatch.Visibly(e.Observer, bot, watchAngle);
+                if (not == null) { who = Restraint.Name(e.Observer); return true; }
+                if (idle == null) idle = $"{Restraint.Name(e.Observer)} {not}";
             }
             return false;
         }

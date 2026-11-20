@@ -20,7 +20,7 @@ namespace HandsAreHigh
     // One pending line per bot: a more urgent one replaces it, urgent lines (a new threat, a
     // prisoner going for a gun) clear anything queued and skip the line gap; nothing waits on a
     // line: the order, the move, the fight all happen at once whether audio plays or not.
-    internal enum CaptorLine { Demand, Stay, Disarm, Follow, Leave, Warn, Resist, Threat, UnderFire, TakeCover, HandOver, TakeOver, Abandon, LostSight, Kneel }
+    internal enum CaptorLine { Demand, Stay, Disarm, Follow, Leave, Warn, Resist, Threat, UnderFire, TakeCover, HandOver, TakeOver, Abandon, LostSight, Kneel, Covering }
 
     internal static class CaptorVoice
     {
@@ -97,6 +97,7 @@ namespace HandsAreHigh
                 case CaptorLine.TakeCover: return LTakeCover;
                 case CaptorLine.HandOver: return LHandOver;
                 case CaptorLine.TakeOver: return LTakeOver;
+                case CaptorLine.Covering: return LTakeOver;   // 0.20.0: a squadmate takes the covering role
                 case CaptorLine.Abandon: return LAbandon;
                 default: return LLostSight;
             }

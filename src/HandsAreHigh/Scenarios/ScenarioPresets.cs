@@ -1185,6 +1185,94 @@ namespace HandsAreHigh
             };
             list.Add(p.Done());
 
+            // 0.20.0: Squad cover
+            p = new ScenarioPreset
+            {
+                Name = "Squad cover",
+                Tests = "A squad's captor keeps custody while one squadmate (chosen by the mod, not forced) takes a spot to the side and covers; the captor waits for that cover before fetching the dropped weapon; the guard reacts to a draw only once he sees it; a blocked guard moves; a guard drawn into a fight stops covering; custody goes to the guard when the captor dies; a lone captor knows he is alone.",
+                Watch = "'<squad>: <guard> covers him while he holds ...', 'covers ... from where he stands' or '...; moves to cover ... from N m away', 'in position', 'covering ... (N m, gun on him)' / 'not covering ...: <reason>', 'waits for <guard> to cover him before ...' then '..., <guard> covering him' or '... without cover after waiting ...: accepts the risk'. Draw: '<guard>: sees ... drawing a weapon (N deg ...); reacts in N s', 'GUARD REACTS: ... engages ...' (or 'doesn't see ...' + 'takes his squad's word'). Distracted: 'stops covering ... to fight', 'quiet again' or 'stops covering ... (fighting ...)'. Captor killed: 'takes over ... (he was covering him)'. Alone: 'nobody can cover him ... he holds him alone'. Every role ends with 'stops covering ... after N s: covering N% of it'.",
+                Prereq = "Forced custody and plan (Stay, Drop your weapons). The guard is the mod's own pick. Draw, kills and the hostile bot are FORCED or real events at the stated moment; everything the guard and captor do in between is their own.",
+                Natural = false
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(8f, 4f, 12f));
+            p.Params.Add(ParamDef.Number("squad", "Captor squad size", 1f, 3f, 1f, 2f));
+            p.Params.Add(ParamDef.Choice("start", "Squadmate starts", new[] { "Beside the captor", "Behind the captor (line blocked)" }));
+            p.Params.Add(ParamDef.Choice("keep", "He keeps back", new[] { "Holstered pistol", "Slung gun", "Nothing" }));
+            p.Params.Add(ParamDef.Choice("test", "Event", new[] { "None (pick-up with cover)", "Prisoner draws at the pick-up (FORCED)", "Hostile bot at the guard (real)", "Captor killed at the pick-up (FORCED)", "Guard killed in position (FORCED)", "You take the prisoner over (your order)" }));
+            p.Params.Add(NerveP("n", "Prisoner nerve")); p.Params.Add(Pers("pe", "Prisoner personality")); p.Params.Add(Pers("cpe", "Captor personality"));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                int n = sc.Values.I("squad");
+                bool behind = sc.Values.S("start").StartsWith("Behind");
+                Participant cap = Add(sc, n > 1 ? "PMC-1" : "PMC", "BEAR", "A", -h, 0f, "Prisoner");
+                From(cap, sc.Values, null, null, null, null, "cpe");
+                if (n >= 2) Add(sc, "PMC-2", "BEAR", "A", behind ? -h - 2.5f : -h - 1f, behind ? 0f : 3f, "Prisoner");
+                if (n >= 3) Add(sc, "PMC-3", "BEAR", "A", -h - 2f, -3.5f, "Prisoner");
+                Participant pr = Add(sc, "Prisoner", "Scav", "B", h, 0f, cap.Tag);
+                From(pr, sc.Values, null, null, null, "n", "pe");
+                string keep = sc.Values.S("keep");
+                pr.Kit = keep.StartsWith("Holstered") ? "Keeps sidearm" : keep.StartsWith("Slung") ? "Keeps slung primary" : "As generated";
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Conditions(sc);
+                Participant cap = sc.Find(sc.Values.I("squad") > 1 ? "PMC-1" : "PMC"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                string keep = sc.Values.S("keep"), test = sc.Values.S("test");
+                sc.Step($"{cap.Tag}: disarm and collect", () =>
+                {
+                    if (!cap.Active || !pr.Active) return (cap.Dead || pr.Dead) ? "a participant died" : "";
+                    if (keep == "Nothing") { Compliance.Force(pr.Player, ComplianceChoice.DropsAll); sc.Force($"{pr.Tag} drops everything on the demand"); }
+                    else
+                    {
+                        EquipmentSlot slot = keep.StartsWith("Holstered") ? EquipmentSlot.Holster : EquipmentSlot.FirstPrimaryWeapon;
+                        if (slot == EquipmentSlot.FirstPrimaryWeapon && pr.Player.Equipment?.GetSlot(slot)?.ContainedItem == null) slot = EquipmentSlot.SecondPrimaryWeapon;
+                        Compliance.ForceSlot(pr.Player, slot);
+                        Compliance.Force(pr.Player, ComplianceChoice.KeepsOne);
+                        sc.Force($"{pr.Tag} keeps his {slot} weapon back at the demand");
+                    }
+                    return Captors.DebugSteps(cap.Player, "disarm, collect the weapons", OrderKind.Stay, OrderKind.DropWeapons);
+                });
+                // Whoever the mod picked to cover (whatever captor holds him now).
+                Func<Participant> guard = () =>
+                {
+                    Player gp = ScenarioOps.StateOf(pr)?.Custody?.Guard?.Bot;
+                    if (gp == null) return null;
+                    foreach (Participant q in sc.People) if (q.Player == gp) return q;
+                    return null;
+                };
+                Func<bool> inPosition = () => ScenarioOps.StateOf(pr)?.Custody is CaptorState cs && Overwatch.InPosition(cs, out _);
+                Func<bool> bending = () => CaptorLoot.Busy(cap.Player, out string b) && !b.StartsWith("walking");
+                if (test.StartsWith("Prisoner draws")) sc.OnceWhen(bending, 120f, "the prisoner draws during the pick-up", () => ScenarioEvents.Run(sc, ScenarioEvent.DrawKept, pr));
+                else if (test.StartsWith("Captor killed")) sc.OnceWhen(bending, 120f, "the captor is killed mid pick-up", () => ScenarioEvents.Run(sc, ScenarioEvent.Kill, cap));
+                else if (test.StartsWith("Hostile bot"))
+                    sc.OnceWhen(inPosition, 90f, "a hostile bot comes for the guard", () =>
+                    {
+                        Participant g = guard();
+                        if (g == null) sc.Note(TL.ExecFail, "no guard to aim the hostile bot at");
+                        else ScenarioEvents.Run(sc, ScenarioEvent.ThirdParty, g);
+                    });
+                else if (test.StartsWith("Guard killed"))
+                    sc.OnceWhen(inPosition, 90f, "the guard is killed in position", () =>
+                    {
+                        Participant g = guard();
+                        if (g == null) sc.Note(TL.ExecFail, "no guard to kill");
+                        else ScenarioEvents.Run(sc, ScenarioEvent.Kill, g);
+                    });
+                else if (test.StartsWith("You take"))
+                    sc.OnceWhen(inPosition, 90f, "you take the prisoner over", () =>
+                    {
+                        SurrenderState s = ScenarioOps.StateOf(pr);
+                        if (s == null) { sc.Note(TL.ExecFail, "no prisoner"); return; }
+                        bool ok = Orders.Give(s, OrderKind.Stay, sc.Observer, true, out string why, debug: true);
+                        sc.Note(ok ? TL.Real : TL.ExecFail, ok ? "you order him to stay: you take him over (the real order path, from any distance)" : $"your order was refused: {why}");
+                    });
+            };
+            list.Add(p.Done());
+
             // Retreat from captivity
             p = new ScenarioPreset
             {

@@ -104,6 +104,11 @@ namespace HandsAreHigh
         // 0.15.0: resistance decided but not yet visible to the bots around him.
         internal string ArmedPending;
         internal float ArmedPendingSince;
+        // 0.20.0: when his resistance last showed (Restraint.OnArmed): a covering squadmate who never
+        // saw it takes his squad's word after a moment (Overwatch). Squadmates of his captor he has
+        // seen (Reactions.SquadCovers): only those can be "behind him, assumed".
+        internal float ArmedShownAt = -1f;
+        internal readonly HashSet<Player> SeenSquad = new HashSet<Player>();
 
         // 0.16.0: where his hands are, an order of its own (posture is Order / Kneel). HeadHands is
         // the eased 0..1 the pose uses (HandsPose.Update); HandsOrdered: an explicit hands order was

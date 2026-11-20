@@ -137,6 +137,12 @@ namespace HandsAreHigh
         internal float StepWaitSince = -1f; // a hands / turn order waiting for control
         // 0.16.0: the prisoner's dropped gear (CaptorLoot.cs).
         internal LootPlan Loot;
+        // 0.20.0: the squadmate covering him (Overwatch.cs), or why nobody can.
+        internal CoverGuard Guard;
+        internal float NextGuardPick;
+        internal string AloneWhy, AloneKey;
+        internal float CoverWaitSince = -1f;
+        internal string CoverWaitFor, CoverAcceptedFor, CoverNotedFor;
 
         internal bool Busy => Mode == CaptorMode.Engage;
     }
@@ -441,6 +447,11 @@ namespace HandsAreHigh
                 _nextLater = now + 0.25f;
                 try { CaptorLoot.TickLater(now); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after release", e); CaptorLoot.Clear(); }
             }
+            // 0.20.0: covering squadmates watch the prisoner 10x a second (their own reaction time).
+            if (Overwatch.Count > 0)
+            {
+                try { Overwatch.Tick(now); } catch (System.Exception e) { HandsAreHighPlugin.Report("squad cover", e); }
+            }
             if (ByBot.Count == 0) return;
             Scratch.Clear();
             foreach (CaptorState cs in ByBot.Values) Scratch.Add(cs);
@@ -487,6 +498,8 @@ namespace HandsAreHigh
 
             if (!Perception.Alive(cs.Bot) || cs.Owner == null || cs.Owner.IsDead) { CaptorDown(cs, "captor down"); return; }
             if (SurrenderRegistry.HoldsBot(cs.Bot)) { CaptorDown(cs, "captor gave up himself"); return; }
+            // 0.20.0: his squadmate's cover: chosen, positioned, measured (Overwatch.cs).
+            try { Overwatch.Update(cs, s, now); } catch (System.Exception e) { HandsAreHighPlugin.Report("squad cover", e); }
             if (s.Phase != Phase.HandsUp)
             {
                 // 0.15.0: he reacts to what he can see, not to the prisoner's decision: the arms
@@ -757,6 +770,9 @@ namespace HandsAreHigh
                     HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: close in on {s.Name}? {d:0.0} m, {(kept ? "he still carries a weapon" : "nothing left on him")}, {backing} squadmate(s) near, hurt {hurt:0.00}: chance {chance:0.00}, roll {roll:0.00} -> {(cs.Close ? "yes" : "no, guards from here")}");
                 if (!cs.Close) return false;
             }
+            // 0.20.0: walking up takes his full attention off the rest of the area: his squadmate's
+            // cover first (bounded wait, then his own risk).
+            if (Overwatch.HoldForCover(cs, s, now, $"closing in on {s.Name}")) return true;
             if (!Perception.TakeHeavy()) return true;   // waits a frame with path budget
             cs.CloseTries++;
             if (!PickCloseSpot(cs, s, standoff, out string why))
@@ -921,12 +937,13 @@ namespace HandsAreHigh
         // From what the game (and SAIN) say he perceives. at: where it is (exact for a visible
         // enemy; for fire, where the near miss came from, blurred; for an alert, his last
         // sighting); atKnown false when he can't tell (a hit with no near miss to place it).
-        private static ThreatLevel Assess(CaptorState cs, float now, out string why, out Vector3 at, out bool atKnown)
+        private static ThreatLevel Assess(CaptorState cs, float now, out string why, out Vector3 at, out bool atKnown) =>
+            Threat(cs.Owner, cs.Bot, cs.Prisoner.Bot, now, out why, out at, out atKnown);
+
+        // 0.20.0: the same threat sense for any bot about a prisoner (a covering squadmate too).
+        internal static ThreatLevel Threat(BotOwner o, Player self, Player prisoner, float now, out string why, out Vector3 at, out bool atKnown)
         {
-            BotOwner o = cs.Owner;
-            Player prisoner = cs.Prisoner.Bot;
             at = Vector3.zero; atKnown = false; why = null;
-            Player self = cs.Bot;
             string recentName = null;
             Vector3 recentAt = Vector3.zero;
             float recentSeen = -1000f;
@@ -1017,18 +1034,35 @@ namespace HandsAreHigh
             if (g == null) return;
             // Out of the count while asking (a hand-over doesn't add a prisoner to the map limit).
             ByBot.Remove(cs.Bot);
-            for (int i = 0; i < g.MembersCount; i++)
+            BotOwner m = SuccessorFor(cs, s);
+            if (m != null)
             {
-                BotOwner m = g.Member(i);
-                if (m == null || m == cs.Owner || m.IsDead) continue;
-                if (Impractical(m, s, out _) != null) continue;
+                bool guard = m == cs.Guard?.Owner;
+                Overwatch.Release(cs, $"custody goes to {Restraint.Name(m.GetPlayer)}", resisted: false);
                 OrbitAdapter.KeepAwake(cs.Owner, false, "handed his prisoner over");
                 s.Custody = null;
-                HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: busy with {why}, hands {s.Name} over to {Restraint.Name(m.GetPlayer)}");
+                HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: busy with {why}, hands {s.Name} over to {Restraint.Name(m.GetPlayer)}{(guard ? " (his covering squadmate)" : "")}");
                 Accept(s, m, $"takes over from {cs.Name} ({cs.Name} is fighting {why})", takingOver: true);
                 return;
             }
             ByBot[cs.Bot] = cs;   // nobody free: he keeps custody while he fights
+        }
+
+        // 0.20.0: who takes custody when the captor can't keep it: his covering squadmate first (he
+        // is already on the man), then any squadmate, each only if practical (Impractical).
+        private static BotOwner SuccessorFor(CaptorState cs, SurrenderState s)
+        {
+            BotOwner guard = cs.Guard?.Owner;
+            if (guard != null && !guard.IsDead && Impractical(guard, s, out _) == null) return guard;
+            BotsGroup g = cs.Group;
+            if (g == null) return null;
+            for (int i = 0; i < g.MembersCount; i++)
+            {
+                BotOwner m = g.Member(i);
+                if (m == null || m == cs.Owner || m == guard || m.IsDead) continue;
+                if (Impractical(m, s, out _) == null) return m;
+            }
+            return null;
         }
 
         // ---- cover -------------------------------------------------------------------------
@@ -1125,16 +1159,17 @@ namespace HandsAreHigh
             if (s != null && s.Custody == cs) s.Custody = null;
             if (s != null && cs.Group != null && s.Phase == Phase.HandsUp && !s.Dead)
             {
-                for (int i = 0; i < cs.Group.MembersCount; i++)
+                BotOwner m = SuccessorFor(cs, s);
+                if (m != null)
                 {
-                    BotOwner m = cs.Group.Member(i);
-                    if (m == null || m == cs.Owner || m.IsDead) continue;
-                    if (Impractical(m, s, out _) != null) continue;
-                    HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {why}; {Restraint.Name(m.GetPlayer)} takes over {s.Name}");
+                    bool guard = m == cs.Guard?.Owner;
+                    Overwatch.Release(cs, $"{why}; custody goes to {Restraint.Name(m.GetPlayer)}", resisted: false);
+                    HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {why}; {Restraint.Name(m.GetPlayer)} takes over {s.Name}{(guard ? " (he was covering him)" : "")}");
                     Accept(s, m, $"takes over from {cs.Name} ({why})", takingOver: true);
                     return;
                 }
             }
+            Overwatch.Release(cs, why, resisted: s != null && !s.Dead && s.Phase != Phase.HandsUp);
             Unanswered(s);
             OrbitAdapter.KeepAwake(s?.Bot?.AIData?.BotOwner, false, "custody over");
             HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {why}; nobody takes over {s?.Name}, restraint stays as decided");
@@ -1148,6 +1183,10 @@ namespace HandsAreHigh
             if (!ByBot.Remove(cs.Bot) && cs.Prisoner?.Custody != cs) return;
             try { CaptorLoot.OnCustodyEnd(cs, released); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after custody", e); }
             SurrenderState s = cs.Prisoner;
+            // 0.20.0: his squadmate's cover ends with the custody (a man resisting is still watched
+            // by him for a moment: his own reaction).
+            try { Overwatch.Release(cs, why, resisted: !released && s != null && !s.Dead && s.Phase != Phase.HandsUp); }
+            catch (System.Exception e) { HandsAreHighPlugin.Report("squad cover release", e); }
             if (s != null && s.Custody == cs) s.Custody = null;
             OrbitAdapter.KeepAwake(cs.Owner, false, why);
             OrbitAdapter.KeepAwake(s?.Bot?.AIData?.BotOwner, false, why);
@@ -1178,8 +1217,9 @@ namespace HandsAreHigh
 
         internal static void Clear()
         {
-            foreach (CaptorState cs in ByBot.Values) if (cs.Prisoner != null) cs.Prisoner.Custody = null;
+            foreach (CaptorState cs in ByBot.Values) { if (cs.Prisoner != null) cs.Prisoner.Custody = null; cs.Guard = null; }
             ByBot.Clear();
+            Overwatch.Clear();   // 0.20.0 (ORBIT blocks are lifted by ReleaseAll below)
             Pending.Clear();
             PendingScratch.Clear();
             CaptorLoot.Clear();
@@ -1206,6 +1246,10 @@ namespace HandsAreHigh
                 prisoner = cs.Prisoner;
                 return true;
             }
+            // 0.20.0: the squadmate covering a captor (not while he fights or after he reacted: the
+            // combat AI has him then, never the idle watcher below).
+            if (Overwatch.WantsControl(p, out prisoner)) return true;
+            if (Overwatch.TryDrive(p, out _)) return false;
             if (!Restraint.Any || Settings.WatchSeconds.Value <= 0f) return false;
             // Watchers: squadmates of a captor, idle (no target), within their watch time.
             foreach (CaptorState c in ByBot.Values)
@@ -1272,6 +1316,8 @@ namespace HandsAreHigh
                 // 0.16.0: walking to the prisoner's gear and picking it up.
                 if (CaptorLoot.TryJob(BotOwner.GetPlayer, out LootJob job)) { Fetch(job); return; }
                 if (s?.Bot == null) return;
+                // 0.20.0: covering a squadmate's prisoner.
+                if (Overwatch.TryDrive(BotOwner.GetPlayer, out CoverGuard guard)) { Cover(guard, s); return; }
                 Captors.TryGet(BotOwner.GetPlayer, out CaptorState cs);
                 if (cs != null && cs.Mode == CaptorMode.Cover) { MoveToCover(cs); return; }
                 if (cs != null && cs.Approaching) { WalkUp(cs, s); return; }
@@ -1354,6 +1400,41 @@ namespace HandsAreHigh
                 BotOwner.Mover.GoToByWay(way, 0.5f);
             }
             BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot));
+        }
+
+        // 0.20.0: a covering squadmate. Moving: one complete path to his spot (re-made at most every
+        // 2 s if lost), at a walk (no sprint: his gun stays on the prisoner, as BotMover moves him
+        // whichever way he faces). Holding: still, standing, eyes and gun on the prisoner, or on
+        // his look outward (Overwatch.UpdateScan). Where and when to move: Overwatch.UpdatePosition.
+        private void Cover(CoverGuard g, SurrenderState s)
+        {
+            if (Mathf.Abs(_pose - 1f) > 0.01f) { _pose = 1f; BotOwner.SetPose(1f); }
+            Vector3 chest = Perception.Chest(s.Bot);
+            if (g.Stage == GuardStage.Moving)
+            {
+                if (!g.PathIssued && Time.time >= g.NextPathAt)
+                {
+                    g.NextPathAt = Time.time + 2f;
+                    g.PathIssued = true;
+                    if (!Perception.PathTo(BotOwner.GetPlayer.Position, g.Spot, out Vector3[] corners, out _) || corners.Length < 2)
+                    {
+                        g.ProgressSince = -1000f;   // Overwatch: stuck -> covers from where he is
+                        return;
+                    }
+                    if (!_moving) Relink();
+                    _moving = true;
+                    _stopped = false;
+                    BotOwner.Sprint(false);
+                    BotOwner.SetTargetMoveSpeed(Vector3.Distance(BotOwner.GetPlayer.Position, g.Spot) > 10f ? 1f : 0.75f);
+                    BotOwner.MovementResume();
+                    BotOwner.Mover.GoToByWay(corners, 0.5f);
+                }
+                BotOwner.Steering.LookToPoint(chest);
+                return;
+            }
+            if (_moving || !_stopped) { BotOwner.StopMove(); BotOwner.SetTargetMoveSpeed(0f); BotOwner.Sprint(false); _stopped = true; _moving = false; }
+            if (Time.time < g.ScanUntil) BotOwner.Steering.LookToPoint(g.ScanPoint);
+            else BotOwner.Steering.LookToPoint(chest);
         }
 
         // 0.16.0: one path to a point just short of the item, at a walk; eyes on the prisoner until

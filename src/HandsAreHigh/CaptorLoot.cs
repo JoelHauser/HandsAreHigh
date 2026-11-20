@@ -134,6 +134,8 @@ namespace HandsAreHigh
         internal int Repaths;
         internal float NextSeek;
         internal float NextGlanceBack, GlanceBackUntil;
+        // 0.20.0: he started it with his squadmate covering him (Overwatch); a loss he can tell is judged once.
+        internal bool CoverRelied, CoverJudged;
     }
 
     internal sealed class LootPlan
@@ -247,6 +249,9 @@ namespace HandsAreHigh
                 }
             }
             LootCandidate next = Pick(plan.Items, "take");
+            // 0.20.0: his squadmate's cover first (a bounded wait, then his own risk). Waiting spends
+            // this check (true), so no other order is given meanwhile.
+            if (next != null && Overwatch.HoldForCover(cs, s, now, $"{s.Name}'s {next.Name}")) return true;
             if (next != null) return Start(cs.Owner, s, next, afterRelease: false, now);
             // Wanted but too risky: a turn-around order first (once), then weigh again.
             if (!plan.TurnAsked && Settings.TurnOrder.Value && !s.TurnedAway && !s.Turning && !Kneel.Active(s) && Any(plan, "later") && !cs.Plan.Contains(OrderKind.TurnAround))
@@ -514,6 +519,8 @@ namespace HandsAreHigh
             if (s.TurnedAway) { r *= 0.5f; sb.Append(", turned away"); }
             if (s.HeadHands >= 1f) { r *= 0.8f; sb.Append(", hands on his head"); }
             if (SquadCover(cs, s, out string who)) { r *= 0.35f; sb.Append($", {who} covers him"); }
+            else if (Overwatch.On && cs.Guard != null) sb.Append($", {cs.Guard.Name} not in position yet");
+            else if (Overwatch.On && cs.AloneWhy != null) { r *= 1.15f; sb.Append(", nobody can cover him"); }
             float hurt = cs.Bot.HealthController != null ? NaturalSurrender.Injury(cs.Bot, out _) : 0f;
             if (hurt > 0.2f) { r *= 1f + hurt; sb.Append($", hurt {hurt:0.00}"); }
             float caution = Caution(cs.Bot);
@@ -528,6 +535,9 @@ namespace HandsAreHigh
         // A squadmate who holds fire at him, alive, close, with a line to him and his gun on him.
         private static bool SquadCover(CaptorState cs, SurrenderState s, out string who)
         {
+            // 0.20.0: with squad cover on, the one squadmate actually given the role, in position and
+            // not fighting (what he counts on when weighing; the start itself waits for real cover).
+            if (Overwatch.On) return Overwatch.InPosition(cs, out who);
             who = null;
             var map = Restraint.EntriesFor(s.Bot);
             if (map == null) return false;
@@ -561,6 +571,30 @@ namespace HandsAreHigh
                 case "": case null: return NaturalSurrender.ClassOf(p) == NaturalSurrender.RoleClass.Scav ? 1.2f : 1f;
                 default: return 1f;
             }
+        }
+
+        // 0.20.0: his cover was there when he started; now he can tell it isn't (his guard's gunfire,
+        // a reload callout, the guard down or gone; not a glance or a blocked view, which he can't
+        // see bent over the item). Judged once: pause (the fetch ends, weighed again later) or carry
+        // on. Once bending he mostly finishes. Null: carry on (or nothing he can tell).
+        private static string CoverLossJudgement(LootJob j)
+        {
+            if (!Captors.TryGet(j.Bot, out CaptorState cs)) return null;
+            string lost = Overwatch.LoudLoss(cs, j.CoverRelied);
+            if (lost == null) return null;
+            j.CoverJudged = true;
+            SurrenderState s = j.Prisoner;
+            float k = 0.55f * Caution(j.Bot);
+            var why = new StringBuilder($"{lost}; caution x{Caution(j.Bot):0.00}");
+            if (cs.SawKept != null) { k *= 1.5f; why.Append($", a {Compliance.Name(cs.SawKept)} still on him"); }
+            if (s != null && s.Kneel == KneelPhase.Down) { k *= 0.7f; why.Append(", kneeling"); }
+            if (s != null && s.TurnedAway) { k *= 0.7f; why.Append(", turned away"); }
+            if (j.Stage == LootStage.Settle) { k *= 0.4f; why.Append(", already bending for it"); }
+            float chance = Mathf.Clamp(k, 0.05f, 0.95f), roll = Dice.Value;
+            bool pause = roll < chance;
+            if (Settings.LogLoot.Value || Settings.LogSquadCover.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{j.Name}: loses his cover while going for the {j.C.Name} ({why}): pause? chance {chance:0.00}, roll {roll:0.00} -> {(pause ? "stops" : "carries on, accepts the risk")}");
+            return pause ? $"his cover is gone ({lost})" : null;
         }
 
         private static float Caution(Player p)
@@ -649,6 +683,7 @@ namespace HandsAreHigh
                 Prisoner = s, PrisonerFrom = s.Bot != null ? s.Bot.Position : Vector3.zero, AfterRelease = afterRelease,
                 Stage = LootStage.Walk, Since = now, StageSince = now, ProgressFrom = o.GetPlayer.Position, ProgressSince = now
             };
+            if (!afterRelease && Captors.TryGet(job.Bot, out CaptorState jcs)) job.CoverRelied = Overwatch.Covered(jcs);
             Jobs[job.Bot] = job;
             Claimed.Add(c.Item);
             c.Decision = "fetching";
@@ -677,6 +712,9 @@ namespace HandsAreHigh
                      Perception.Covering(j.Bot, j.Prisoner.Bot, 70f)) stop = "the prisoner moved";
             // Taken by anyone: its LootItem is destroyed (or recycled for another item).
             else if (!j.Asked && (j.Loose == null || !j.Loose.isActiveAndEnabled || j.Loose.Item != j.C.Item)) stop = $"someone else took it{WhoHas(j.C.Item)}";
+            // 0.20.0: his cover gone in a way he can tell (his guard fighting, reloading, down): once.
+            else if (!j.AfterRelease && j.CoverRelied && !j.CoverJudged && (j.Stage == LootStage.Walk || j.Stage == LootStage.Settle) &&
+                     CoverLossJudgement(j) is string lost) stop = lost;
             // A distant walk gets its walking time on top (1 s per metre of path).
             else if (now - j.Since > Settings.LootTimeLimit.Value + (j.Distant ? Mathf.Max(0f, j.C.PathLen) : 0f)) stop = "took too long";
             else if (j.Stage == LootStage.Walk)
@@ -716,7 +754,7 @@ namespace HandsAreHigh
             // 0.18.0: a threat or the man moving interrupts it; the item is weighed again when the
             // situation changes (twice at most), never retried at once. Anything else (gone, stuck,
             // too long, no room) ends it for good.
-            bool interrupted = stop == "something else needs his attention" || stop == "the prisoner moved" || stop == "the prisoner stopped complying";
+            bool interrupted = stop == "something else needs his attention" || stop == "the prisoner moved" || stop == "the prisoner stopped complying" || stop.StartsWith("his cover is gone");
             if (stop == "it isn't where he saw it") j.C.Seen = false;   // what he knew is wrong now
             End(j, stop, failed: true);   // always the full cleanup (a pick-up animation cut short)
             if (interrupted && j.C.Tries < 2)

@@ -6,11 +6,88 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.20.0 (2026-11-20): coordinated squad cover during captivity (Overwatch.cs, from Joel's pasted
+6-part spec). Release packed (dist/HandsAreHigh-0.20.0.zip) and installed in H:\SPT4.1.X (0.19.0 DLL
+backed up in that session's scratchpad, backup-0.19.0). Committed and pushed to main (no tag/release). NEVER RUN IN GAME: a role line
+in the log is not proof the guard protects anyone; only the in-raid checks below are.**
+
+What it does (details in the Overwatch.cs header):
+- Role: the captor stays the captor (CaptorState unchanged as owner); one squadmate gets cs.Guard.
+  Squad = the game's BotsGroup (cs.Group). Eligible: alive, active, not the captor, not held, not a
+  captor himself, not covering another captor, not fetching gear, not a player ally (your group / Pit
+  Fireteam follower: Teammates.IsPlayerTeammate), holds fire at this prisoner (restraint entry Holds),
+  not in a fight (Restraint.OtherThreat, BotMemory.IsUnderFire), not out of ammo, <= 40 m, complete
+  path to the prisoner. Scored by distance, sight (Perception.Recognises), gun up, injury. Kept until
+  invalid (no re-scoring). Nobody: cs.AloneWhy, logged once ("holds him alone"), gear risk x1.15.
+- Spot: ~6 m ("Guard distance") from the prisoner, 50-125 deg round him from the captor, line from
+  eye to chest clear, his line of fire (8 m past the prisoner) >= 0.9 m from the captor's chest and
+  squadmates, himself >= 1 m from the captor's line (10 m past), not bunched (< 4 m and < 20 deg off
+  the captor's bearing), within 15 m. Scored by angle, distance, walk, solid geometry beside/behind
+  (3 rays), hidden from a recent enemy sighting. Current spot kept while valid; moves only after 1.2 s
+  of a problem or the prisoner moving 3 m; 8 moves max, 3 s apart; walk (no sprint), gun on him.
+  tools/coversim: the fire-line rules checked offline (all pass; caught the preset's "behind" start
+  reading as "too far" and a bunched start being accepted, both fixed).
+- Attention: outward look (behind the captor / towards a recent enemy) every 5-10 s for 0.9-1.6 s,
+  never while the captor fetches or walks up or the prisoner moves. Fighting (Captors.Threat >= Fire)
+  releases him to the combat AI; back after QuietBeforeGuarding of quiet; > 12 s: role dropped,
+  replacement picked.
+- Coverage measured 4x/s (not assumed): not fighting, not glancing, firearm up, not reloading/
+  switching/running, look within "Covered within", clear line, captor not in his line. Changes logged
+  by category (no number churn; glances only in verbose), summary at the end (% covered, gaps).
+- Captor: closing in and fetching gear wait for cover (HoldForCover, "Captor waits for cover" 6 s),
+  then go ahead and log "accepts the risk". During a fetch, a loss he can TELL (guard fighting,
+  reloading, running, gone; never a glance or a blocked view) is judged once: pause (-> "later") or
+  carry on (CaptorLoot.CoverLossJudgement, by caution, kept weapon, kneeling/turned, already bending).
+- Resistance: Overwatch.Visible = what shows (draw, weapon in hands not being dropped, walking
+  towards the dropped gun, moving off unordered, urgent rise, hands lowered unordered); never the
+  prisoner's phase. The guard notices only if he sees it (within 100 deg + Recognises), reaction
+  0.3 x 0.75-1.35 (+peripheral, walking, fighting). Armed: Reject (squad) + remembered + GoalEnemy set
+  ("GUARD REACTS", logs whether the captor stood in his line: the game's ShootData.CheckFriendlyFire /
+  SAIN's SAINFriendlyFireClass hold that shot, both verified in the decompiles). Unarmed: eyes on him,
+  holds fire (the captor's Judgement decides). Restraint.OnArmed skips a guard (his own perception);
+  one who never sees it takes his squad's word 2.5 s later (as a responder: custody ended, still
+  watching for 3 s). The guard layer is NOT gated on the prisoner's phase (that was a leak of the
+  hidden decision, caught in review).
+- Prisoner (Decisions.SquadCovers): squadmates judged by Overwatch.Visibly (gun, reload, running,
+  weapon change, firing elsewhere, where he looks, line); "behind him, assumed" only for a squadmate
+  he has seen (SurrenderState.SeenSquad); one in sight but not on him makes the opening x0.85.
+- Hand-overs: Captors.SuccessorFor (guard first, then any practical member) in CaptorDown and
+  TryHandOver; every custody end releases the role (Captors.End, CaptorDown, TryHandOver); Clear on
+  raid end / disable / teardown; ORBIT kept awake while covering (not unblocked if he became a captor).
+- Config 23. Squad cover (7 keys, bound offline on a copy of Joel's cfg through the built DLL: OK
+  twice). Preset "Squad cover" (squad 1-3, squadmate beside/behind, keeps pistol/slung/nothing,
+  events: none / draw at the pick-up / hostile bot at the guard / captor killed / guard killed / you
+  take over). Offline: installed DLL builds all 28 presets.
+
+### In-game test plan (0.20.0)
+Log squad cover, Log decisions, Log gear decisions on. Preset "Squad cover" unless noted.
+1. Two-bot capture (event None, squad 2): `<squad>: PMC-2 covers him while he holds ...`, then
+   `covers ... from where he stands` or `moves to cover ...` + `in position: N m from ..., N deg off his
+   line`. LOOK: PMC-2 stands off to the side, gun on the prisoner, not behind PMC-1. `covering ...`.
+2. Pick-up with cover (same run): `waits for PMC-2 to cover him before ...` (if he wasn't yet) then
+   `..., PMC-2 covering him`; the prisoner's `his captor isn't covering him, but PMC-2 is` (verbose) and
+   no opening line while PMC-2 aims at him. LOOK: PMC-2's gun stays on the prisoner during the pick-up.
+3. Draw at the pick-up: `PMC-2: sees ... drawing a weapon (N deg ...); reacts in 0.2-0.5 s`,
+   `GUARD REACTS: ... engages`, and in the game PMC-2 actually shoots him (the real test). Run it with
+   Guard looks around on and off; a `doesn't see ...` line + `takes his squad's word` is the miss case.
+4. Blocked: Squadmate starts Behind: `PMC-1 is in his line of fire; moves to cover ...`. Also a
+   capture next to a wall/car: `his view of him is blocked; moves ...`, no circling (<= 8 moves).
+5. Distracted: Hostile bot at the guard: `stops covering ... to fight`, `not covering: fighting ...`,
+   then `quiet again` or `stops covering ... (fighting ... for 12 s)` + a replacement (squad 3).
+6. Captor killed at the pick-up: `captor down; PMC-2 takes over ... (he was covering him)`.
+7. No guard: squad 1: `nobody can cover him ... (no squad); he holds him alone`; gear risk `nobody
+   can cover him`. Guard killed (squad 2): `stops covering (he is down)` then alone.
+8. You take over: `you take over from PMC-1`, `stops covering ... (the player took over)`; PMC-2 goes
+   back to normal AI (no stuck stance). Pit Fireteam: preset "Pit Fireteam teammate capture": the
+   follower never appears as a guard (`under the player's orders`).
+9. Natural raid with PMC squads: same lines on real captures; Profile on: Overwatch costs in the
+   Captors section.
+
 **0.19.0 (2026-11-20): natural surrender made reachable in ordinary fights, natural-pipeline
 diagnostics, captor pick-up fixed at its source, deliberate decisions about distant dropped weapons,
 SAIN kill steering actually applied, dead code removed. Release packed (dist/HandsAreHigh-0.19.0.zip,
 DLL only) and installed in H:\SPT4.1.X (0.18.0 DLL backed up in that session's scratchpad).
-Committed and pushed to main (no tag/release). NEVER RUN IN GAME: no natural surrender and no pick-up animation has been seen yet.**
+Committed and pushed to main (ce5f21c, no tag/release). Superseded in the install by 0.20.0. NEVER RUN IN GAME: no natural surrender and no pick-up animation has been seen yet.**
 
 Why natural surrender never happened (evidence):
 - The only natural-raid log on disk is 0.3.0's (scratchpad hah-log3): rolls ran (the pipeline

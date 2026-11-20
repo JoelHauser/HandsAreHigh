@@ -264,7 +264,9 @@ namespace HandsAreHigh
         // fire at him any more; whoever saw it remembers it for this raid.
         internal static void OnArmed(SurrenderState s, string what)
         {
-            if (s?.Bot == null || !ByPrisoner.TryGetValue(s.Bot, out var map) || map.Count == 0) return;
+            if (s?.Bot == null) return;
+            s.ArmedShownAt = Time.time;
+            if (!ByPrisoner.TryGetValue(s.Bot, out var map) || map.Count == 0) return;
             EntryScratch.Clear();
             foreach (RestraintEntry e in map.Values) EntryScratch.Add(e);
             Vector3 eye = Perception.Eye(s.Bot);
@@ -273,6 +275,9 @@ namespace HandsAreHigh
             {
                 RestraintEntry e = EntryScratch[i];
                 if (!Perception.Alive(e.Observer)) continue;
+                // 0.20.0: a squadmate covering this man reacts by his own sight and reaction time
+                // (Overwatch.Watch); one who never sees it takes his squad's word a moment later.
+                if (Overwatch.ReactsHimself(s, e.Observer)) continue;
                 bool saw = (e.Observer.Position - s.Bot.Position).sqrMagnitude < r * r && Perception.LineClear(Perception.Eye(e.Observer), eye);
                 if (saw) Distrust(SurrenderRegistry.HistoryOf(e.Observer), s.Bot);
                 if (e.Holds) Set(s, e.Owner, RestraintKind.Reject, $"{s.Name} {what}{(saw ? "" : " (his squad's word)")}", e.Squad);
@@ -511,6 +516,12 @@ namespace HandsAreHigh
 
         private static bool Distrusts(BotHistory h, Player prisoner) =>
             h.Distrust != null && prisoner != null && h.Distrust.Contains(prisoner.ProfileId);
+
+        // 0.20.0: he saw this man attack (a covering squadmate's own reaction): remembered for the raid.
+        internal static void Remember(Player observer, Player prisoner)
+        {
+            if (observer != null) Distrust(SurrenderRegistry.HistoryOf(observer), prisoner);
+        }
 
         private static void Distrust(BotHistory h, Player prisoner)
         {
