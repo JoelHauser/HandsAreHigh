@@ -68,6 +68,7 @@ namespace HandsAreHigh
         internal static bool Any => States.Count > 0;
         internal static int Count => States.Count;
         internal static int HistoryCount => History.Count;
+        internal static int TrackedPlayers => ByPlayer.Count;   // live Player keys (pruned every 30 s)
 
         // The concrete collection: foreach over it uses a struct enumerator (no allocation),
         // unlike IEnumerable<T>.
@@ -703,6 +704,10 @@ namespace HandsAreHigh
             States.Clear();
             Finished.Clear();
             History.Clear();
+            // 0.20.1: the Player keys too (EnsureRaid clears them on a raid change, but after a
+            // hot-reload teardown this assembly's EnsureRaid never runs again).
+            ByPlayer.Clear();
+            Gone.Clear();
             _world = null;
         }
     }

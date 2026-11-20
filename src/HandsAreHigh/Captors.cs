@@ -1233,6 +1233,9 @@ namespace HandsAreHigh
         internal static bool WantsControl(BotOwner o, out SurrenderState prisoner)
         {
             prisoner = null;
+            // 0.20.1: asked for every bot on every brain update (CaptorLayer.IsActive). With no
+            // custody, no gear fetch and no squad cover anywhere, nothing below can be true.
+            if (ByBot.Count == 0 && CaptorLoot.Count == 0 && Overwatch.Count == 0) return false;
             Player p = o?.GetPlayer;
             if (p == null || !Settings.Enabled.Value) return false;
             // 0.16.0: fetching a released man's gear (custody already over).
@@ -1271,7 +1274,13 @@ namespace HandsAreHigh
     {
         public CaptorLayer(BotOwner botOwner, int priority) : base(botOwner, priority) { }
         public override string GetName() => "HandsAreHigh_Captor";
-        public override bool IsActive() => Captors.WantsControl(BotOwner, out _);
+        public override bool IsActive()
+        {
+            long t0 = Perf.Begin();
+            bool on = Captors.WantsControl(BotOwner, out _);
+            Perf.End(Perf.Sec.LayerCheck, t0);
+            return on;
+        }
         public override Action GetNextAction() => new Action(typeof(CaptorLogic), "Guarding");
         public override bool IsCurrentActionEnding() => !IsActive();
     }
@@ -1328,7 +1337,7 @@ namespace HandsAreHigh
                 else BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot));
             }
             catch (System.Exception e) { HandsAreHighPlugin.Report("captor logic", e); }
-            Perf.End(Perf.Sec.Layer, t0);
+            Perf.End(Perf.Sec.Captors, t0);
         }
 
         // One path (re-issued every 3 s while not there), sprinting, looking where he goes.

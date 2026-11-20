@@ -638,12 +638,14 @@ namespace HandsAreHigh
         private static bool Prefix(EnemyInfo value, BotOwner ____owner)
         {
             if ((!Restraint.Any && !ScenarioShield.Active) || value == null) return true;
+            long t0 = Perf.Begin();
             try
             {
                 Player self = ____owner?.GetPlayer;
                 return !Restraint.HoldsFire(self, value.Person) && !ScenarioShield.Blocks(self, value.Person);
             }
             catch { return true; }
+            finally { Perf.End(Perf.Sec.FireGuard, t0); }
         }
     }
 
@@ -655,6 +657,7 @@ namespace HandsAreHigh
         private static bool Prefix(BotOwner ____owner, ref bool __result)
         {
             if (!Restraint.Any && !ScenarioShield.Active) return true;
+            long t0 = Perf.Begin();
             try
             {
                 EnemyInfo goal = ____owner?.Memory?.GoalEnemy;
@@ -673,6 +676,7 @@ namespace HandsAreHigh
                 return false;
             }
             catch { return true; }
+            finally { Perf.End(Perf.Sec.FireGuard, t0); }
         }
     }
 
@@ -684,6 +688,7 @@ namespace HandsAreHigh
         private static void Prefix(Player.FirearmController __instance, ref bool pressed)
         {
             if (!pressed || (!Restraint.Any && !ScenarioShield.Active && !SurrenderRegistry.Any)) return;
+            long t0 = Perf.Begin();
             try
             {
                 Player shooter = __instance._player;
@@ -705,6 +710,7 @@ namespace HandsAreHigh
                 Restraint.LogLeakBlocked(shooter, prisoner, "trigger");
             }
             catch { }
+            finally { Perf.End(Perf.Sec.FireGuard, t0); }
         }
     }
 }

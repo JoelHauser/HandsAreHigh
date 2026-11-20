@@ -41,6 +41,12 @@ namespace HandsAreHigh
         private static MethodInfo _goalSet;
         internal static bool Patched;
         private static FieldInfo _goal;
+        // 0.20.1: compiled reads (FastAccess.cs). The owner read runs for every SAIN bot's
+        // ChooseEnemy (every 0.1 s) while anyone is restrained; the rest only for restrained bots.
+        private static FastGetter<BotOwner> _ownerRead;
+        private static FastGetter<IList> _visibleRead, _knownRead;
+        private static FastGetter<object> _goalRead;
+        private static FastGetter<string> _enemyIdRead;
         internal static int Filtered;     // times a prisoner was kept out of SAIN's choice
 
         private sealed class Removed
@@ -49,7 +55,11 @@ namespace HandsAreHigh
             internal readonly List<object> Known = new List<object>(2);
         }
 
-        internal static void Reset() { _tried = false; Filtered = 0; Patched = false; }
+        internal static void Reset()
+        {
+            _tried = false; Filtered = 0; Patched = false;
+            _ownerRead = null; _visibleRead = null; _knownRead = null; _goalRead = null; _enemyIdRead = null;
+        }
 
         internal static void TryPatch(Assembly sain)
         {
@@ -68,7 +78,13 @@ namespace HandsAreHigh
                 _goalProp = ctrl != null ? AccessTools.Property(ctrl, "GoalEnemy") : null;
                 _goalSet = _goalProp?.GetSetMethod(true);
                 _enemyInfo = enemy != null ? AccessTools.Property(enemy, "EnemyInfo") : null;
+                _ownerRead = FastGetter<BotOwner>.For(_owner);
+                _visibleRead = FastGetter<IList>.For(_visible);
+                _knownRead = FastGetter<IList>.For(_known);
+                _goalRead = FastGetter<object>.For(_goal);
+                _enemyIdRead = FastGetter<string>.For(_enemyId);
                 if (choose == null || _owner == null || _visible == null || _known == null || _goal == null || _enemyId == null ||
+                    _ownerRead == null || _visibleRead == null || _knownRead == null || _goalRead == null || _enemyIdRead == null ||
                     !typeof(IList).IsAssignableFrom(_visible.PropertyType) || HandsAreHighPlugin.Harmony == null)
                 {
                     HandsAreHighPlugin.Log.LogWarning("SAIN target filter: SAIN's enemy controller didn't match (different SAIN version?); " +
@@ -91,7 +107,7 @@ namespace HandsAreHigh
         private static bool Blocked(Player self, object enemy)
         {
             if (enemy == null) return false;
-            string id = _enemyId.GetValue(enemy, null) as string;
+            string id = _enemyIdRead.Get(enemy);
             return Restraint.HoldsFireAtId(self, id) || ScenarioShield.BlocksId(self, id);
         }
 
@@ -99,14 +115,15 @@ namespace HandsAreHigh
         {
             __state = null;
             if (!Restraint.Any && !ScenarioShield.Active) return;
+            long t0 = Perf.Begin();
             try
             {
-                Player self = (_owner.GetValue(__instance, null) as BotOwner)?.GetPlayer;
+                Player self = _ownerRead.Get(__instance)?.GetPlayer;
                 if (!Restraint.Restrains(self) && !ScenarioShield.Shields(self)) return;
                 Removed r = null;
-                Take(_visible.GetValue(__instance, null) as IList, self, ref r, true);
-                Take(_known.GetValue(__instance, null) as IList, self, ref r, false);
-                object goal = _goal.GetValue(__instance);
+                Take(_visibleRead.Get(__instance), self, ref r, true);
+                Take(_knownRead.Get(__instance), self, ref r, false);
+                object goal = _goalRead.Get(__instance);
                 if (goal != null && Blocked(self, goal))
                 {
                     _goal.SetValue(__instance, null);
@@ -116,6 +133,7 @@ namespace HandsAreHigh
                 __state = r;
             }
             catch { __state = null; }
+            finally { Perf.End(Perf.Sec.SainFilter, t0); }
         }
 
         private static void Take(IList list, Player self, ref Removed r, bool visible)
@@ -133,16 +151,19 @@ namespace HandsAreHigh
 
         private static void Postfix(object __instance, object __state, ref object __result)
         {
+            if (!(__state is Removed) && !Judgement.Watching) return;
+            long t0 = Perf.Begin();
             if (__state is Removed r)
             {
                 try
                 {
-                    Put(_visible.GetValue(__instance, null) as IList, r.Visible);
-                    Put(_known.GetValue(__instance, null) as IList, r.Known);
+                    Put(_visibleRead.Get(__instance), r.Visible);
+                    Put(_knownRead.Get(__instance), r.Known);
                 }
                 catch { }
             }
             if (Judgement.Watching) Steer(__instance, ref __result);
+            Perf.End(Perf.Sec.SainFilter, t0);
         }
 
         // 0.18.0: see the header. Only bots with a kill decision being watched get here.

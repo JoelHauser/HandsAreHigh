@@ -95,7 +95,13 @@ namespace HandsAreHigh
     {
         public StagingLayer(BotOwner botOwner, int priority) : base(botOwner, priority) { }
         public override string GetName() => ScenarioStaging.LayerName;
-        public override bool IsActive() => ScenarioStaging.Holds(BotOwner);
+        public override bool IsActive()
+        {
+            long t0 = Perf.Begin();
+            bool on = ScenarioStaging.Holds(BotOwner);
+            Perf.End(Perf.Sec.LayerCheck, t0);
+            return on;
+        }
         public override Action GetNextAction() => new Action(typeof(StagingLogic), "Staged");
         public override bool IsCurrentActionEnding() => !IsActive();
     }

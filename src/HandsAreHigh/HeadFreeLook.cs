@@ -16,10 +16,16 @@ namespace HandsAreHigh
         private static bool Prefix(BotHeadData __instance)
         {
             if (!SurrenderRegistry.Any || !Settings.Enabled.Value || !Settings.HeadMovement.Value) return true;
+            long t0 = Perf.Begin();
             Player p = __instance._owner?.GetPlayer;
-            if (p == null || !SurrenderRegistry.TryGet(p, out SurrenderState s) || s.Dead || s.Suspended || s.Phase != Phase.HandsUp) return true;
+            if (p == null || !SurrenderRegistry.TryGet(p, out SurrenderState s) || s.Dead || s.Suspended || s.Phase != Phase.HandsUp)
+            {
+                Perf.End(Perf.Sec.HeadLook, t0);
+                return true;
+            }
             __instance._targetHorizontalRotation = 0f;
             __instance.UpdateHeadRotation();
+            Perf.End(Perf.Sec.HeadLook, t0);
             return false;
         }
     }

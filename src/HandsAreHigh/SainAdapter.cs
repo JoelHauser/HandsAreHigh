@@ -20,6 +20,12 @@ namespace HandsAreHigh
         private static PropertyInfo _suppressionState;
         private static PropertyInfo _activeLayer;
         private static object _noLayer;
+        // 0.20.1: compiled reads (FastAccess.cs) for the recurring ones: the layer check every
+        // 0.25 s per held bot and captor, suppression on every captor/guard threat check and
+        // surrender check. Same values as the reflection reads (verified on first use).
+        private static FastGetter<object> _suppressionRead;
+        private static FastGetter<int> _suppressionStateRead, _activeLayerRead;
+        private static int _noLayerValue;
 
         internal static void Reset()
         {
@@ -30,6 +36,9 @@ namespace HandsAreHigh
             _suppressionState = null;
             _activeLayer = null;
             _noLayer = null;
+            _suppressionRead = null;
+            _suppressionStateRead = null;
+            _activeLayerRead = null;
             SainTargetFilter.Reset();
         }
 
@@ -65,8 +74,7 @@ namespace HandsAreHigh
                     if (component == null) return false;
                     s.SainComponent = component;
                 }
-                object current = _activeLayer.GetValue(component, null);
-                if (Equals(current, _noLayer)) return false;
+                if (_activeLayerRead.Get(component) == _noLayerValue) return false;
                 _activeLayer.SetValue(component, _noLayer, null);
                 return true;
             }
@@ -83,7 +91,7 @@ namespace HandsAreHigh
             {
                 object component = ComponentOf(owner, h);
                 if (component == null) return false;
-                if (Equals(_activeLayer.GetValue(component, null), _noLayer)) return false;
+                if (_activeLayerRead.Get(component) == _noLayerValue) return false;
                 _activeLayer.SetValue(component, _noLayer, null);
                 return true;
             }
@@ -129,7 +137,15 @@ namespace HandsAreHigh
                 _suppressionState = _suppression?.PropertyType.GetProperty("CurrentState", BindingFlags.Public | BindingFlags.Instance);
                 _activeLayer = _getBotComponent?.ReturnType.GetProperty("ActiveLayer", BindingFlags.Public | BindingFlags.Instance);
                 if (_activeLayer != null && _activeLayer.CanWrite && _activeLayer.PropertyType.IsEnum)
+                {
                     _noLayer = Enum.Parse(_activeLayer.PropertyType, "None");
+                    _noLayerValue = Convert.ToInt32(_noLayer);
+                    _activeLayerRead = FastGetter<int>.For(_activeLayer);
+                    if (_activeLayerRead == null) _noLayer = null;   // no reader: no release (as a missing property)
+                }
+                _suppressionRead = FastGetter<object>.For(_suppression);
+                _suppressionStateRead = FastGetter<int>.For(_suppressionState);
+                if (_suppressionRead == null || _suppressionStateRead == null) _suppressionState = null;
                 SainTargetFilter.TryPatch(sain);
                 SpawnQuiet.ResolveSain(sain);
                 HandsAreHighPlugin.Log.LogInfo(
@@ -162,9 +178,9 @@ namespace HandsAreHigh
             try
             {
                 object component = ComponentOf(owner, h);
-                object suppression = component != null ? _suppression.GetValue(component, null) : null;
+                object suppression = component != null ? _suppressionRead.Get(component) : null;
                 if (suppression == null) return 0f;
-                int state = Convert.ToInt32(_suppressionState.GetValue(suppression, null));
+                int state = _suppressionStateRead.Get(suppression);
                 return Mathf.Clamp01(state / 4f);
             }
             catch { return 0f; }

@@ -15,7 +15,20 @@ namespace HandsAreHigh
     //   our tracked objects: held bots, raid history, caches (should stay bounded).
     internal static class Perf
     {
-        internal enum Sec { Pose, Tilt, Shot, Hit, Registry, Natural, Menu, Layer, Gui, Count }
+        // 0.20.1: Natural is the natural-surrender checks alone (Captors, Restraint and Voice were
+        // timed inside it); every other hook has its own section, and Scenarios (debug spawning and
+        // staging) is reported apart from gameplay so a spawn spike isn't read as steady cost.
+        //   Layer       held bots' layer logic (SurrenderLogic.Update)
+        //   Captors     bot captors, squad cover, gear fetches, kill watch, and their layer logic
+        //   Restraint   the observer scan (who holds fire at a prisoner)
+        //   Voice       queued captor lines and the audio checks after any line
+        //   LayerCheck  our layers' IsActive for every bot (BigBrain asks every brain update)
+        //   SainFilter  the prefix/postfix on SAIN's ChooseEnemy (every SAIN bot, every 0.1 s)
+        //   HeadLook    the game's bot head free-look prefix (every bot, every frame)
+        //   FireGuard   the AI fire guards: GoalEnemy setter, ShootData.Shoot, trigger presses
+        //   Scenarios   debug scenarios (spawning, staging, events), not gameplay
+        internal enum Sec { Pose, Tilt, Shot, Hit, Registry, Natural, Captors, Restraint, Voice, Menu, Layer, Gui,
+                            LayerCheck, SainFilter, HeadLook, FireGuard, Scenarios, Count }
 
         internal static bool On;
         private static readonly long[] Ticks = new long[(int)Sec.Count];
@@ -26,6 +39,7 @@ namespace HandsAreHigh
         private static int _frames;
         private static float _since = -1f;
         private static int _gc0;
+        private static long _heap0;
         private static readonly long[] FrameTicks = new long[(int)Sec.Count];
         private static float _nextSpikeLog;
         private static readonly StringBuilder Sb = new StringBuilder(1024);
@@ -85,6 +99,7 @@ namespace HandsAreHigh
             _frames = 0;
             _since = now;
             _gc0 = GC.CollectionCount(0);
+            _heap0 = GC.GetTotalMemory(false);
         }
 
         internal static void Reset()
@@ -112,17 +127,23 @@ namespace HandsAreHigh
             Sb.Length = 0;
             Sb.Append($"Profile {span:0} s, {n} frames: avg {avg * 1000f:0.00} ms ({(avg > 0 ? 1f / avg : 0):0} fps), ");
             Sb.Append($"p50 {P(n, 0.5f):0.00}, p99 {P(n, 0.99f):0.00}, p99.9 {P(n, 0.999f):0.00}, worst {(n > 0 ? Sorted[n - 1] * 1000f : 0):0.00} ms; 1% low {low1:0} fps; ");
-            Sb.Append($"GC gen0 +{GC.CollectionCount(0) - _gc0}, heap {GC.GetTotalMemory(false) / 1048576f:0} MB; ");
-            Sb.Append($"held {SurrenderRegistry.Count}, bot captors {Captors.Count}, unrecognised {Captors.PendingCount}, ORBIT blocks {OrbitAdapter.Count}, restraint entries {Restraint.EntryCount}, history {SurrenderRegistry.HistoryCount}, loot cache {Arsenal.CacheCount}\n  Hands Are High cost:");
-            double totalMs = 0;
+            // Heap change over the span: a lower bound of what the whole game allocated (a
+            // collection in between hides some), for comparing runs, not attributing to us.
+            long heap = GC.GetTotalMemory(false);
+            Sb.Append($"GC gen0 +{GC.CollectionCount(0) - _gc0}, heap {heap / 1048576f:0} MB ({(heap - _heap0) / 1048576f:+0;-0;0} MB); ");
+            Sb.Append($"held {SurrenderRegistry.Count}, bot captors {Captors.Count}, unrecognised {Captors.PendingCount}, squad cover {Overwatch.Count}, ORBIT blocks {OrbitAdapter.Count}, restraint entries {Restraint.EntryCount}, history {SurrenderRegistry.HistoryCount} ({SurrenderRegistry.TrackedPlayers} live), loot cache {Arsenal.CacheCount}\n  Hands Are High cost:");
+            double totalMs = 0, gameplayMs = 0;
             for (int i = 0; i < (int)Sec.Count; i++)
             {
                 if (Calls[i] == 0) continue;
                 double ms = Ticks[i] * tickMs;
                 totalMs += ms;
+                if (i != (int)Sec.Scenarios) gameplayMs += ms;
                 Sb.Append($" {(Sec)i} {ms / span:0.000} ms/s ({Calls[i]} calls, avg {ms * 1000.0 / Calls[i]:0.0} us, worst {Max[i] * tickMs * 1000.0:0} us);");
             }
-            Sb.Append($" total {totalMs / span:0.000} ms/s = {(avg > 0 ? totalMs / span / (1000.0 / avg) * 100.0 : 0):0.00}% of frame time");
+            // ms per second of play is also the share of frame time (1000 ms of frames per second).
+            Sb.Append($" gameplay {gameplayMs / span:0.000} ms/s = {gameplayMs / span / 10.0:0.000}% of frame time;");
+            Sb.Append($" with scenarios {totalMs / span:0.000} ms/s");
             HandsAreHighPlugin.Log.LogInfo(Sb.ToString());
             Clear(now);
         }

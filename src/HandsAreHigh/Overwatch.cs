@@ -719,9 +719,11 @@ namespace HandsAreHigh
         private static string Key(string why)
         {
             if (why == null) return "covering";
-            if (why.StartsWith("looking")) return "looking away";
-            if (why.StartsWith("fighting")) return "fighting";
-            if (why.EndsWith("in his line of fire")) return "captor in his line";
+            // Ordinal (0.20.1): twice per guard evaluation, 4x a second; the culture-aware default
+            // compare was the costliest part of it.
+            if (why.StartsWith("looking", System.StringComparison.Ordinal)) return "looking away";
+            if (why.StartsWith("fighting", System.StringComparison.Ordinal)) return "fighting";
+            if (why.EndsWith("in his line of fire", System.StringComparison.Ordinal)) return "captor in his line";
             return why;
         }
 

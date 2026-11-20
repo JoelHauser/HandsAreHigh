@@ -17,7 +17,7 @@ namespace HandsAreHigh
     {
         public const string PluginGuid = "com.joelhauser.handsarehigh";
         public const string PluginName = "Hands Are High";
-        public const string PluginVersion = "0.20.0";
+        public const string PluginVersion = "0.20.1";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").
@@ -48,6 +48,8 @@ namespace HandsAreHigh
         {
             Log = Logger;
             Settings.Bind(Config);
+            FastAccess.Warn = m => Log?.LogWarning(m);   // 0.20.1: a compiled SAIN reader fell back to reflection
+            _teardown.Add(() => FastAccess.Warn = null);
 
             // SAIN registers its layers at 20-24 (combat, extract), 80 (avoid threat)
             // and 99 (its debug layer), ORBIT at 19; the default 95 sits above them all.
@@ -70,6 +72,9 @@ namespace HandsAreHigh
             _teardown.Add(ScenarioStaging.Clear);
             _teardown.Add(LootingBotsAdapter.Reset);
             _teardown.Add(SurrenderRegistry.Clear);
+            // 0.20.1: the loot lookup cache holds scene objects and items; a hot-reloaded assembly
+            // never unloads, so anything its statics keep stays referenced for the session.
+            _teardown.Add(Arsenal.ClearCache);
             _teardown.Add(SainAdapter.Reset);
             _teardown.Add(OrbitAdapter.Reset);      // every ORBIT sleep block we set is lifted
             _teardown.Add(CaptorVoice.Clear);

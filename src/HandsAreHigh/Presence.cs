@@ -228,7 +228,7 @@ namespace HandsAreHigh
                 DemeanorKind d = Worse(p.Demeanor, s.Nerve);
                 if (d != p.Demeanor)
                 {
-                    Log(s, $"demeanor {Profiles[(int)p.Demeanor].Name} -> {Profiles[(int)d].Name} ({worse})");
+                    if (Settings.LogAttention.Value) Log(s, $"demeanor {Profiles[(int)p.Demeanor].Name} -> {Profiles[(int)d].Name} ({worse})");
                     Set(s, d, now, hurt, fire);
                     p.WorseAt = now;
                 }
@@ -237,7 +237,7 @@ namespace HandsAreHigh
             if (p.Demeanor != p.Base && now - p.WorseAt >= CalmBack && now - p.ChosenAt >= MinChange && fire < 0.15f && hurt <= p.AtInjury + 0.05f)
             {
                 DemeanorKind d = p.Demeanor == DemeanorKind.Frightened && p.Base == DemeanorKind.Defiant ? DemeanorKind.Cautious : p.Base;
-                Log(s, $"demeanor {Profiles[(int)p.Demeanor].Name} -> {Profiles[(int)d].Name} (calmer: no fire, no new wound for {now - p.WorseAt:0} s)");
+                if (Settings.LogAttention.Value) Log(s, $"demeanor {Profiles[(int)p.Demeanor].Name} -> {Profiles[(int)d].Name} (calmer: no fire, no new wound for {now - p.WorseAt:0} s)");
                 Set(s, d, now, hurt, fire);
             }
         }
@@ -382,7 +382,7 @@ namespace HandsAreHigh
             p.Glance = g;
             p.GlancePoint = at;
             p.GlanceUntil = now + hold;
-            Log(s, $"glances: {g} for {hold:0.0} s ({Of(s).Name}; weights gun {wW:0.0} fire {wT:0.0} squad {wS:0.0} way out {wE:0.0} down {wD:0.0})");
+            if (Settings.LogAttention.Value) Log(s, $"glances: {g} for {hold:0.0} s ({Of(s).Name}; weights gun {wW:0.0} fire {wT:0.0} squad {wS:0.0} way out {wE:0.0} down {wD:0.0})");
         }
 
         // A squadmate he can see, close, not held: three members at most, one line check each.
@@ -651,12 +651,12 @@ namespace HandsAreHigh
                     p.LostSide = Mathf.Abs(yaw) > 1f ? Mathf.Sign(yaw) : (Dice.Value < 0.5f ? -1f : 1f);
                     p.NextBehindAt = now + Dice.Range(1.5f, 4f);
                     p.BehindUntil = 0f;
-                    Log(s, $"loses sight of his captor (about {Mathf.Abs(yaw):0} deg round, past what he can turn to: {reach:0} + {Peripheral:0} from the corner of his eye); stops tracking him");
+                    if (Settings.LogAttention.Value) Log(s, $"loses sight of his captor (about {Mathf.Abs(yaw):0} deg round, past what he can turn to: {reach:0} + {Peripheral:0} from the corner of his eye); stops tracking him");
                 }
                 else if (!lost && p.Lost)
                 {
                     p.Lost = false;
-                    Log(s, $"has his captor in view again ({yaw:+0;-0} deg)");
+                    if (Settings.LogAttention.Value) Log(s, $"has his captor in view again ({yaw:+0;-0} deg)");
                 }
                 if (p.Lost)
                 {

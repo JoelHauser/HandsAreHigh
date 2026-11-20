@@ -47,18 +47,26 @@ namespace HandsAreHigh
 
             t0 = Perf.Begin();
             try { NaturalSurrender.Tick(); SurrenderStats.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("surrender checks", e); }
-            // Bot captors (each every 0.25 s) and one prisoner's observer scan per frame.
-            try { Captors.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("captors", e); }
-            try { Restraint.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("restraint", e); }
-            // Captors' queued lines and the audio checks after any line (both empty almost always).
-            try { CaptorVoice.Tick(); Voice.TickChecks(); } catch (Exception e) { HandsAreHighPlugin.Report("captor voice", e); }
             Perf.End(Perf.Sec.Natural, t0);
+            // Bot captors (each every 0.25 s) and one prisoner's observer scan per frame.
+            t0 = Perf.Begin();
+            try { Captors.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("captors", e); }
+            Perf.End(Perf.Sec.Captors, t0);
+            t0 = Perf.Begin();
+            try { Restraint.Tick(); } catch (Exception e) { HandsAreHighPlugin.Report("restraint", e); }
+            Perf.End(Perf.Sec.Restraint, t0);
+            // Captors' queued lines and the audio checks after any line (both empty almost always).
+            t0 = Perf.Begin();
+            try { CaptorVoice.Tick(); Voice.TickChecks(); } catch (Exception e) { HandsAreHighPlugin.Report("captor voice", e); }
+            Perf.End(Perf.Sec.Voice, t0);
 
             Player me = Singleton<GameWorld>.Instance.MainPlayer;
             // Debug scenarios: nothing at all unless the tools are on or one is still running.
             if (Settings.ScenariosEnabled.Value || Scenarios.Any)
             {
+                t0 = Perf.Begin();
                 try { Scenarios.Tick(me); } catch (Exception e) { HandsAreHighPlugin.Report("scenarios", e); }
+                Perf.End(Perf.Sec.Scenarios, t0);
             }
             t0 = Perf.Begin();
             if (!ScenarioUi.Open)

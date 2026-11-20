@@ -6,6 +6,53 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.20.1 (2026-11-20): performance pass (from Joel's pasted 9-part performance spec). No gameplay,
+balance or config change. Release packed (dist/HandsAreHigh-0.20.1.zip, DLL only) and installed in H:\SPT4.1.X
+(0.20.0 DLL backed up in that session's scratchpad, backup-0.20.0). Committed and pushed to main
+(no tag/release). NEVER PROFILED IN GAME: no Profile run exists for any version, so every cost below is by inspection, not measurement.**
+
+Audit (inspection; nothing measured in game):
+- Already cheap: every patch on an all-players path exits on one count (`SurrenderRegistry.Any`,
+  `Restraint.Any`); natural checks staggered (2 per frame, no catch-up); observer scan one prisoner
+  per frame, >= 0.5 s apart; captors 4 Hz; heavy path/spot work behind `Perception.TakeHeavy` with
+  backoff and move caps; rigs cached per surrender with validity checks; NonAlloc physics; no LINQ,
+  scene searches or closures on tick paths; errors rate-limited; GUI component off when idle;
+  scenario log listener attached only while a scenario runs.
+- Fixed (confirmed by inspection): (1) hot-reload teardown left `SurrenderRegistry.ByPlayer` (Player
+  keys) and the loot cache (`Arsenal`: scene InteractableObjects, Items) referenced forever (an old
+  assembly never unloads); (2) runtime reflection + enum boxing on recurring SAIN paths: owner read
+  in the `ChooseEnemy` prefix (SAIN calls it every 0.1 s per bot: BotDecisionManager.ManualUpdate),
+  layer release (0.25 s per held bot/captor), suppression (captor/guard threat 4 Hz, natural
+  checks); (3) both layers' IsActive did lookups for every bot on every brain update with nobody
+  held / no custody: now one count first; (4) `Presence` built the glance message (7 boxed floats)
+  every glance per prisoner with Log attention off (the default); (5) Overwatch's 4 Hz coverage
+  category used culture-aware StartsWith/EndsWith; (6) the profiler's "% of frame time" was ~100x
+  too small (divided by 1000/avg instead of 1000), and Captors/Restraint/Voice were booked under
+  Natural.
+- FastAccess.cs: DynamicMethod readers for SAIN members; the first 8 reads of each are also made by
+  reflection and compared; any exception/disagreement drops the compiled reader for good (one
+  warning) and reflection is used as before. tools/perftest (`dotnet run -c Release -- sain
+  H:\SPT4.1.X`): 28 checks pass, including every reader resolved from the installed SAIN.dll and
+  run on real SAIN types; .NET Framework cost 49-104 ns -> 2-3 ns per read, enum read no longer
+  allocates (15 gen0 GCs per 2M reads -> 0). Mono numbers will differ; the direction won't.
+- Left alone on purpose (cost negligible, change would touch decision logic): per-decision "why"
+  strings (seconds apart per prisoner), HoldForCover's reason string (compared by value as state),
+  the default-on Log switches (Joel's diagnostics; 90 lines in the first 0.20.0 session).
+- Profiler sections now: Pose, Tilt, Shot, Hit, Registry, Natural, Captors, Restraint, Voice, Menu,
+  Layer, Gui, LayerCheck, SainFilter, HeadLook, FireGuard, Scenarios. The report gives gameplay cost
+  (without Scenarios) and with scenarios, heap change per span, squad-cover and live-Player counts.
+
+### Profiling plan (0.20.1), not run yet
+Profile on (14. Debug), report every 10 s, same map/time, 3+ reports per case. Compare frame lines
+(avg, p99, p99.9, worst, 1% low) and the "gameplay ms/s" / per-section lines:
+1. Mod Enabled off (baseline frame times). 2. Enabled, idle raid, no surrender (expect LayerCheck +
+HeadLook + Natural only, all tiny). 3. Combat without surrender (Shot, Hit, Natural). 4. One natural
+surrender, held 60 s. 5. Several prisoners + bot captors + squad cover (Captors, Restraint,
+SainFilter, FireGuard, Pose). 6. Gear pick-up, kneel/rise, turn-around (Pose worst us; "Profile
+spike" lines name the section). 7. Scenario spawns separately: Scenarios section only, not gameplay.
+8. Repeated raids: held/history/live/loot-cache counts return to ~0 at each raid start. Watch the log
+for "compiled reader disagreed" (should never appear).
+
 **0.20.0 (2026-11-20): coordinated squad cover during captivity (Overwatch.cs, from Joel's pasted
 6-part spec). Release packed (dist/HandsAreHigh-0.20.0.zip) and installed in H:\SPT4.1.X (0.19.0 DLL
 backed up in that session's scratchpad, backup-0.19.0). Committed and pushed to main (no tag/release). NEVER RUN IN GAME: a role line

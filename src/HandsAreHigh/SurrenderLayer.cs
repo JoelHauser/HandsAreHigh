@@ -16,7 +16,14 @@ namespace HandsAreHigh
 
         public override string GetName() => "HandsAreHigh_Surrender";
 
-        public override bool IsActive() => SurrenderRegistry.HoldsBot(BotOwner?.GetPlayer);
+        // BigBrain asks every bot's brain this on every brain update: nobody held, one count.
+        public override bool IsActive()
+        {
+            long t0 = Perf.Begin();
+            bool on = SurrenderRegistry.Any && SurrenderRegistry.HoldsBot(BotOwner?.GetPlayer);
+            Perf.End(Perf.Sec.LayerCheck, t0);
+            return on;
+        }
 
         public override Action GetNextAction() => new Action(typeof(SurrenderLogic), "Surrendered");
 
