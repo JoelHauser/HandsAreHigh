@@ -30,6 +30,16 @@ namespace HandsAreHigh
             _suppressionState = null;
             _activeLayer = null;
             _noLayer = null;
+            SainTargetFilter.Reset();
+        }
+
+        // SAIN's BotComponent for a bot (cached in his history), for other adapters.
+        internal static object Component(BotOwner owner)
+        {
+            if (owner == null) return null;
+            Resolve();
+            try { return ComponentOf(owner, SurrenderRegistry.HistoryOf(owner.GetPlayer)); }
+            catch { return null; }
         }
 
         // SAIN only clears BotComponent.ActiveLayer from its own layer's IsActive(); once our
@@ -120,6 +130,8 @@ namespace HandsAreHigh
                 _activeLayer = _getBotComponent?.ReturnType.GetProperty("ActiveLayer", BindingFlags.Public | BindingFlags.Instance);
                 if (_activeLayer != null && _activeLayer.CanWrite && _activeLayer.PropertyType.IsEnum)
                     _noLayer = Enum.Parse(_activeLayer.PropertyType, "None");
+                SainTargetFilter.TryPatch(sain);
+                SpawnQuiet.ResolveSain(sain);
                 HandsAreHighPlugin.Log.LogInfo(
                     $"SAIN found: personality {(_getPersonality != null ? "yes" : "no")}, suppression {(_suppressionState != null ? "yes" : "no")}, " +
                     $"layer release {(_noLayer != null ? "yes" : "no")}");

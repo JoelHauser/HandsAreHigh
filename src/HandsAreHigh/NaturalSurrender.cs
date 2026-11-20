@@ -173,7 +173,8 @@ namespace HandsAreHigh
                 // Verbose logs are on.
                 EnemyInfo goal = owner.Memory?.GoalEnemy;
                 if (goal == null) { if (Verbose(bot)) Blocked(bot, "no enemy targeted"); return; }
-                if (!(goal.Person is Player foe) || !Perception.Alive(foe)) { if (Verbose(bot)) Blocked(bot, "his target isn't a living player"); return; }
+                Player foe = Perception.PlayerOf(goal.Person);
+                if (foe == null || !Perception.Alive(foe)) { if (Verbose(bot)) Blocked(bot, "his target isn't a living player"); return; }
                 if (foe.IsAI)
                 {
                     string no = BotFoeBlocked(bot, foe);

@@ -159,7 +159,7 @@ namespace HandsAreHigh
             try
             {
                 if (owner.BotsGroup != null && owner.BotsGroup.IsEnemy(shooter)) return true;
-                return owner.EnemiesController != null && owner.EnemiesController.IsEnemy(shooter);
+                return Perception.InfoAbout(owner, shooter) != null;   // either key (Perception.PlayerOf)
             }
             catch { return false; }
         }

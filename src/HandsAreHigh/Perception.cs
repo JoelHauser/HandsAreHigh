@@ -23,6 +23,42 @@ namespace HandsAreHigh
         internal static bool Alive(Player p) =>
             p != null && p.HealthController != null && p.HealthController.IsAlive;
 
+        // ---- who an IPlayer is (0.14.0) ----------------------------------------------------
+        //
+        // The game keys a bot's enemies by whatever object registered them: BotOwner implements
+        // IPlayer, and BotSpawner.SetBotAsEnemy / BotsGroup's constructor add other BOTS as their
+        // BotOwner (group.AddEnemy(bot, ...)), while human players (and BotsGroup's allPlayers
+        // pass) are added as their Player. So EnemyInfo.Person and the EnemyInfos keys are a
+        // BotOwner for most bot-vs-bot pairs. Every comparison with a Player goes through these;
+        // 0.8.0-0.13.1 compared by Player reference only, which made bot-vs-bot surrender
+        // impossible and left restraint working only at the trigger.
+        internal static Player PlayerOf(IPlayer p)
+        {
+            if (p == null) return null;
+            if (p is Player pl) return pl;
+            if (p is BotOwner bo) return bo.GetPlayer;
+            return null;
+        }
+
+        internal static bool Same(IPlayer a, Player b)
+        {
+            if (a == null || (object)b == null) return false;
+            if ((object)a == b) return true;
+            if (a is BotOwner bo) return (object)bo.GetPlayer == b;
+            return false;
+        }
+
+        // A bot's EnemyInfo about someone, under either key the game may have used.
+        internal static EnemyInfo InfoAbout(BotOwner o, Player target)
+        {
+            var infos = o?.EnemiesController?.EnemyInfos;
+            if (infos == null || (object)target == null) return null;
+            if (infos.TryGetValue(target, out EnemyInfo info) && info != null) return info;
+            BotOwner to = target.AIData?.BotOwner;
+            if (to != null && infos.TryGetValue(to, out info) && info != null) return info;
+            return null;
+        }
+
         // The player is "covering" him when he has a gun up, isn't reloading or in his
         // inventory, is looking at him within `angle`, and has a clear line to him.
         // Anything else is an opening.
@@ -51,8 +87,8 @@ namespace HandsAreHigh
         {
             if (!Alive(other) || !LineClear(Eye(bot), Eye(other))) return false;
             if (dist <= CloseNotice) return true;
-            var infos = bot.AIData?.BotOwner?.EnemiesController?.EnemyInfos;
-            if (infos == null || !infos.TryGetValue(other, out EnemyInfo e) || e == null) return true;
+            EnemyInfo e = InfoAbout(bot.AIData?.BotOwner, other);
+            if (e == null) return true;
             return e.IsVisible || Time.time - e.PersonalLastSeenTime < 1f;
         }
 
@@ -64,8 +100,11 @@ namespace HandsAreHigh
             if (p == null || !Alive(prisoner)) return false;
             if (!LineClear(Eye(p), Chest(prisoner))) return false;
             if ((p.Position - prisoner.Position).sqrMagnitude <= 36f) return true;
-            var infos = o.EnemiesController?.EnemyInfos;
-            if (infos == null || !infos.TryGetValue(prisoner, out EnemyInfo e) || e == null) return false;
+            // Either key: bot enemies are usually registered as their BotOwner (InfoAbout). With
+            // the Player key only (0.9.0-0.13.1) a bot never recognised another bot's surrender
+            // beyond 6 m: the offer stayed pending, with nobody holding fire.
+            EnemyInfo e = InfoAbout(o, prisoner);
+            if (e == null) return false;
             return e.IsVisible || Time.time - e.PersonalLastSeenTime < 1f;
         }
 
@@ -74,8 +113,8 @@ namespace HandsAreHigh
         internal static Vector3 KnownPosition(BotOwner o, Player other, out bool exact)
         {
             exact = false;
-            var infos = o?.EnemiesController?.EnemyInfos;
-            if (infos != null && infos.TryGetValue(other, out EnemyInfo e) && e != null)
+            EnemyInfo e = InfoAbout(o, other);
+            if (e != null)
             {
                 if (e.IsVisible) { exact = true; return other.Position; }
                 if (e.HaveSeenPersonal) return e.PersonalLastPos;

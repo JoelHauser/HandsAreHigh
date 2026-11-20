@@ -214,6 +214,7 @@ namespace HandsAreHigh
         {
             if (!Settings.ScenariosEnabled.Value && Running.Count > 0) CleanupAll("Scenario tools turned off");
             ScenarioUi.Update(me);
+            SpawnQuiet.Tick();
             if (Running.Count == 0) return;
             ScenarioShield.Tick();
             Scratch.Clear();
@@ -473,6 +474,7 @@ namespace HandsAreHigh
             HandsAreHighPlugin.Log.LogInfo($"New raid: {Running.Count} debug scenario(s) forgotten (their raid ended)");
             Running.Clear();
             ScenarioShield.Clear();
+            SpawnQuiet.Clear();
             Idle();
             ScenarioUi.Reset();
         }

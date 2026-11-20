@@ -44,9 +44,21 @@ namespace HandsAreHigh
             if (!Active || shooter == null || target == null) return false;
             if (!ByShooter.TryGetValue(shooter, out List<Pair> list)) return false;
             for (int i = 0; i < list.Count; i++)
-                if ((object)list[i].Target == target) return true;
+                if (Perception.Same(target, list[i].Target)) return true;
             return false;
         }
+
+        // By profile id (SAIN's Enemy objects).
+        internal static bool BlocksId(Player shooter, string profileId)
+        {
+            if (!Active || shooter == null || profileId == null) return false;
+            if (!ByShooter.TryGetValue(shooter, out List<Pair> list)) return false;
+            for (int i = 0; i < list.Count; i++)
+                if (list[i].Target != null && list[i].Target.ProfileId == profileId) return true;
+            return false;
+        }
+
+        internal static bool Shields(Player shooter) => Active && shooter != null && ByShooter.ContainsKey(shooter);
 
         // Same aim test as the restraint trigger guard: pressing the trigger with the aim on a
         // shielded target.
@@ -127,14 +139,14 @@ namespace HandsAreHigh
             try
             {
                 EnemyInfo goal = o.Memory?.GoalEnemy;
-                if (goal != null && (object)goal.Person == p.Target)
+                if (goal != null && Perception.Same(goal.Person, p.Target))
                 {
                     o.ShootData?.EndShoot();
                     o.Memory.GoalEnemy = null;
                 }
                 if (p.Kind != ShieldKind.Observer || p.Flagged != null) return;
-                var infos = o.EnemiesController?.EnemyInfos;
-                if (infos == null || !infos.TryGetValue(p.Target, out EnemyInfo info) || info == null) return;
+                EnemyInfo info = Perception.InfoAbout(o, p.Target);
+                if (info == null) return;
                 if (info.IgnoreUntilAggression) return;   // set by someone else: left alone
                 info.SetIgnoreState(true);
                 p.Flagged = info;
@@ -180,7 +192,7 @@ namespace HandsAreHigh
             _hitHandler = (info, part, absorbed) =>
             {
                 Player shooter = null;
-                try { shooter = info.Player?.iPlayer as Player; } catch { }
+                try { shooter = Perception.PlayerOf(info.Player?.iPlayer); } catch { }
                 if (shooter != null && Blocks(shooter, me))
                     HandsAreHighPlugin.Log.LogWarning($"SCENARIO SHIELD LEAK (hit): {Restraint.Name(shooter)} hit you through the observer override ({part})");
             };

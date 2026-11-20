@@ -343,6 +343,7 @@ namespace HandsAreHigh
                     return;
                 }
                 Scenarios.Register(sc, p);
+                SpawnQuiet.Add(bot, Restraint.Name(p.Player));
                 // SPT's PmcBotSidePatch gives a PMC its side from the role; check it took.
                 EPlayerSide got = p.Player.Profile?.Info?.Side ?? EPlayerSide.Savage;
                 string sideNote = got != p.Side ? $" (side {got}, expected {p.Side})" : "";

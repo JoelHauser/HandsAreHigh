@@ -158,7 +158,12 @@ namespace HandsAreHigh
         internal static void RemoveItem(Scenario sc, Participant p, Item it)
         {
             InventoryController ic = p.Player.InventoryController;
-            var op = ItemManipulator.Remove(it, ic);
+            // simulate: the transaction below performs it (every game call site that hands the
+            // result to TryRunNetworkTransaction simulates; executing here first removed the item
+            // and then the transaction threw "Trying to get parent of an item that doesn't have a
+            // parent", aborting the rest of the ammo setup: 0.13.1 log, every ammo preset).
+            if (it.CurrentAddress == null) return;
+            var op = ItemManipulator.Remove(it, ic, simulate: true);
             if (op.Failed)
             {
                 sc.Note(TL.ExecFail, $"{p.Tag}: the game refused to remove {it.ShortName.Localized()} ({op.Error})");

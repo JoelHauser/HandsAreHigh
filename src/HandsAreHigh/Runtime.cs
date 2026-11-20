@@ -117,7 +117,7 @@ namespace HandsAreHigh
             }
             else if (command == "surrender to his enemy")
             {
-                Player foe = target.AIData?.BotOwner?.Memory?.GoalEnemy?.Person as Player;
+                Player foe = Perception.PlayerOf(target.AIData?.BotOwner?.Memory?.GoalEnemy?.Person);
                 if (!NaturalSurrender.Eligible(target)) outcome = "not a Scav or PMC, can't surrender";
                 else if (SurrenderRegistry.HoldsBot(target)) outcome = "already surrendered";
                 else if (foe == null || !foe.IsAI || !Perception.Alive(foe)) outcome = "isn't fighting a bot right now";

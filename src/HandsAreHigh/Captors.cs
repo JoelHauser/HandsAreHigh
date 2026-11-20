@@ -98,6 +98,13 @@ namespace HandsAreHigh
         internal Vector3 AlertAt;
         internal float AlertSeenAt = -1000f;
 
+        // Walking up to the prisoner (0.14.0), in Guard mode only.
+        internal bool Approaching;
+        internal float ApproachSince;
+        internal float NextApproachAt;
+        internal Vector3 ApproachTarget;
+        internal float ApproachKeep;
+
         internal bool Busy => Mode == CaptorMode.Engage;
     }
 
@@ -194,7 +201,11 @@ namespace HandsAreHigh
             if (!(c.HandsController is Player.FirearmController)) return "no gun in his hands";
             if (Arsenal.OutOfAmmo(o)) return "out of ammo";
             float d = Vector3.Distance(c.Position, s.Bot.Position);
-            if (d > Settings.AcceptRange.Value) return $"{d:0} m away, too far to guard";
+            // Beyond the guard range he can still take him if he can walk up (a complete NavMesh
+            // path; he only walks while nothing threatens him: Captors.Check / Approach).
+            if (d > Settings.AcceptRange.Value &&
+                (d > Settings.CaptorApproachFrom.Value || !Perception.Reachable(c.Position, s.Bot.Position)))
+                return d > Settings.CaptorApproachFrom.Value ? $"{d:0} m away, too far to guard" : $"{d:0} m away, no way to walk up to him";
             if (!Perception.Recognises(o, s.Bot)) return "can't see him";
             if (Restraint.OtherThreat(o, s.Bot, out string threat)) return $"busy with {threat}";
             return null;
@@ -430,10 +441,11 @@ namespace HandsAreHigh
 
             // Guarding.
             if (t == ThreatLevel.Alert) { cs.AlertAt = at; cs.AlertSeenAt = now; }
-            Glances(cs, s, now);
-
             bool sees = Perception.Recognises(cs.Owner, s.Bot);
-            if (!sees)
+            Approach(cs, s, now, t, sees);
+            if (!cs.Approaching) Glances(cs, s, now);
+
+            if (!sees && !cs.Approaching)
             {
                 if (cs.LostSightSince < 0f) cs.LostSightSince = now;
                 else if (now - cs.LostSightSince > 6f)
@@ -465,6 +477,92 @@ namespace HandsAreHigh
             }
         }
 
+        // ---- walking up to him (0.14.0) ---------------------------------------------------
+        //
+        // A captor too far to give orders (or who lost his line to the prisoner) walks up to a
+        // practical distance along a complete NavMesh path (BotMover.GoToByWay; never a teleport),
+        // gun on the prisoner, at a walk. Only while nothing threatens him: any Alert, Fire or
+        // Contact stops it at once (Fire goes to Cover, Contact to Engage, as before), so he never
+        // crosses open ground under fire; guarding from where he stands is always valid. Stuck
+        // 2.5 s, 25 s total or no path: he stops and guards from there (one retry after 8 s).
+        private const float ApproachStuck = 2.5f, ApproachLimit = 25f;
+
+        private static void Approach(CaptorState cs, SurrenderState s, float now, ThreatLevel t, bool sees)
+        {
+            float d = Vector3.Distance(cs.Bot.Position, s.Bot.Position);
+            float keep = Mathf.Min(Settings.CaptorGuardDistance.Value, Settings.AiOrderRange.Value - 2f);
+            if (cs.Approaching)
+            {
+                string stop = null;
+                if (t != ThreatLevel.None) stop = "something else needs his attention";
+                else if (d <= Mathf.Max(cs.ApproachKeep, 1.5f) + 0.5f && sees) stop = $"close enough ({d:0.0} m)";
+                else if (d <= keep && sees && cs.ApproachKeep >= keep) stop = $"close enough ({d:0.0} m)";
+                else if (now - cs.ApproachSince > ApproachLimit) stop = "took too long";
+                else if ((cs.Bot.Position - cs.ProgressFrom).sqrMagnitude >= 0.25f) { cs.ProgressFrom = cs.Bot.Position; cs.ProgressSince = now; }
+                else if (now - cs.ProgressSince > ApproachStuck) stop = "stuck";
+                if (stop == null && (s.Bot.Position - cs.ApproachTarget).sqrMagnitude > 4f) cs.PathIssued = false;   // he moved: a fresh path
+                if (stop != null)
+                {
+                    cs.Approaching = false;
+                    cs.PathIssued = false;
+                    cs.NextApproachAt = now + (stop.StartsWith("close") ? 3f : 8f);
+                    if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: stops walking up to {s.Name}: {stop}");
+                }
+                return;
+            }
+            if (Settings.CaptorApproachFrom.Value <= 0f || t != ThreatLevel.None || now < cs.NextApproachAt || now < cs.GlanceUntil) return;
+            bool far = d > Settings.AiOrderRange.Value - 1f;
+            bool blind = !sees && d > 2.5f;
+            if (!far && !blind) return;
+            if (!Perception.TakeHeavy()) return;   // one path solve: a frame with budget
+            if (!Perception.PathTo(cs.Bot.Position, s.Bot.Position, out Vector3[] corners, out string why))
+            {
+                cs.NextApproachAt = now + 8f;
+                if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: can't walk up to {s.Name} ({why}); guards from {d:0} m");
+                return;
+            }
+            cs.Approaching = true;
+            cs.ApproachKeep = blind && !far ? 2.5f : keep;   // lost his line close by: closer, to see him again
+            cs.ApproachSince = now;
+            cs.ApproachTarget = s.Bot.Position;
+            cs.ProgressFrom = cs.Bot.Position;
+            cs.ProgressSince = now;
+            cs.PathIssued = false;
+            cs.GlanceUntil = 0f;
+            if (Settings.LogDecisions.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: walks up to {s.Name} ({d:0} m{(blind ? ", can't see him from here" : "")}, path {PathLength(corners):0} m, stops at ~{cs.ApproachKeep:0.0} m)");
+        }
+
+        // The part of a path that ends `keep` metres (along the path) short of its end.
+        internal static Vector3[] Shorten(Vector3[] corners, float keep)
+        {
+            if (corners == null || corners.Length < 2) return corners;
+            float total = PathLength(corners);
+            float want = total - keep;
+            if (want <= 0.3f) return new[] { corners[0] };
+            var list = new List<Vector3>(corners.Length) { corners[0] };
+            float acc = 0f;
+            for (int i = 1; i < corners.Length; i++)
+            {
+                float seg = Vector3.Distance(corners[i - 1], corners[i]);
+                if (acc + seg >= want)
+                {
+                    list.Add(Vector3.Lerp(corners[i - 1], corners[i], Mathf.Clamp01((want - acc) / Mathf.Max(seg, 1e-4f))));
+                    return list.ToArray();
+                }
+                acc += seg;
+                list.Add(corners[i]);
+            }
+            return list.ToArray();
+        }
+
+        private static float PathLength(Vector3[] c)
+        {
+            float l = 0f;
+            for (int i = 1; i < c.Length; i++) l += Vector3.Distance(c[i - 1], c[i]);
+            return l;
+        }
+
         // ---- threat ----------------------------------------------------------------------
 
         // From what the game (and SAIN) say he perceives. at: where it is (exact for a visible
@@ -485,12 +583,17 @@ namespace HandsAreHigh
                 foreach (KeyValuePair<IPlayer, EnemyInfo> kv in infos)
                 {
                     EnemyInfo e = kv.Value;
-                    if (e == null || (object)e.Person == prisoner) continue;
+                    // 0.14.0: the prisoner is often in this map as his BotOwner (bot enemies are
+                    // registered that way), so "is this him" goes through Perception.Same. Before,
+                    // he counted as "another enemy in sight": Guard -> Engage at once, the layer let
+                    // go, SAIN fought him, and custody was dropped after BusyRelease.
+                    if (e == null || Perception.Same(e.Person, prisoner)) continue;
                     if (e.Person?.HealthController == null || !e.Person.HealthController.IsAlive) continue;
-                    if (e.Person is Player ep && (Restraint.HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep))) continue;
+                    Player ep = Perception.PlayerOf(e.Person);
+                    if (ep != null && (Restraint.HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep))) continue;
                     if (e.IsVisible)
                     {
-                        why = e.Person is Player pl ? Restraint.Name(pl) : "an enemy";
+                        why = ep != null ? Restraint.Name(ep) : "an enemy";
                         at = e.CurrPosition; atKnown = true;
                         return ThreatLevel.Contact;
                     }
@@ -498,7 +601,7 @@ namespace HandsAreHigh
                     {
                         recentSeen = e.PersonalLastSeenTime;
                         recentAt = e.PersonalLastPos;
-                        recentName = e.Person is Player pl2 ? Restraint.Name(pl2) : "an enemy";
+                        recentName = ep != null ? Restraint.Name(ep) : "an enemy";
                     }
                 }
             }
@@ -530,6 +633,7 @@ namespace HandsAreHigh
             cs.ModeSince = Time.time;
             cs.ModeWhy = why;
             cs.QuietSince = -1f;
+            cs.Approaching = false;
             if (m != CaptorMode.Cover) cs.PathIssued = false;
             if (Settings.LogDecisions.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {old} -> {m} ({why}), prisoner {cs.Prisoner?.Name}");
@@ -805,6 +909,7 @@ namespace HandsAreHigh
                 }
                 Captors.TryGet(BotOwner.GetPlayer, out CaptorState cs);
                 if (cs != null && cs.Mode == CaptorMode.Cover) { MoveToCover(cs); return; }
+                if (cs != null && cs.Approaching) { WalkUp(cs, s); return; }
 
                 if (_moving || !_stopped) { BotOwner.StopMove(); BotOwner.SetTargetMoveSpeed(0f); BotOwner.Sprint(false); _stopped = true; _moving = false; }
                 if (Mathf.Abs(_pose - 1f) > 0.01f) { _pose = 1f; BotOwner.SetPose(1f); }
@@ -838,6 +943,37 @@ namespace HandsAreHigh
                 BotOwner.Sprint(true);
             }
             BotOwner.Steering.LookToMovingDirection();
+        }
+
+        // Walking up to the prisoner: one path (re-made when he has moved 2 m, at most every
+        // 1.5 s), at a walk, gun and eyes on him (BotMover moves him along the path whatever way
+        // he faces; no sprint, so SAIN's sprint-direction rule doesn't apply).
+        private void WalkUp(CaptorState cs, SurrenderState s)
+        {
+            if (Mathf.Abs(_pose - 1f) > 0.01f) { _pose = 1f; BotOwner.SetPose(1f); }
+            if (!cs.PathIssued && Time.time >= cs.NextPathAt)
+            {
+                cs.NextPathAt = Time.time + 1.5f;
+                float keep = cs.ApproachKeep;
+                if (!Perception.PathTo(BotOwner.GetPlayer.Position, s.Bot.Position, out Vector3[] corners, out _))
+                {
+                    cs.ProgressSince = -1000f;   // Captors.Approach: stuck -> stops, guards from here
+                    cs.PathIssued = true;
+                    return;
+                }
+                Vector3[] way = Captors.Shorten(corners, keep);
+                cs.ApproachTarget = s.Bot.Position;
+                cs.PathIssued = true;
+                if (way.Length < 2) { cs.ProgressSince = -1000f; return; }   // already as close as the path allows
+                if (!_moving) Relink();
+                _moving = true;
+                _stopped = false;
+                BotOwner.Sprint(false);
+                BotOwner.SetTargetMoveSpeed(Settings.CaptorApproachSpeed.Value);
+                BotOwner.MovementResume();
+                BotOwner.Mover.GoToByWay(way, 0.5f);
+            }
+            BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot));
         }
 
         // As SurrenderLogic.Relink: the mover's last-good-link fields set to where he stands, so

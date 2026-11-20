@@ -17,7 +17,7 @@ namespace HandsAreHigh
     {
         public const string PluginGuid = "com.joelhauser.handsarehigh";
         public const string PluginName = "Hands Are High";
-        public const string PluginVersion = "0.13.1";
+        public const string PluginVersion = "0.14.0";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").
@@ -37,6 +37,7 @@ namespace HandsAreHigh
         };
 
         internal static bool BossLayersRegistered;
+        internal static Harmony Harmony;
 
         internal static ManualLogSource Log;
         private static readonly Dictionary<string, float> ErrorLoggedAt = new Dictionary<string, float>();
@@ -75,7 +76,9 @@ namespace HandsAreHigh
 
             var harmony = new Harmony(PluginGuid);
             harmony.PatchAll(typeof(HandsAreHighPlugin).Assembly);
+            Harmony = harmony;   // late patches (SAIN, found at raid start) go through the same instance
             _teardown.Add(harmony.UnpatchSelf);
+            _teardown.Add(() => Harmony = null);
 
             _teardown.Own(gameObject.AddComponent<Runtime>());
             _teardown.Own(gameObject.AddComponent<RuntimeGui>());

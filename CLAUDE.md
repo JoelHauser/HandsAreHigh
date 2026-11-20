@@ -6,6 +6,87 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.14.0 (2026-11-19, home PC): bot-vs-bot identity fix, SAIN target filter, captor walk-up, urgent
+escapes, weapon-recovery preference, head/torso look split, scenario spawn mag check. Built against
+H:\SPT4.1.X, 0 warnings, dist/HandsAreHigh-0.14.0.zip, installed; committed + pushed to main
+2026-11-19 (no tag/release). Joel sent one screenshot of a kneeling Scav, hands behind head, head
+turned (no comment); no 0.14.0 log reviewed yet, so none of the fixes below is confirmed in game.**
+
+From Joel's 0.13.1 log (LogOutput.log 2026-11-19 19:13): 0 natural surrender rolls in the whole log,
+175 checks skipped "his target isn't a living player"; every forced custody went Guard -> Engage
+("an enemy") at once; RESTRAINT LEAK only "at trigger", plus hits.
+- ROOT CAUSE (verified in the decompile): BotOwner implements IPlayer, and BotSpawner.SetBotAsEnemy /
+  BotsGroup ctor register bot enemies as their BotOwner (humans as Player). So EnemyInfo.Person and
+  EnemyInfos keys are a BotOwner for bot-vs-bot pairs. Everything comparing to a Player failed:
+  natural bot-vs-bot surrender (never evaluated), Captors.Assess (prisoner = "another enemy in
+  sight" -> Engage -> layer off -> SAIN fights him -> custody dropped after 12 s -> he goes for
+  his gun -> shot), Restraint OtherThreat/Flag/scan/Apply/GoalEnemy+ShootData prefixes,
+  Perception.Recognises/Sees/KnownPosition (no recognition beyond 6 m), ScenarioShield (truce
+  pairs kept targeting each other, trigger-only), debug Ctrl+[ "isn't fighting a bot".
+  Fix: Perception.PlayerOf / Same / InfoAbout (either key) everywhere.
+- SAIN keeps its own target (SAINEnemyController._goalEnemy from VisibleEnemies/KnownEnemies) and
+  only mirrors it to BotMemory.GoalEnemy: our setter prefix never stopped SAIN aiming at a prisoner.
+  SainTargetFilter: prefix/postfix on ChooseEnemy (not SelectEnemy: it indexes KnownEnemies[0])
+  takes held-fire prisoners/shielded targets out of both lists for the call, drops a matching
+  _goalEnemy, puts the lists back. Only for bots in Restraint.HeldFireBy / shield pairs.
+  Trigger guard cone now covers the whole body (max(6, atan(1.1/d))). Hits within 1.5 s of a
+  decision whose shooter's last trigger press was before it log "in flight, not a new attack".
+- Restraint decisions that only expired (same situation) are renewed, not re-rolled (Ignore is
+  re-decided). Rolls happen on real changes only.
+- Captor walk-up (Captors.Approach / CaptorLogic.WalkUp): beyond order range or without a line,
+  only with ThreatLevel.None, complete NavMesh path shortened to "Guards from (m)" 8, walk 0.8, eyes
+  on him; stops on any threat/stuck 2.5 s/25 s. Custody beyond "Guards from up to" 20 m is
+  practical when a path exists within "Walks up to a prisoner from (m)" 60.
+- Escapes walked: SAIN's SprintLookDirPatch (prefix on BotMover.Sprint) turns a sprint into a walk
+  if the bot looks > 20 deg from RealDestPoint, and refuses while SAINLayersActive. Our moves kept
+  facing the captor and asked for the sprint once per path. MoveTo(sprint): LookToMovingDirection
+  every frame + re-asks while !Mover.Sprinting. Hide from an opening and walking back for a gun
+  (> 3 m) now urgent too. MoveDiag logs one line per urgent move at 1.5 s (m/s, mover/body sprint,
+  legs, stamina, facing off destination, arms, pose).
+- Weapon recovery: scramble / "get his gun" x2.5 within 3 m, x1.6 within 5 m; kneeling penalty
+  0.85 (not 0.6) when it's within reach; a squadmate (restraint observer, alive, <= 25 m, line to
+  the gun, up to 3 checks) raises exposure to 0.6.
+- Head (Presence): yaw measured in the kneel's planted frame (KneelAnchorFwd) while kneeling; with
+  hands behind the head the torso carries a wide look (dead zone 25->8, share 0.4->0.75, limit
+  TorsoAssist x2, max 35) about the spine's own axis, split Spine1 40% / Spine3 60%; neck share
+  <= 25 deg; up 12 deg; captor beyond reach + 12: settles at 85% of reach, 6 deg down.
+- Scenario spawn mag check (scenario bots ONLY, Joel 2026-11-19): vanilla BotMagazineChecker's
+  _nextPosibleCheckMagazine starts 0 (first PatrolMoveSimple update checks at once); SAIN
+  Firemode.CheckMagTimer/NextCheckTimer start 0 (FirearmsAnimator.CheckAmmo on its first no-enemy
+  update). SpawnQuiet schedules both as if just checked (vanilla: GreateRandom(CHECK_MAGAZIN_PERIOD);
+  SAIN: 360 x 0.5-1.5, next check >= 30 s), nothing blocked. 17. "No magazine check on spawn" (on).
+- ScenarioOps.RemoveItem executed the removal (ItemManipulator.Remove without simulate) and then the
+  transaction threw "Trying to get parent ..." (every ammo preset in the log): simulate: true.
+- SAIN preset in use: "Default [Modified]" (BaseSAINDifficulty hard), Difficulty coefs
+  VisibleDist 0.7, GainSight 0.95, Scattering 0.75, HearingDistance 0.55, Aggression 0.85,
+  GlobalAggression 0.9, AI-vs-AI vision/hearing limits on. Not compared with SAIN's shipped preset;
+  not changed. Scenario bots always spawn BotDifficulty.normal (raid PMCs: pmc.json AsOnline).
+
+### In-game test plan (0.14.0)
+
+Log decisions + restraint on, Verbose off. Grep `walks up`, `stops walking up`, `takes him prisoner`,
+`spares`, `refuses`, `RESTRAINT LEAK`, `in flight`, `SAIN target filter`, `move after`,
+`Scenario spawn:`, `-> surrenders`, `no surrender check`.
+1. Startup: `SAIN target filter on`. Natural: PMC captures Scav preset in Natural mode (or Matched
+   off), several runs: Scav check lines now show `vs <PMC> (bot pmcUSEC, armed)` rolls, no "isn't
+   a living player"; on a surrender the PMC logs a decision; on take: no `Guard -> Engage (an
+   enemy)`, `walks up` if > 14 m, orders follow, zero RESTRAINT LEAK.
+2. PMC squad captures a bot (forced): squadmates `holds fire (squad)`, no squad volley, zero leaks.
+3. Captor comes under fire: `Guard -> Cover` or Engage; a walk-up in progress `stops walking up ...
+   something else`; prisoner not shot by the captor's squad.
+4. Kneeling prisoner, circle him (and with a bot captor walking up): upper back turns with the head,
+   hands stay on the head, no neck corkscrew; behind him: head settles short, no pinned stare.
+5. Openings with the gun 1-3 m / 8 m / gone / unreachable, standing and kneeling: decision log shows
+   `scramble (within reach)` weights; pick-up, draw, AI hand-off.
+6. Escapes standing and kneeling: `move after 1.5 s: N m/s ... mover sprinting, body sprinting,
+   facing ~0 deg`. If NOT sprinting: the line says why (leg, stamina, facing).
+7. Spawn any scenario: `Scenario spawn: <bot>: no magazine check at spawn (vanilla: first check in
+   N s; SAIN: first magazine check in N s ...)`; no mag-check animation; he can shoot, reload, drop
+   on surrender at once. Raid bots: unchanged (they still check at spawn).
+8. Combat comparison (Joel): same map/spot, F12 Hands Are High Enabled off vs on with no encounter,
+   then after an encounter: bot-vs-bot fights should look the same. Matched Scav and PMC keeps its
+   truce by design (both fight YOU); they now ignore each other instead of aiming without firing.
+
 **0.13.1 (2026-11-19, home PC): PMC scenario spawn fix + arm solver rewrite. Built against
 H:\SPT4.1.X, 0 warnings, dist/HandsAreHigh-0.13.1.zip, installed; uncommitted; never run in game.**
 

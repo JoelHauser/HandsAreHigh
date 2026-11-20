@@ -69,9 +69,21 @@ namespace HandsAreHigh
             if (!Any || observer == null || prisoner == null) return false;
             if (!HeldFireBy.TryGetValue(observer, out List<Player> list)) return false;
             for (int i = 0; i < list.Count; i++)
-                if ((object)list[i] == prisoner) return true;
+                if (Perception.Same(prisoner, list[i])) return true;
             return false;
         }
+
+        // By profile id (SAIN's own Enemy objects carry the id, not our Player).
+        internal static bool HoldsFireAtId(Player observer, string profileId)
+        {
+            if (!Any || observer == null || profileId == null) return false;
+            if (!HeldFireBy.TryGetValue(observer, out List<Player> list)) return false;
+            for (int i = 0; i < list.Count; i++)
+                if (list[i] != null && list[i].ProfileId == profileId) return true;
+            return false;
+        }
+
+        internal static bool Restrains(Player observer) => Any && observer != null && HeldFireBy.ContainsKey(observer);
 
         internal static bool TryGet(Player prisoner, Player observer, out RestraintEntry e)
         {
@@ -140,7 +152,7 @@ namespace HandsAreHigh
             try
             {
                 EnemyInfo goal = o?.Memory?.GoalEnemy;
-                if (goal != null && (object)goal.Person == s.Bot)
+                if (goal != null && Perception.Same(goal.Person, s.Bot))
                 {
                     o.ShootData?.EndShoot();
                     o.Memory.GoalEnemy = null;   // the chooser picks someone else (or nobody)
@@ -153,8 +165,8 @@ namespace HandsAreHigh
         // re-applies it when one appears later). Only set where it was clear.
         private static void Flag(SurrenderState s, RestraintEntry e)
         {
-            var infos = e.Owner?.EnemiesController?.EnemyInfos;
-            if (infos == null || !infos.TryGetValue(s.Bot, out EnemyInfo info) || info == null) return;
+            EnemyInfo info = Perception.InfoAbout(e.Owner, s.Bot);
+            if (info == null) return;
             if (e.Flagged == info) { if (!info.IgnoreUntilAggression) info.SetIgnoreState(true); return; }
             if (info.IgnoreUntilAggression) return;   // someone else's (a game event): leave it alone
             info.SetIgnoreState(true);
@@ -263,12 +275,19 @@ namespace HandsAreHigh
         {
             if (!Any && EntryCount == 0) return;
             Player shooter = null;
-            try { shooter = info.Player?.iPlayer as Player; } catch { }
+            try { shooter = Perception.PlayerOf(info.Player?.iPlayer); } catch { }
             if (shooter == null || shooter == s.Bot) return;
             if (TryGet(s.Bot, shooter, out RestraintEntry e))
             {
-                if (e.Holds)
-                    HandsAreHighPlugin.Log.LogWarning($"RESTRAINT LEAK (hit): {Name(shooter)} hit {s.Name} while his decision was '{Verb(e.Kind)}' ({e.Why})");
+                // A round fired before he decided (already in the air, or the end of a burst the
+                // decision's EndShoot cut) is not a new attack: his last trigger press that went
+                // through (TriggerPatch) was before the decision.
+                float lastShot = LastShot(shooter);
+                if (e.Holds && lastShot >= 0f && lastShot <= e.DecidedAt + 0.05f && Time.time - e.DecidedAt < 1.5f)
+                    HandsAreHighPlugin.Log.LogInfo($"Restraint: {Name(shooter)}'s round, fired {e.DecidedAt - lastShot:0.00} s before his decision, hit {s.Name} (in flight, not a new attack)");
+                else if (e.Holds)
+                    HandsAreHighPlugin.Log.LogWarning($"RESTRAINT LEAK (hit): {Name(shooter)} hit {s.Name} while his decision was '{Verb(e.Kind)}' ({e.Why}); " +
+                        $"his last trigger press {(lastShot < 0f ? "unknown" : $"{Time.time - lastShot:0.00} s ago")}, decided {Time.time - e.DecidedAt:0.0} s ago");
                 else if (Settings.LogRestraint.Value)
                     HandsAreHighPlugin.Log.LogInfo($"Restraint: {Name(shooter)} shot {s.Name} as decided (refused: {e.Why})");
             }
@@ -311,12 +330,24 @@ namespace HandsAreHigh
                 if ((p.Position - at).sqrMagnitude > r * r) continue;
                 BotOwner o = p.AIData?.BotOwner;
                 if (o == null || o.IsDead || o.BotState != EBotState.Active || SurrenderRegistry.HoldsBot(p)) continue;
-                var infos = o.EnemiesController?.EnemyInfos;
-                if (infos == null || !infos.TryGetValue(s.Bot, out EnemyInfo info) || info == null) continue;
+                EnemyInfo info = Perception.InfoAbout(o, s.Bot);
+                if (info == null) continue;
 
                 if (TryGet(s.Bot, p, out RestraintEntry e) && now < e.Until)
                 {
                     if (e.Holds) Flag(s, e);   // an EnemyInfo made after the decision gets the flag too
+                    continue;
+                }
+                // 0.14.0: a decision that merely ran out of time, for the same situation, is
+                // renewed as it was, not rolled again. Re-rolling every RestraintMemory seconds
+                // turned a held man's survival into a series of rolls, one of which eventually
+                // came up Reject. Only a real change (he runs, comes back, goes for a gun) makes
+                // anyone decide again (OnSituationChanged / OnArmed). Ignore was a judgement about
+                // another threat, so it is looked at again.
+                if (e != null && e.DecidedAt > 0f && e.Situation == SituationOf(s) && e.Kind != RestraintKind.Ignore)
+                {
+                    e.Until = now + Settings.RestraintMemory.Value;
+                    if (e.Holds) Apply(s, e);
                     continue;
                 }
                 if (e != null && e.Squad && now >= e.Until && SquadOf(s, o, out BotOwner lead))
@@ -410,10 +441,11 @@ namespace HandsAreHigh
                 foreach (KeyValuePair<IPlayer, EnemyInfo> kv in infos)
                 {
                     EnemyInfo e = kv.Value;
-                    if (e == null || !e.IsVisible || (object)e.Person == prisoner) continue;
+                    if (e == null || !e.IsVisible || Perception.Same(e.Person, prisoner)) continue;
                     if (e.Person?.HealthController == null || !e.Person.HealthController.IsAlive) continue;
-                    if (e.Person is Player ep && (HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep))) continue;
-                    what = e.Person is Player pl ? Name(pl) : "an enemy";
+                    Player ep = Perception.PlayerOf(e.Person);
+                    if (ep != null && (HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep))) continue;
+                    what = ep != null ? Name(ep) : "an enemy";
                     return true;
                 }
             }
@@ -514,6 +546,7 @@ namespace HandsAreHigh
                     if (e.Flagged != null) { try { e.Flagged.SetIgnoreState(false); } catch { } e.Flagged = null; }
             ByPrisoner.Clear();
             HeldFireBy.Clear();
+            ShotAt.Clear();
             Any = false;
             EntryCount = 0;
             _cursor = 0;
@@ -525,6 +558,12 @@ namespace HandsAreHigh
         // ---- the trigger guard ----------------------------------------------------------------
 
         private static float _leakLogAt;
+
+        // When each AI last pressed his trigger and it went through (TriggerPatch, only while
+        // anyone holds fire): tells a round fired before a decision from an attack after it.
+        private static readonly Dictionary<Player, float> ShotAt = new Dictionary<Player, float>();
+        internal static void NoteShot(Player shooter) { if (ShotAt.Count > 256) ShotAt.Clear(); ShotAt[shooter] = Time.time; }
+        private static float LastShot(Player shooter) => shooter != null && ShotAt.TryGetValue(shooter, out float t) ? t : -1f;
 
         // A restrained bot pressing the trigger with his aim on a prisoner he holds fire at.
         internal static bool AimedAtRestrained(Player shooter, out Player prisoner)
@@ -539,7 +578,11 @@ namespace HandsAreHigh
                 if (!Perception.Alive(p)) continue;
                 Vector3 to = Perception.Chest(p) - eye;
                 if (to.sqrMagnitude > 150f * 150f) continue;
-                if (Vector3.Angle(look, to) > 6f) continue;
+                // Any part of him, not only the chest: a flat 6 deg round the chest let aimed
+                // shots at the head, arms or legs through at close range (0.13.1 log: hits
+                // with no blocked press before them).
+                float cone = Mathf.Max(6f, Mathf.Atan2(1.1f, Mathf.Max(to.magnitude, 0.5f)) * Mathf.Rad2Deg);
+                if (Vector3.Angle(look, to) > cone) continue;
                 prisoner = p;
                 return true;
             }
@@ -586,13 +629,13 @@ namespace HandsAreHigh
                 if (goal == null) return true;
                 if (ScenarioShield.Blocks(____owner.GetPlayer, goal.Person))
                 {
-                    ScenarioShield.LogBlocked(____owner.GetPlayer, goal.Person as Player, "ShootData.Shoot");
+                    ScenarioShield.LogBlocked(____owner.GetPlayer, Perception.PlayerOf(goal.Person), "ShootData.Shoot");
                     ____owner.ShootData.EndShoot();
                     __result = false;
                     return false;
                 }
                 if (!Restraint.HoldsFire(____owner.GetPlayer, goal.Person)) return true;
-                Restraint.LogLeakBlocked(____owner.GetPlayer, goal.Person as Player, "ShootData.Shoot");
+                Restraint.LogLeakBlocked(____owner.GetPlayer, Perception.PlayerOf(goal.Person), "ShootData.Shoot");
                 ____owner.ShootData.EndShoot();
                 __result = false;
                 return false;
@@ -608,18 +651,22 @@ namespace HandsAreHigh
         [HarmonyPrefix]
         private static void Prefix(Player.FirearmController __instance, ref bool pressed)
         {
-            if (!pressed || (!Restraint.Any && !ScenarioShield.Active)) return;
+            if (!pressed || (!Restraint.Any && !ScenarioShield.Active && !SurrenderRegistry.Any)) return;
             try
             {
                 Player shooter = __instance._player;
                 if (shooter == null || !shooter.IsAI) return;
+                // While anyone is surrendered, every AI press is timed (one dictionary write per
+                // press) so a hit right after a decision can be told from a new attack.
+                if (!Restraint.Any && !ScenarioShield.Active) { Restraint.NoteShot(shooter); return; }
                 if (ScenarioShield.Active && ScenarioShield.AimedAtShielded(shooter, out Player shielded))
                 {
                     pressed = false;
                     ScenarioShield.LogBlocked(shooter, shielded, "trigger");
                     return;
                 }
-                if (!Restraint.Any || !Restraint.AimedAtRestrained(shooter, out Player prisoner)) return;
+                if (!Restraint.Any) return;
+                if (!Restraint.AimedAtRestrained(shooter, out Player prisoner)) { Restraint.NoteShot(shooter); return; }
                 pressed = false;
                 Restraint.LogLeakBlocked(shooter, prisoner, "trigger");
             }

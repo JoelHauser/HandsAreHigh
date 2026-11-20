@@ -335,6 +335,9 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> OrderGapMin;
         internal static ConfigEntry<float> OrderGapMax;
         internal static ConfigEntry<float> AiOrderRange;
+        internal static ConfigEntry<float> CaptorApproachFrom;
+        internal static ConfigEntry<float> CaptorGuardDistance;
+        internal static ConfigEntry<float> CaptorApproachSpeed;
         internal static ConfigEntry<float> BusyRelease;
         internal static ConfigEntry<bool> AlliedCaptors;
         internal static ConfigEntry<bool> CaptorSpeech;
@@ -716,6 +719,11 @@ namespace HandsAreHigh
             OrderGapMin = c.Bind(BotCaptor, "Between his orders min (s)", 2.5f, Range("", 0.5f, 30f));
             OrderGapMax = c.Bind(BotCaptor, "Between his orders max (s)", 7f, Range("", 0.5f, 60f));
             AiOrderRange = c.Bind(BotCaptor, "Bot order range (m)", 15f, Range("A bot's order is only given within this range and in sight (the same checks as yours).", 3f, 30f));
+            CaptorApproachFrom = c.Bind(BotCaptor, "Walks up to a prisoner from (m)", 60f,
+                Range("A captor farther than his order range (or without a line to his prisoner) walks up along a complete path, only while nothing threatens him; custody beyond 'Guards from up to' is taken only when he can walk up. 0: never walks up.", 0f, 120f));
+            CaptorGuardDistance = c.Bind(BotCaptor, "Guards from (m)", 8f,
+                Range("Where a captor who walks up stops (never closer than this unless he lost sight of the prisoner).", 3f, 20f));
+            CaptorApproachSpeed = c.Bind(BotCaptor, "Walk-up speed", 0.8f, Range("0-1 of his walking speed (never a sprint).", 0.3f, 1f));
             BusyRelease = c.Bind(BotCaptor, "Gives up custody after busy (s)", 12f,
                 Range("Pulled into another fight (under fire, another enemy in sight) for this long, he stops guarding; the prisoner is then on his own and the restraint stays as decided.", 2f, 120f));
             AlliedCaptors = c.Bind(BotCaptor, "Your allies can make bots surrender", true,
@@ -832,11 +840,11 @@ namespace HandsAreHigh
                 "Held bots watch their captor and now and then glance at what they know about: their dropped gun, where fire came from, a squadmate in sight, a way out, the ground. A glance holds briefly and returns to the captor; it never means he is about to act.");
             GlanceMin = c.Bind(PresenceSec, "Glance every min (s)", 3f, Range("Time between glances, between min and max, scaled by demeanor (defiant men hold your eyes longer).", 1f, 30f));
             GlanceMax = c.Bind(PresenceSec, "Glance every max (s)", 9f, Range("", 1f, 60f));
-            HeadMaxYaw = c.Bind(PresenceSec, "Head turn max (deg)", 70f, Range("Left/right from his body. About half of it with his hands behind his head.", 20f, 85f));
+            HeadMaxYaw = c.Bind(PresenceSec, "Head turn max (deg)", 70f, Range("Left/right from his body. With his hands behind his head the neck turns at most 25 deg and his upper back carries the rest (Torso turn max, doubled then).", 20f, 85f));
             HeadMaxDown = c.Bind(PresenceSec, "Head down max (deg)", 35f, Range("", 5f, 60f));
-            HeadMaxUp = c.Bind(PresenceSec, "Head up max (deg)", 20f, Range("At most 5 deg with his hands behind his head.", 0f, 40f));
+            HeadMaxUp = c.Bind(PresenceSec, "Head up max (deg)", 20f, Range("At most 12 deg with his hands behind his head.", 0f, 40f));
             HeadSpeed = c.Bind(PresenceSec, "Head speed (deg per s)", 200f, Range("Top speed of a head turn (eased in and out).", 40f, 600f));
-            TorsoAssist = c.Bind(PresenceSec, "Torso turn max (deg)", 15f, Range("A look further than 25 deg to the side turns his upper back by up to this much; never his hips or kneeling body.", 0f, 30f));
+            TorsoAssist = c.Bind(PresenceSec, "Torso turn max (deg)", 15f, Range("A look further than 25 deg to the side turns his upper back by up to this much (twice this, from 8 deg, with his hands behind his head); never his hips or kneeling body.", 0f, 30f));
             KneelIdle = c.Bind(PresenceSec, "Kneeling idle movement", true,
                 "While he kneels: an occasional small weight shift of the hips and settling of the elbows, on his own random timing; knees and feet stay put. The game's own breathing is kept (not doubled).");
             KneelIdleStrength = c.Bind(PresenceSec, "Kneeling idle strength", 1f, Range("", 0f, 2f));
@@ -858,6 +866,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> ScenarioConcurrent;
         internal static ConfigEntry<int> ScenarioMaxBots;
         internal static ConfigEntry<float> ScenarioSpawnTimeout;
+        internal static ConfigEntry<bool> ScenarioNoSpawnMagCheck;
 
         private static void BindScenarios(ConfigFile c)
         {
@@ -879,6 +888,8 @@ namespace HandsAreHigh
                 IntRange("Across all running scenarios. A launch that would exceed it is refused.", 1, 30));
             ScenarioSpawnTimeout = c.Bind(ScenarioSec, "Spawn timeout (s)", 30f,
                 Range("A participant not spawned and active within this is reported as failed and the launch is cleaned up.", 5f, 120f));
+            ScenarioNoSpawnMagCheck = c.Bind(ScenarioSec, "No magazine check on spawn", true,
+                "Scenario bots only: the magazine check the game and SAIN both start the moment a bot spawns is scheduled for later instead, as if he had just checked. Raid bots are not touched.");
         }
 
         internal static float RollNerve()

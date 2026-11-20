@@ -511,10 +511,36 @@ namespace HandsAreHigh
             Transform spine = b.Spine3?.Original;
             if (spine == null) return;
             Vector3 up = Vector3.up;
-            float maxA = Settings.TorsoAssist.Value;
-            float a = Mathf.Sign(p.Yaw) * Mathf.Clamp((Mathf.Abs(p.Yaw) - 25f) * 0.4f, 0f, maxA) * p.W;
+            // 0.14.0: with his hands clasped behind his head the head can't turn far without
+            // dragging the hands round the skull (or through a helmet), so the upper back carries
+            // most of a wide look: earlier (dead zone 25 -> 8 deg), a bigger share (0.4 -> 0.75)
+            // and up to twice the torso limit. The arms are solved after this (ArmPose.Apply,
+            // Kneel.ApplyHands), from the turned shoulders, so they turn with the chest instead
+            // of twisting. Never the hips or the legs: the kneeling body stays planted.
+            float hands = Kneel.HandsWeight(s);
+            float maxA = TorsoMax(s, hands);
+            float dead = Mathf.Lerp(25f, 8f, hands), share = Mathf.Lerp(0.4f, 0.75f, hands);
+            float a = Mathf.Sign(p.Yaw) * Mathf.Clamp((Mathf.Abs(p.Yaw) - dead) * share, 0f, maxA) * p.W;
             p.Assist = a;
-            if (Mathf.Abs(a) > 0.01f) spine.rotation = Quaternion.AngleAxis(a, up) * spine.rotation;
+            if (Mathf.Abs(a) > 0.01f)
+            {
+                // About the spine's own long axis (a kneeling man leans forward: a turn about world
+                // up would swing the lean sideways), split over the lower and upper spine.
+                Transform low = b.Spine1;
+                Transform neckT = b.Neck;
+                Vector3 axis = up;
+                if (low != null && neckT != null)
+                {
+                    Vector3 v = neckT.position - low.position;
+                    if (v.sqrMagnitude > 1e-4f && Vector3.Angle(v, up) < 50f) axis = v.normalized;
+                }
+                if (low != null && low != spine && spine.IsChildOf(low))
+                {
+                    low.rotation = Quaternion.AngleAxis(a * 0.4f, axis) * low.rotation;
+                    spine.rotation = Quaternion.AngleAxis(a * 0.6f, axis) * spine.rotation;
+                }
+                else spine.rotation = Quaternion.AngleAxis(a, axis) * spine.rotation;
+            }
             if (fl > 0.001f)
             {
                 Vector3 right = pl.Transform.Original.right;
@@ -542,9 +568,8 @@ namespace HandsAreHigh
             float now = Time.time;
             float dt = Mathf.Clamp(now - p.LastApply, 0.001f, 0.1f);
             p.LastApply = now;
-            Vector3 bodyF = pl.Transform.Original.forward; bodyF.y = 0f;
+            Vector3 bodyF = BodyFwd(pl, s);
             if (bodyF.sqrMagnitude < 1e-4f) return;
-            bodyF.Normalize();
             Vector3 eye = Perception.Eye(pl);
             Vector3 at = p.Glance != GlanceKind.Captor ? p.GlancePoint : CaptorPoint(s, out _);
             float yaw = 0f, pitch = 0f;
@@ -558,16 +583,49 @@ namespace HandsAreHigh
             }
             DemeanorProfile prof = Of(s);
             pitch += prof.Pitch * K * (p.Glance == GlanceKind.Captor ? 1f : 0.3f);
-            // Hands behind the head lock the head: less turn, almost no look up.
+            // Hands behind the head: the neck turns less (HeadShare) and the upper back more
+            // (ApplyUpper); the reach is the two together. A captor beyond it isn't stared at
+            // from a neck at its limit: the look settles a little short of the limit, a little
+            // down (listening for him), instead of pinning the head at the end of its travel.
             float hands = Kneel.HandsWeight(s);
-            float maxYaw = Mathf.Lerp(Settings.HeadMaxYaw.Value, Settings.HeadMaxYaw.Value * 0.55f, hands);
-            float maxUp = Mathf.Lerp(Settings.HeadMaxUp.Value, 5f, hands);
-            yaw = Mathf.Clamp(yaw, -maxYaw, maxYaw);
+            float reach = HeadShare(hands) + TorsoMax(s, hands);
+            float maxUp = Mathf.Lerp(Settings.HeadMaxUp.Value, 12f, hands);
+            if (Mathf.Abs(yaw) > reach + 12f)
+            {
+                yaw = Mathf.Sign(yaw) * reach * 0.85f;
+                pitch += 6f;
+            }
+            yaw = Mathf.Clamp(yaw, -reach, reach);
             pitch = Mathf.Clamp(pitch, -maxUp, Settings.HeadMaxDown.Value);
             float speed = Settings.HeadSpeed.Value * M(prof.Speed);
             float smooth = p.Glance == GlanceKind.Captor ? 0.22f : 0.12f;
             p.Yaw = Mathf.SmoothDamp(p.Yaw, yaw, ref p.YawVel, smooth / M(prof.Speed), speed, dt);
             p.Pitch = Mathf.SmoothDamp(p.Pitch, pitch, ref p.PitchVel, smooth / M(prof.Speed), speed, dt);
+        }
+
+        // The neck's share of a look (deg): the full limit standing, 25 deg with the hands fully
+        // behind the head. The torso's: TorsoAssist standing, up to twice that kneeling with the
+        // hands behind the head (never more than 35).
+        private static float HeadShare(float hands) =>
+            Mathf.Lerp(Settings.HeadMaxYaw.Value, Mathf.Min(25f, Settings.HeadMaxYaw.Value), hands);
+
+        private static float TorsoMax(SurrenderState s, float hands) =>
+            Mathf.Min(35f, Mathf.Lerp(Settings.TorsoAssist.Value, Settings.TorsoAssist.Value * 2f, hands));
+
+        // His body's facing for the look: while any part of a kneel is on, the frame his legs are
+        // planted in (Kneel.KneelAnchorFwd), not the root's, which steering may still move; so the
+        // limits are always relative to the body that can't turn.
+        private static Vector3 BodyFwd(Player pl, SurrenderState s)
+        {
+            Vector3 f = pl.Transform.Original.forward;
+            if (Kneel.Posing(s))
+            {
+                Vector3 a = s.KneelAnchorFwd;
+                a.y = 0f;
+                if (a.sqrMagnitude > 1e-4f) f = a;
+            }
+            f.y = 0f;
+            return f.sqrMagnitude > 1e-4f ? f.normalized : Vector3.zero;
         }
 
         // Neck and head: the remaining yaw (after the torso's share) and the pitch, measured
@@ -594,7 +652,7 @@ namespace HandsAreHigh
             }
             Vector3 hf = head.rotation * p.HeadFwdLocal;
             Vector3 flat = hf; flat.y = 0f;
-            Vector3 bodyF = pl.Transform.Original.forward; bodyF.y = 0f;
+            Vector3 bodyF = BodyFwd(pl, s);
             if (flat.sqrMagnitude < 1e-4f || bodyF.sqrMagnitude < 1e-4f) return;
             float curYaw = Vector3.SignedAngle(bodyF, flat, Vector3.up);
             float curPitch = -Mathf.Asin(Mathf.Clamp(hf.normalized.y, -1f, 1f)) * Mathf.Rad2Deg;

@@ -80,6 +80,11 @@ namespace HandsAreHigh
         internal Item TargetWeapon;     // the gun he's walking to: other surrendered bots leave it alone
         internal Vector3 TargetPoint;
         internal bool HideMoving;
+        internal bool HideUrgent;           // 0.14.0: slipping into cover during an escape: sprints there
+        internal float UrgentSince;         // 0.14.0: the current urgent move (MoveDiag)
+        internal Vector3 UrgentFrom;
+        internal bool UrgentLogged;
+        internal int UrgentPath;
         internal bool Scrambling;       // ran for his gun during an opening: sprints, no regroup first
         internal float ScrambleCooldownUntil;
         internal int HidCount;          // hide-and-look-again cycles since last caught: only the first is logged

@@ -102,7 +102,7 @@ namespace HandsAreHigh
                     return handsUp ? "already has his hands up" : t.Existing != null ? "an existing raid bot (your teammate)" : null;
                 case ScenarioEvent.SurrenderToEnemy:
                     if (handsUp) return "already has his hands up";
-                    Player foe = t.Owner2?.Memory?.GoalEnemy?.Person as Player;
+                    Player foe = Perception.PlayerOf(t.Owner2?.Memory?.GoalEnemy?.Person);
                     return foe == null || !foe.IsAI || !Perception.Alive(foe) ? "isn't fighting a bot right now" : null;
                 case ScenarioEvent.ThirdParty:
                     return sc.Stage == Stage.Running ? null : "only once the scenario runs";
@@ -185,7 +185,7 @@ namespace HandsAreHigh
                     return ScenarioOps.Surrender(sc, t, me, true, "event") ?? "surrenders to you";
                 default:
                 {
-                    Player foe = t.Owner2.Memory.GoalEnemy.Person as Player;
+                    Player foe = Perception.PlayerOf(t.Owner2.Memory.GoalEnemy.Person);
                     return ScenarioOps.Surrender(sc, t, foe, true, "event: to the bot he fights") ?? $"surrenders to {Restraint.Name(foe)}; that bot decides";
                 }
             }

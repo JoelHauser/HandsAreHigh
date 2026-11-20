@@ -435,15 +435,16 @@ namespace HandsAreHigh
                 Settings.DrawWeight.Value * Mathf.Max(0f, nerve - 0.25f) * s.Fight * (seen ? 0.5f : 1f));
 
             float scramble = ScrambleQuality(s, threat, threatEye, out string scrambleWhy);
+            float reach = EasyReach(s, out string reachWhy);
             if (scramble <= 0f) log.Append($"his gun: {scrambleWhy}; ");
-            else Add(options, log, "get his gun", Settings.ScrambleWeight.Value * scramble * (0.5f + nerve) * s.Fight);
+            else Add(options, log, $"get his gun{reachWhy}", Settings.ScrambleWeight.Value * scramble * reach * (0.5f + nerve) * s.Fight);
 
             Add(options, log, "hide", Settings.HideWeight.Value * (1.3f - nerve) * s.Flee * (s.LegsBad ? 2f : 1f));
 
             Choice chosen = Pick(options, log);
             if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo(log.ToString());
 
-            if (chosen.Name == "get his gun")
+            if (chosen.Name != null && chosen.Name.StartsWith("get his gun"))
             {
                 StartScramble(s, threat, $"you left, {scrambleWhy}");
                 return;
@@ -492,6 +493,7 @@ namespace HandsAreHigh
             s.ReportAt = -1f;
             s.CaptorLastSeen = threat;
             GoHide(s, why);
+            s.HideUrgent = true;   // breaking away into cover: he hurries there
         }
 
         // The game's callback normally clears DropPending within the hide animation. One
@@ -558,9 +560,45 @@ namespace HandsAreHigh
             float fromCaptor = Vector3.Distance(captorPos, s.DropPosition);
             float exposure = 1f - Mathf.Clamp01(fromCaptor / Settings.ExposureDistance.Value);
             if (!Perception.LineClear(captorEye, s.DropPosition + Vector3.up * 0.3f)) exposure *= 0.5f;
+            // Another of them standing over it (a squadmate who holds fire at him and can see
+            // the spot from close by) makes the grab as exposed as the captor being near it.
+            string watcher = null;
+            if (WatchedBySquad(s, out string wName)) { exposure = Mathf.Max(exposure, 0.6f); watcher = wName; }
             float proximity = 1f - d / range;
-            why = $"{d:0.0} m from him, you {fromCaptor:0.0} m from it";
+            why = $"{d:0.0} m from him, you {fromCaptor:0.0} m from it{(watcher != null ? $", {watcher} watches it" : "")}";
             return Mathf.Clamp01(Mathf.Sqrt(proximity) * (1f - 0.7f * exposure));
+        }
+
+        private float EasyReach(SurrenderState s, out string why)
+        {
+            why = "";
+            if (s.DroppedWeapon == null) return 1f;
+            float d = Vector3.Distance(Me.Position, s.DropPosition);
+            if (d <= 3f) { why = " (within reach)"; return 2.5f; }
+            if (d <= 5f) { why = " (close)"; return 1.6f; }
+            return 1f;
+        }
+
+        // Up to three of the bots who decided about him (his captor's squad and other observers),
+        // alive, within 25 m of his gun, with a clear line to it.
+        private bool WatchedBySquad(SurrenderState s, out string who)
+        {
+            who = null;
+            var map = Restraint.EntriesFor(Me);
+            if (map == null || map.Count == 0) return false;
+            Vector3 spot = s.DropPosition + Vector3.up * 0.3f;
+            int tries = 0;
+            foreach (var kv in map)
+            {
+                Player o = kv.Key;
+                if (o == null || o == s.Captor || !Perception.Alive(o) || !kv.Value.Holds) continue;
+                if ((o.Position - s.DropPosition).sqrMagnitude > 25f * 25f) continue;
+                if (++tries > 3) break;
+                if (!Perception.LineClear(Perception.Eye(o), spot)) continue;
+                who = Restraint.Name(o);
+                return true;
+            }
+            return false;
         }
 
         // A path solve to his dropped gun, reused for 3 s while he stays within 0.5 m of where
@@ -621,8 +659,12 @@ namespace HandsAreHigh
             else if (dist > Settings.KnifeRange.Value) log.Append($"knife: you're beyond {Settings.KnifeRange.Value:0} m; ");
             else Add(options, log, "knife", Settings.KnifeWeight.Value * (0.2f + nerve) * fight * (1f - 0.5f * s.Injury) * Mathf.Lerp(legs, 1f, 0.5f) * onFoot);
 
+            // 0.14.0: a gun within easy reach is the strong choice (x2.5 within 3 m, x1.6 within
+            // 5 m); on his knees it costs little more than standing when it lies right by him.
+            float reach = EasyReach(s, out string reachWhy);
+            float scrambleFoot = kneeling && reach > 1.5f ? 0.85f : onFoot;
             if (scramble <= 0f) log.Append($"scramble: {scrambleWhy}; ");
-            else Add(options, log, "scramble", Settings.ScrambleWeight.Value * scramble * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f) * legs * onFoot);
+            else Add(options, log, $"scramble{reachWhy}", Settings.ScrambleWeight.Value * scramble * reach * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f) * legs * scrambleFoot);
 
             if (dist < Settings.EscapeMinDistance.Value) log.Append($"run: you're within {Settings.EscapeMinDistance.Value:0} m; ");
             else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.RetreatDistance.Value, false, out _)) log.Append("run: no way out; ");
@@ -646,7 +688,7 @@ namespace HandsAreHigh
                 if (Arsenal.Draw(s, BotOwner, true)) Rearm(s, $"goes for his knife at {dist:0.0} m");
                 else CommitDraw(s, "knife");
             }
-            else if (chosen.Name == "scramble")
+            else if (chosen.Name != null && chosen.Name.StartsWith("scramble"))
             {
                 StartScramble(s, ThreatPos(s, captor), scrambleWhy);
                 MarkKneelEscape(s, "scramble");
@@ -1039,7 +1081,10 @@ namespace HandsAreHigh
 
         private void Recovering(SurrenderState s, bool check)
         {
-            if (!MoveTo(s, s.TargetPoint, sprint: s.Scrambling))
+            // 0.14.0: going for a gun is never a stroll: he hurries unless it is right there
+            // (a scramble always sprints; the walk back after regrouping used to walk).
+            bool hurry = s.Scrambling || (s.TargetPoint - Me.Position).sqrMagnitude > 3f * 3f;
+            if (!MoveTo(s, s.TargetPoint, sprint: hurry))
             {
                 if (s.Scrambling) FailScramble(s, "no path to it");
                 else GiveUpOn(s, "no path to it");
@@ -1149,6 +1194,7 @@ namespace HandsAreHigh
         private void GoHide(SurrenderState s, string why, bool quiet = false)
         {
             StopMoving();
+            s.HideUrgent = false;
             s.SetPhase(Phase.Hiding, why, quiet);
             // The cover search (up to PathCandidates path solves) runs from Hiding on a frame
             // with heavy-search budget, usually this one or the next.
@@ -1165,7 +1211,7 @@ namespace HandsAreHigh
             }
             if (s.HideMoving)
             {
-                if (!MoveTo(s, s.TargetPoint, sprint: false)) s.HideMoving = false;
+                if (!MoveTo(s, s.TargetPoint, sprint: s.HideUrgent)) s.HideMoving = false;
             }
             else
             {
@@ -1311,6 +1357,19 @@ namespace HandsAreHigh
             bool first = s.NextMoveOrder == 0f || !s.Moving;
             bool moved = (point - s.PathTarget).sqrMagnitude > 1f;
             if (s.SprintHeld && Kneel.SprintAllowed(s)) { s.SprintHeld = false; if (sprint) BotOwner.Sprint(true); }
+            // 0.14.0: an urgent move (escape, scramble, run for cover, going for a gun) faces the
+            // way he goes, and the sprint is asked for until it is granted. Before, he kept facing
+            // his captor (the last LookToPoint) and asked once per path: SAIN's patch on
+            // BotMover.Sprint (SprintLookDirPatch) turns a sprint request into a walk when the bot
+            // looks more than 20 deg away from his destination, so he walked off backwards at
+            // walking pace and never asked again. The game's own rules still apply: a damaged
+            // leg or no stamina means no sprint (MovementContext.CanSprint, Physical.CanSprint).
+            if (sprint && s.Moving)
+            {
+                BotOwner.Steering.LookToMovingDirection();
+                if (Kneel.SprintAllowed(s) && BotOwner.Mover != null && !BotOwner.Mover.Sprinting) BotOwner.Sprint(true);
+                MoveDiag(s);
+            }
             if (!first && !moved && Time.time < s.NextMoveOrder) return true;
             // A moving destination (following you) re-paths at most twice a second.
             if (!first && moved && Time.time - (s.NextMoveOrder - RepathInterval) < 0.5f) return true;
@@ -1324,15 +1383,47 @@ namespace HandsAreHigh
             }
             if (first) Relink();
             s.PathTarget = point;
+            if (first && sprint)
+            {
+                s.UrgentSince = Time.time;
+                s.UrgentFrom = Me.Position;
+                s.UrgentLogged = false;
+                s.UrgentPath = corners.Length;
+            }
             s.Moving = true;
             BotOwner.MovementResume();
             BotOwner.Mover.GoToByWay(corners, ReachDist);
             // Straight out of a kneel he walks his first steps while our pose blends out
             // (0.14 s), then sprints: never a sprint cycle under a kneeling body.
             bool sprintNow = sprint && Kneel.SprintAllowed(s);
+            if (sprint) BotOwner.Steering.LookToMovingDirection();
             BotOwner.Sprint(sprintNow);
             s.SprintHeld = sprint && !sprintNow;
             return true;
+        }
+
+        // Once per urgent move, 1.5 s in: what was asked and what the body is doing, so a slow
+        // escape can be told apart (refused sprint, hurt leg, stamina, not moving at all).
+        private void MoveDiag(SurrenderState s)
+        {
+            if (s.UrgentLogged || s.UrgentSince <= 0f || Time.time - s.UrgentSince < 1.5f) return;
+            s.UrgentLogged = true;
+            if (!Settings.LogDecisions.Value && !Settings.VerboseLogs.Value && !Scenarios.Watching(Me)) return;
+            try
+            {
+                float t = Time.time - s.UrgentSince;
+                Vector3 d = Me.Position - s.UrgentFrom; d.y = 0f;
+                MovementContext mc = Me.MovementContext;
+                string legs = mc == null ? "?" : mc.PhysicalConditionIs(EPhysicalCondition.LeftLegDamaged) || mc.PhysicalConditionIs(EPhysicalCondition.RightLegDamaged) ? "damaged leg" : "legs fine";
+                bool stamina = Me.Physical != null && Me.Physical.CanSprint;
+                Vector3 look = Me.LookDirection; look.y = 0f;
+                Vector3 to = BotOwner.Mover.RealDestPoint - Me.Position; to.y = 0f;
+                float off = look.sqrMagnitude > 1e-4f && to.sqrMagnitude > 1e-4f ? Vector3.Angle(look, to) : 0f;
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {s.Phase} move after {t:0.0} s: {d.magnitude / t:0.0} m/s average ({d.magnitude:0.0} m, path {s.UrgentPath} corners); " +
+                    $"sprint asked, mover {(BotOwner.Mover.Sprinting ? "sprinting" : "NOT sprinting")}, body {(Me.IsSprintEnabled ? "sprinting" : "not sprinting")}; " +
+                    $"{legs}, stamina {(stamina ? "ok" : "too low")}, facing {off:0} deg off his destination, arms {s.Weight:0.00}, pose {Me.PoseLevel:0.00}");
+            }
+            catch (System.Exception e) { HandsAreHighPlugin.Report("move diagnostics", e); }
         }
 
         // Before he starts walking, the mover's record of his last good NavMesh position is set
