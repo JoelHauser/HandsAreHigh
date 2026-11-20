@@ -129,6 +129,10 @@ namespace HandsAreHigh
         internal int Repeats;               // demands repeated
         internal bool Unsafe;               // let him go armed: keeps his distance, fetches nothing
         internal bool ReleaseJudged;
+        // 0.18.0: the intent decided once at custody (Judgement.Intend), carried out at the release.
+        internal bool IntendsKill, IntentHurt;
+        internal float IntentChance;
+        internal string IntentWhy = "not decided";
         internal float DemandSeen = -1f;    // the prisoner's last answered demand he has judged
         internal float StepWaitSince = -1f; // a hands / turn order waiting for control
         // 0.16.0: the prisoner's dropped gear (CaptorLoot.cs).
@@ -373,6 +377,7 @@ namespace HandsAreHigh
                 NextGlanceAt = now + Dice.Range(4f, 9f)
             };
             BuildPlan(cs);
+            try { Judgement.Intend(cs, s); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor intent", e); }
             cs.DemandSeen = s.DemandDoneAt;   // 0.16.0: an earlier demand (someone else's) isn't his to judge
             ByBot[c] = cs;
             s.Custody = cs;
@@ -592,6 +597,10 @@ namespace HandsAreHigh
             // 0.16.0: his gear, once it is all on the ground and he is under control (a choice per
             // item: now, later, never). Before he's let go too.
             if (CaptorLoot.Step(cs, s, now, t)) return;
+            // 0.18.0: CaptorLoot.Step may have put a Turn around in front of this step (wants the
+            // gear, not with him watching). 0.16-0.17 kept the step read above: the old order was
+            // given again and Step++ skipped the turn ("orders him to turn around first", never given).
+            next = cs.Plan[Mathf.Min(cs.Step, cs.Plan.Count - 1)];
             if (next == OrderKind.Leave && now < cs.HoldUntil && !cs.PlanName.StartsWith("disarm and release")) return;
             if (cs.AwaitKneel && next != OrderKind.Leave) return;   // the kneel is still being carried out
 

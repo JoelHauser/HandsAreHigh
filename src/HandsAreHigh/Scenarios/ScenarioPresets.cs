@@ -963,7 +963,7 @@ namespace HandsAreHigh
             {
                 Name = "Captor judgement",
                 Tests = "The captor's decision points: notice and repeat a demand, a refusal, the release decision (mercy or a lethal decision) with what he knows of the man; an observed draw is always fought.",
-                Watch = "'after 'drop your weapons'', 'demands it again', 'lethal? chance', 'done with ... kill instead of letting go? chance', 'DECIDES TO KILL' or 'lets him go', 'killed with his hands up by ...: as decided (...)' vs 'RESTRAINT LEAK'. Squadmates: their own 'holds fire' lines stand.",
+                Watch = "'intent about ... (decided once, at custody): chance ... -> MEANS TO KILL HIM / means to let him go', 'after 'drop your weapons'', 'demands it again', 'lethal? chance', 'done with ...: carries out what he decided' / 'lets him go, as he decided' / 'something new since he took him', 'DECIDES TO KILL', 'FIRES at', 'KILL DECISION CARRIED OUT' or 'EXECUTION FAILURE', 'killed with his hands up by ...: as decided (...)' vs 'RESTRAINT LEAK'. Squadmates: their own 'holds fire' lines stand. Run 'His own roll' several times: both outcomes should appear (0.25 base x aggression x rivals).",
                 Prereq = "Forced custody and plan (Stay, Drop your weapons). The trigger is forced or SIMULATED as named; the outcome is the real roll unless forced.",
                 Natural = false, ShieldDefault = true
             };
@@ -1043,7 +1043,7 @@ namespace HandsAreHigh
             {
                 Name = "Captor execution check",
                 Tests = "The whole path from a captor's lethal decision to real fire: Reject on that captor only (final), his target, the AI's own aim and trigger, his squadmates' restraint unchanged. Or the natural decision when the prisoner bolts.",
-                Watch = "'DECIDES TO KILL', 'Restraint: ... refuses the surrender of ... decides to kill him', 'opens fire on ... s after deciding', 'KILL DECISION CARRIED OUT' (or 'NOT CARRIED OUT after 10 s: layer, target, hands, sight, restraint'), 'killed with his hands up by ...: as decided'. Squadmates keep 'holds fire'. Natural: '... runs from his custody: fire on him? chance ...'.",
+                Watch = "'DECIDES TO KILL', 'Restraint: ... refuses the surrender of ... decides to kill him', 'restraint on ... now Reject (final); still holding fire at him: no; ignore flag: clear', 'has ... as his target', 'SAIN had chosen ...; his target set to ...', 'FIRES at ... (trigger pressed)', 'KILL DECISION CARRIED OUT' (or 'no shot ... yet, 3 s after' and 'EXECUTION FAILURE ... after 10 s: layer, game target, SAIN target, hands, sight, aim, restraint, shield'), 'killed with his hands up by ...: as decided'. Squadmates keep 'holds fire'. Natural: '... runs from his custody: fire on him? chance ...'. Ctrl+U (debug keys on) forces the same decision on any bot captor.",
                 Prereq = "Forced custody. 'Kill now' forces ONLY the decision; everything after is the real game. 'He bolts' forces his run; the captor's answer is his own roll unless forced.",
                 Natural = false, ShieldDefault = true
             };
@@ -1075,6 +1075,118 @@ namespace HandsAreHigh
                 float at = sc.Values.F("delay");
                 if (what.StartsWith("Kill")) sc.After(at, "the captor's decision", () => ScenarioEvents.Run(sc, ScenarioEvent.CaptorKillsNow, pr));
                 else sc.After(at, "the prisoner bolts", () => ScenarioEvents.Run(sc, ScenarioEvent.ForceRun, pr));
+            };
+            list.Add(p.Done());
+
+            // ---- 0.18.0 ----
+
+            // Head straight check
+            p = new ScenarioPreset
+            {
+                Name = "Head straight check",
+                Tests = "A stationary prisoner with his captor directly in front: head straight ahead and upright, chest square, standing or kneeling, hands up or on his head. Then walk to his left and right: head and chest turn together, no head roll; standing, past 70 deg his feet step round.",
+                Watch = "'head rig checked: ... animated head N deg yaw ... (game free-look N deg)', then once a second 'gaze: ... captor at +0 deg ...; after: head yaw ~0 pitch small roll ~0; chest ~0'. Walking round him: 'after: head yaw' follows you, 'roll' stays within a degree or two, 'chest' and 'our torso turn' grow together. Variation On: glances come back, roll still ~0.",
+                Prereq = "Forced surrender (to you, or to a PMC standing in front of him). Pose diagnostics are on for this scenario; Variation Off is the Head neutral test (no glances, demeanor tilt, tremble, flinch, kneeling idle or gestures).",
+                Natural = false, ShieldDefault = true
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(6f));
+            p.Params.Add(ParamDef.Choice("by", "Captor", new[] { "You", "PMC bot (in front of him)" }));
+            p.Params.Add(ParamDef.Choice("pose", "Posture", new[] { "Standing", "Kneeling" }));
+            p.Params.Add(ParamDef.Choice("hands", "Hands", new[] { "Up", "On his head" }));
+            p.Params.Add(ParamDef.Choice("var", "Variation", new[] { "Off (neutral test)", "On" }));
+            p.Params.Add(Pers("pe", "Prisoner personality"));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                bool bot = sc.Values.S("by").StartsWith("PMC");
+                if (bot) Squad(sc, "BEAR", 1, -2.5f, 0f, "Prisoner");
+                From(Add(sc, "Prisoner", "Scav", "B", bot ? 2.5f : 0f, 0f, bot ? "PMC" : "you"), sc.Values, null, null, null, null, "pe");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Participant pr = sc.Find("Prisoner");
+                Participant cap = sc.Find("PMC");
+                bool neutral = sc.Values.S("var").StartsWith("Off");
+                Presence.TestDiag = true;
+                Presence.TestNeutral = neutral;
+                sc.Force($"pose diagnostics on{(neutral ? "; Head neutral test on (no glances, tilt, tremble, flinch, idle, gestures)" : "")} for this scenario");
+                PrisonerTo(sc, pr, cap, custody: cap != null, "forced start");
+                if (cap != null)
+                    sc.Step($"{cap.Tag}: holds him in front (no plan of his own)", () => cap.Active ? Captors.DebugSteps(cap.Player, "head check (stands in front)", OrderKind.Stay) : (cap.Dead ? "died" : ""));
+                float at = 2f;
+                if (sc.Values.Is("pose", "Kneeling"))
+                {
+                    sc.After(at, "posture: kneel", () =>
+                    {
+                        SurrenderState s = ScenarioOps.StateOf(pr);
+                        if (s == null) return;
+                        Player by = cap?.Player ?? sc.Observer;
+                        sc.Note(TL.Real, $"kneel order: {(Orders.Give(s, OrderKind.Kneel, by, cap == null, out string why, debug: true) ? "given" : $"refused ({why})")}");
+                    });
+                    at += 6f;
+                }
+                if (sc.Values.Is("hands", "On his head"))
+                    sc.After(at, "hands on head", () => ScenarioEvents.Run(sc, cap != null ? ScenarioEvent.CaptorOrderHands : ScenarioEvent.OrderHands, pr));
+            };
+            list.Add(p.Done());
+
+            // Weapon pickup opportunity
+            p = new ScenarioPreset
+            {
+                Name = "Weapon pickup opportunity",
+                Tests = "The captor demands the weapons and goes to collect the one he made him drop (the game's pick-up animation and transaction); a prisoner with a weapon still on him weighs that window (draw, run or keep still); a covering squadmate closes it; an interrupted pick-up ends cleanly and is weighed again, never retried at once.",
+                Watch = "'weighs what (else) ... dropped': '<weapon>: take (the weapon he made him drop ...)', 'goes to take ... (the weapon he made him drop)', 'took ... into his ... slot (... pick-up animation ...)' and the item in his kit, or 'stops going for the ...: <why>' + 'will weigh ... again'. Prisoner: 'opening (his captor is picking up ...)' with 'pick-up window x...', 'takes an opening ... draw' or 'keeps still'; captor: 'sees ... reaching for a weapon'. Squad 2: 'his captor isn't covering him, but ... is'. No 'transaction threw', no stuck hands.",
+                Prereq = "Forced custody and plan (Stay, Drop your weapons). What the prisoner keeps is forced by his kit and the first-demand answer; whether he acts is his own roll unless forced. Interruptions are FORCED (kill) or SIMULATED (the weapon removed), each at the moment the pick-up starts.",
+                Natural = false, ShieldDefault = true
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(8f));
+            p.Params.Add(ParamDef.Number("squad", "Captor squad size", 1f, 2f, 1f, 1f));
+            p.Params.Add(ParamDef.Choice("keep", "He keeps back", new[] { "Holstered pistol", "Slung gun", "Nothing" }));
+            p.Params.Add(ParamDef.Choice("act", "During the pick-up he", new[] { "Decides himself", "Draws (FORCED)" }));
+            p.Params.Add(ParamDef.Choice("test", "Interruption", new[] { "None", "Prisoner killed (FORCED)", "Captor killed (FORCED)", "Weapon gone before he gets there (SIMULATED)" }));
+            p.Params.Add(NerveP("n", "Prisoner nerve")); p.Params.Add(Pers("pe", "Prisoner personality")); p.Params.Add(Pers("cpe", "Captor personality"));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                Participant cap = Squad(sc, "BEAR", sc.Values.I("squad"), -h, 0f, "Prisoner");
+                From(cap, sc.Values, null, null, null, null, "cpe");
+                Participant pr = Add(sc, "Prisoner", "Scav", "B", h, 0f, cap.Tag);
+                From(pr, sc.Values, null, null, null, "n", "pe");
+                string keep = sc.Values.S("keep");
+                pr.Kit = keep.StartsWith("Holstered") ? "Keeps sidearm" : keep.StartsWith("Slung") ? "Keeps slung primary" : "As generated";
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Conditions(sc);
+                Participant cap = sc.Find(sc.Values.I("squad") > 1 ? "PMC-1" : "PMC"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                string keep = sc.Values.S("keep"), act = sc.Values.S("act"), test = sc.Values.S("test");
+                sc.Step($"{cap.Tag}: disarm and collect", () =>
+                {
+                    if (!cap.Active || !pr.Active) return (cap.Dead || pr.Dead) ? "a participant died" : "";
+                    if (keep == "Nothing") { Compliance.Force(pr.Player, ComplianceChoice.DropsAll); sc.Force($"{pr.Tag} drops everything on the demand"); }
+                    else
+                    {
+                        EquipmentSlot slot = keep.StartsWith("Holstered") ? EquipmentSlot.Holster : EquipmentSlot.FirstPrimaryWeapon;
+                        if (slot == EquipmentSlot.FirstPrimaryWeapon && pr.Player.Equipment?.GetSlot(slot)?.ContainedItem == null) slot = EquipmentSlot.SecondPrimaryWeapon;
+                        Compliance.ForceSlot(pr.Player, slot);
+                        Compliance.Force(pr.Player, ComplianceChoice.KeepsOne);
+                        sc.Force($"{pr.Tag} keeps his {slot} weapon back at the demand");
+                    }
+                    return Captors.DebugSteps(cap.Player, "disarm, collect the weapons", OrderKind.Stay, OrderKind.DropWeapons);
+                });
+                Func<bool> bending = () => CaptorLoot.Busy(cap.Player, out string b) && !b.StartsWith("walking");
+                if (act.StartsWith("Draws")) sc.OnceWhen(bending, 120f, "the prisoner draws during the pick-up", () => ScenarioEvents.Run(sc, ScenarioEvent.DrawKept, pr));
+                if (test.StartsWith("Prisoner killed")) sc.OnceWhen(bending, 120f, "the prisoner is killed mid pick-up", () => ScenarioEvents.Run(sc, ScenarioEvent.Kill, pr));
+                else if (test.StartsWith("Captor killed")) sc.OnceWhen(bending, 120f, "the captor is killed mid pick-up", () => ScenarioEvents.Run(sc, ScenarioEvent.Kill, cap));
+                else if (test.StartsWith("Weapon gone"))
+                    sc.OnceWhen(() => CaptorLoot.TryJob(cap.Player, out LootJob j) && j.Stage == LootStage.Walk, 120f, "the weapon disappears before he gets there", () =>
+                    {
+                        if (CaptorLoot.TryJob(cap.Player, out LootJob j)) sc.Note(TL.Simulated, $"{j.C.Name}: {ScenarioOps.CleanItem(sc, j.C.Item, remove: true)}");
+                    });
             };
             list.Add(p.Done());
 

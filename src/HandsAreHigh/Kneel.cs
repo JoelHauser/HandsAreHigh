@@ -1451,7 +1451,7 @@ namespace HandsAreHigh
             // turn above the hips. Split over the lower and upper spine about the spine's own axis.
             s.KneelChestYaw = 0f;
             if (!Off(KneelPoseIsolate.TorsoSquare) && sq > 0f) SquareTorso(p, s, rig, r, sq);
-            if (Settings.LogPose.Value) PoseDiag(p, s, rig, f);
+            if (Settings.LogPose.Value || Presence.TestDiag) PoseDiag(p, s, rig, f);
 
             int trail = 1 - s.KneelLead;
             for (int i = 0; i < 2; i++)
@@ -1680,8 +1680,15 @@ namespace HandsAreHigh
             // The head may be turned (Presence.ApplyHead, applied just before): the skull centre,
             // the hands' place on it and the elbows' lead turn with it, so the clearance round the
             // skull (and helmet) is kept wherever he looks.
-            Quaternion look = Presence.HeadDelta(s);
-            Vector3 upL = look * up, rightL = look * right, fwdL = look * fwd;
+            // 0.18.0: the skull's own frame when the look posed the head this frame (the head is set
+            // absolutely now, so "torso frame x the turn applied" is no longer the skull's frame
+            // when the animator had the head off the chest); else the torso frame as before.
+            Vector3 upL, rightL, fwdL;
+            if (!Presence.SkullFrame(s, out fwdL, out upL, out rightL))
+            {
+                Quaternion look = Presence.HeadDelta(s);
+                upL = look * up; rightL = look * right; fwdL = look * fwd;
+            }
             Vector3 skull = b.Head.Original.position + upL * Settings.HandsAboveNeck.Value;
             float minR = HeadRadius + helmet + 0.02f;
             float elbowsOut = Settings.ElbowsOut.Value + Presence.IdleElbow(s);

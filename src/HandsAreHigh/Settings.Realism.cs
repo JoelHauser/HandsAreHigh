@@ -48,15 +48,18 @@ namespace HandsAreHigh
         internal static ConfigEntry<bool> LootAfterRelease;
         internal static ConfigEntry<float> LootTimeLimit;
         internal static ConfigEntry<bool> LogLoot;
+        internal static ConfigEntry<bool> CollectDemanded;
+        internal static ConfigEntry<float> DemandedRisk;
         // 22
-        internal static ConfigEntry<float> ExecuteChance;
+        internal static ConfigEntry<float> LethalIntent;
+        internal static ConfigEntry<float> RivalWeight;
         internal static ConfigEntry<float> ExecuteMax;
+        internal static ConfigEntry<KeyboardShortcut> KillKey;
         internal static ConfigEntry<float> ViolenceWeight;
         internal static ConfigEntry<float> ViolenceMemory;
         internal static ConfigEntry<float> IncompleteWeight;
         internal static ConfigEntry<float> RefusalLethal;
         internal static ConfigEntry<float> BoltLethal;
-        internal static ConfigEntry<float> Discipline;
         internal static ConfigEntry<bool> LogJudgement;
         internal static ConfigEntry<float> CaptivityRadius;
         internal static ConfigEntry<float> FleeCommit;
@@ -126,11 +129,20 @@ namespace HandsAreHigh
                 "Gear he wanted but didn't dare fetch while guarding: picked up once the released man is well away (or out of sight), if nothing threatens him.");
             LootTimeLimit = c.Bind(LootSec, "Gives up fetching after (s)", 20f, Range("Per item.", 5f, 60f));
             LogLoot = c.Bind(LootSec, "Log gear decisions", true, "Each item weighed (value, gap, room, risk, nature) and each pick-up's real inventory result.");
+            CollectDemanded = c.Bind(LootSec, "Collects the weapons he made him drop", true,
+                "0.18.0: a weapon the prisoner dropped because this captor demanded it (the gun at the surrender, guns and knife on Drop your weapons) is always wanted and fetched first, when he has a slot it fits and the walk is safe enough (Risk he accepts for those). No room, no way to it, or someone else got it first: logged and left. Off: those weapons are weighed like any other item.");
+            DemandedRisk = c.Bind(LootSec, "Risk he accepts for those", 0.9f,
+                Range("Like Risk he accepts, for the weapons he made him drop. Higher than for other gear: leaving a gun at the feet of a man he disarmed is a risk too.", 0f, 2f));
 
             // 22 Captor judgement
-            ExecuteChance = c.Bind(JudgeSec, "Kills a compliant prisoner", 0.04f,
-                Range("Base chance, decided once when he is done with a prisoner who did as told, that he shoots him instead of letting him go. Scaled by personality (aggressive men far more, cautious ones less), what this prisoner did to him and how far he complied. Never because custody became impractical.", 0f, 0.5f));
-            ExecuteMax = c.Bind(JudgeSec, "Lethal decision at most", 0.6f, Range("Cap on any one lethal decision.", 0f, 1f));
+            // 0.18.0: new key names so the new defaults apply (BepInEx keeps a saved value per key).
+            LethalIntent = c.Bind(JudgeSec, "Lethal intent toward a prisoner", 0.25f,
+                Range("Base chance, decided ONCE when a bot takes custody, that he means to shoot the man when he is done with him (after the disarming and the gear), even if he does everything he is told. Kept for the whole custody and carried out at the release through his normal targeting and firing. Scaled by personality (aggressive men far more, timid ones less), rival factions, and what this man did to him. Level and skill never lower it.", 0f, 1f));
+            RivalWeight = c.Bind(JudgeSec, "Weight: rival faction", 1.4f,
+                Range("Times every lethal chance when captor and prisoner are rivals: BEAR and USEC, or a Scav and a PMC either way.", 1f, 4f));
+            ExecuteMax = c.Bind(JudgeSec, "Lethal decision cap", 0.85f, Range("Cap on any one lethal decision.", 0f, 1f));
+            KillKey = c.Bind(JudgeSec, "Debug key: captor decides to kill", new KeyboardShortcut(KeyCode.U, KeyCode.LeftControl),
+                "Debug keys on (section 14): the bot captor under your crosshair (or the captor of the prisoner under it) makes the lethal decision about his prisoner now. Only the decision is forced: restraint, targeting, aiming and firing are the real ones, watched and logged (KILL DECISION CARRIED OUT / NOT CARRIED OUT).");
             ViolenceWeight = c.Bind(JudgeSec, "Weight: he shot me", 2.5f,
                 Range("Times the lethal chance when this prisoner hit him (or his squad) recently, by the bot's own memory of who hit him.", 1f, 6f));
             ViolenceMemory = c.Bind(JudgeSec, "Remembers being shot for (s)", 120f, Range("", 10f, 900f));
@@ -139,14 +151,12 @@ namespace HandsAreHigh
             RefusalLethal = c.Bind(JudgeSec, "Refusal turns lethal", 0.25f,
                 Range("Base chance he opens fire when, after his repeated demands, the prisoner still keeps a weapon he can see. Otherwise he warns once more and lets him go, or keeps him covered until he leaves.", 0f, 1f));
             BoltLethal = c.Bind(JudgeSec, "Fires at a prisoner who runs", 0.3f,
-                Range("Base chance, decided once when he sees his prisoner run from custody unarmed (not let go), that he opens fire instead of letting him go. Scaled like the others (aggression, he-shot-me, kept back, discipline). A man going for a weapon is always fought; this is the unarmed run.", 0f, 1f));
-            Discipline = c.Bind(JudgeSec, "Experience restrains", 0.35f,
-                Range("Level and difficulty make him steadier: up to this much less likely to make an impulsive lethal decision (and quicker to notice a weapon kept back). Never cruelty by itself.", 0f, 0.8f));
+                Range("Base chance, decided once when he sees his prisoner run from custody unarmed (not let go), that he opens fire instead of letting him go. Scaled like the others (aggression, rival faction, he-shot-me, kept back). A man going for a weapon is always fought; this is the unarmed run.", 0f, 1f));
             CaptivityRadius = c.Bind(Retreat, "Leaves the captivity area (m)", 40f,
                 Range("A man who runs from captivity (let go, bolting, shot at) heads for a spot at least this far from where he was held, along a complete route that doesn't pass his captor; with no way out from there he goes in legs through cover. He only stops to regroup once out of it.", 10f, 120f));
             FleeCommit = c.Bind(Retreat, "No going back for a gun for (s)", 60f,
                 Range("Once he has fled, a gun lying in the captivity area (his own or another) is left alone this long: he leaves, he doesn't loop back to it. Guns elsewhere, and weapons he still carries, stay options.", 0f, 600f));
-            LogJudgement = c.Bind(JudgeSec, "Log judgement", true, "Every decision point (take, warn, repeat, release, lethal) with its inputs.");
+            LogJudgement = c.Bind(JudgeSec, "Log judgement", true, "Every decision point (intent, warn, repeat, release, lethal) with its inputs, and how a kill decision is carried out (target, first shot, or what blocked it).");
 
             // 17 Debug Scenarios (0.16.0)
             ScenarioStaging = c.Bind("17. Debug Scenarios", "Hold bots until all are ready", true,

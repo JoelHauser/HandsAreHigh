@@ -366,7 +366,7 @@ namespace HandsAreHigh
         // arms and bots don't shake in step.
         private static Vector2 Tremble(SurrenderState s, int arm)
         {
-            float amp = Settings.TrembleDegrees.Value * Presence.Tremble(s);
+            float amp = Presence.Neutral ? 0f : Settings.TrembleDegrees.Value * Presence.Tremble(s);
             if (amp <= 0f) return Vector2.zero;
             float t = Time.time * Settings.TrembleSpeed.Value + s.Seed + arm * 13.7f;
             return new Vector2(Mathf.PerlinNoise(t, 0.5f) - 0.5f, Mathf.PerlinNoise(0.5f, t) - 0.5f) * (2f * amp);

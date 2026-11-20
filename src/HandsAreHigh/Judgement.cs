@@ -10,21 +10,24 @@ namespace HandsAreHigh
     // and kept (never a check repeated until it comes up lethal):
     //
     //   take       Captors.Decide: practical? wants to? (mercy x what this man did to him)
+    //   intent     0.18.0, Captors.Accept, once: does he mean to shoot him when he's done with him?
+    //              Kept for the custody, carried out at the release (a compliant man can be shot)
     //   notice     after each Drop your weapons is answered: does he see a weapon still on him?
     //              A slung gun, if he sees the man; a holstered pistol only close; a knife never;
     //              a gun he saw on him before and that didn't land. One roll per answer.
     //   repeat     noticed: he demands it again (Captor repeats a demand at most, a warning line)
     //   refusal    still kept after the repeats: open fire (Refusal turns lethal) or warn and be
     //              done with him (let go early, nothing near him)
-    //   release    his plan is over: let him go, or (Kills a compliant prisoner) shoot him
+    //   release    his plan is over: carry out the intent; only something new since the intent
+    //              (a weapon kept back, he learned the man shot them) adds a chance, once
     //   resistance an observed draw or attack: always fights (Restraint.OnArmed, unchanged)
     //
     // Inputs, only what the bot knows: his personality (aggression), being hit by this prisoner
     // (his own EnemyInfo.LastGetHitTime, set by the game's BotOwner.GetHit; a squadmate's too), a
     // man he saw attack after surrendering (Restraint distrust), what he saw of the disarming.
-    // Experience is discipline (fewer impulsive kills, quicker to spot a weapon kept back), never
-    // cruelty. Custody becoming impractical (a fight, lost sight) is never a reason to kill: those
-    // endings stay Captors.End / CaptorDown, restraint as decided.
+    // 0.18.0: rivalry (BEAR/USEC, Scav/PMC) weighs too. Experience is NOT mercy: it only makes him
+    // quicker to notice a weapon kept back (AfterDemand). Custody becoming impractical (a fight,
+    // lost sight) is not itself a reason to kill: those endings stay Captors.End / CaptorDown.
     //
     // A deliberate decision is logged as "DECIDES TO KILL" with its reasons and set as Reject on
     // that captor only (his squad's restraint stays theirs); a shot from a bot whose decision still
@@ -165,19 +168,73 @@ namespace HandsAreHigh
             Refusal(cs, s, now, log, seen);
         }
 
+        // ---- 0.18.0: what weighs on a lethal decision ---------------------------------------------
+        //
+        // Only what the bot knows or is: his nature (aggression), whether captor and prisoner are
+        // rivals (BEAR/USEC, Scav/PMC), this man having shot him or his squad, a weapon he saw him
+        // keep back. Level and skill are NOT a factor: experience is tactical (it makes him quicker
+        // to notice a weapon kept back), never mercy. 0.16-0.17 cut every lethal chance by up to
+        // 35% for experience ("discipline"): with a 4% base that left 2-4% (the 0.17.0 log: 9
+        // release rolls, all mercy).
+        private static float Weigh(CaptorState cs, SurrenderState s, bool kept, out bool hurt, StringBuilder why)
+        {
+            float aggr = Aggression(cs.Bot);
+            float k = aggr;
+            why.Append($"aggression {aggr:0.00}");
+            if (Rivals(cs.Bot, s.Bot, out string rv)) { k *= Settings.RivalWeight.Value; why.Append($" x rivals {Settings.RivalWeight.Value:0.0} ({rv})"); }
+            hurt = KnownViolence(cs.Owner, s.Bot, out string vWhy);
+            if (hurt) { k *= Settings.ViolenceWeight.Value; why.Append($" x he shot ({vWhy}) {Settings.ViolenceWeight.Value:0.0}"); }
+            if (kept) { k *= Settings.IncompleteWeight.Value; why.Append($" x kept a weapon back {Settings.IncompleteWeight.Value:0.0}"); }
+            return k;
+        }
+
+        internal static string Faction(Player p)
+        {
+            string role = p?.Profile?.Info?.Settings?.Role.ToString() ?? "";
+            if (role.IndexOf("pmcBEAR", System.StringComparison.OrdinalIgnoreCase) >= 0 || p?.Profile?.Info?.Side == EPlayerSide.Bear) return "BEAR";
+            if (role.IndexOf("pmcUSEC", System.StringComparison.OrdinalIgnoreCase) >= 0 || p?.Profile?.Info?.Side == EPlayerSide.Usec) return "USEC";
+            return NaturalSurrender.ClassOf(p) == NaturalSurrender.RoleClass.Scav ? "Scav" : null;
+        }
+
+        private static bool Rivals(Player a, Player b, out string why)
+        {
+            string fa = Faction(a), fb = Faction(b);
+            why = $"{fa} vs {fb}";
+            return fa != null && fb != null && fa != fb;
+        }
+
+        private static float Cap(float c) => Mathf.Clamp(c, 0f, Settings.ExecuteMax.Value);
+
+        // ---- 0.18.0: intent, decided once when he takes custody ------------------------------------
+
+        // Does he mean to shoot this man when he is done with him? Rolled once (Captors.Accept),
+        // logged with every input, kept for the whole custody; carried out at the release point
+        // (AtRelease), after the disarming and the gear, through his normal targeting and firing.
+        // Compliance doesn't buy the prisoner anything here: a compliant man can be shot.
+        internal static void Intend(CaptorState cs, SurrenderState s)
+        {
+            var why = new StringBuilder();
+            float k = Weigh(cs, s, kept: false, out bool hurt, why);
+            float chance = Cap(Settings.LethalIntent.Value * k);
+            float roll = Dice.Value;
+            cs.IntentChance = chance;
+            cs.IntentHurt = hurt;
+            cs.IntendsKill = roll < chance;
+            cs.IntentWhy = $"chance {chance:0.00} (base {Settings.LethalIntent.Value:0.00} x {why}), roll {roll:0.00}";
+            Log($"{cs.Name}: intent about {s.Name} (decided once, at custody): {cs.IntentWhy} -> {(cs.IntendsKill ? "MEANS TO KILL HIM when he is done with him" : "means to let him go")}");
+        }
+
         // He kept a weapon the captor can see through every demand.
         private static void Refusal(CaptorState cs, SurrenderState s, float now, StringBuilder log, Item seen)
         {
-            float aggr = Aggression(cs.Bot);
-            bool hurt = KnownViolence(cs.Owner, s.Bot, out string vWhy);
-            float exp = Experience(cs.Owner);
-            float chance = Settings.RefusalLethal.Value * aggr * (hurt ? Settings.ViolenceWeight.Value : 1f) * (1f - Settings.Discipline.Value * exp);
-            chance = Mathf.Clamp(chance, 0f, Settings.ExecuteMax.Value);
+            var why = new StringBuilder();
+            float k = Weigh(cs, s, kept: false, out _, why);
+            float chance = Cap(Settings.RefusalLethal.Value * k);
             JudgeForce f = ForcedFor(cs.Bot);
             float roll = Dice.Value;
-            bool lethal = f == JudgeForce.Lethal || (f == JudgeForce.Auto && roll < chance);
-            log.Append($"lethal? chance {chance:0.00} (base {Settings.RefusalLethal.Value:0.00} x aggression {aggr:0.00}{(hurt ? $" x violence ({vWhy})" : "")} x discipline {1f - Settings.Discipline.Value * exp:0.00}), roll {roll:0.00}" +
-                       $"{(f != JudgeForce.Auto ? $" (FORCED {f})" : "")} -> ");
+            bool lethal = f == JudgeForce.Lethal || (f == JudgeForce.Auto && (roll < chance || cs.IntendsKill));
+            log.Append($"lethal? chance {chance:0.00} (base {Settings.RefusalLethal.Value:0.00} x {why}), roll {roll:0.00}" +
+                       $"{(cs.IntendsKill ? " (he meant to kill him anyway)" : "")}{(f != JudgeForce.Auto ? $" (FORCED {f})" : "")} -> ");
             if (lethal)
             {
                 Log(log.Append("DECIDES TO KILL him").ToString());
@@ -194,26 +251,44 @@ namespace HandsAreHigh
             Log(log.Append("warns him once more and lets him go soon, keeping his distance (nothing of his fetched)").ToString());
         }
 
-        // The plan is done: let him go or shoot him. Once per custody (Captors.Check).
+        // The plan is done (disarmed, gear taken or left): carry out what he decided when he took
+        // him. Only something new since then (he saw a weapon kept back, the man turns out to have
+        // shot him) is weighed, once, as the extra chance it adds. Once per custody.
         internal static bool AtRelease(CaptorState cs, SurrenderState s)
         {
             if (cs.ReleaseJudged) return false;
             cs.ReleaseJudged = true;
-            float aggr = Aggression(cs.Bot);
-            bool hurt = KnownViolence(cs.Owner, s.Bot, out string vWhy);
-            float exp = Experience(cs.Owner);
-            float chance = Settings.ExecuteChance.Value * aggr * (hurt ? Settings.ViolenceWeight.Value : 1f) *
-                           (cs.Incomplete ? Settings.IncompleteWeight.Value : 1f) * (1f - Settings.Discipline.Value * exp);
-            chance = Mathf.Clamp(chance, 0f, Settings.ExecuteMax.Value);
             JudgeForce f = ForcedFor(cs.Bot);
+            string head = $"{cs.Name}: done with {s.Name} ({Time.time - cs.Since:0} s, plan {cs.PlanName}; {(cs.Incomplete ? "he kept something back" : "he did as told")}): ";
+            if (f != JudgeForce.Auto)
+            {
+                Log(head + $"FORCED {f} (his own intent was: {(cs.IntendsKill ? "kill" : "let go")}, {cs.IntentWhy})");
+                if (f == JudgeForce.Mercy) return false;
+                Escalate(cs, s, "FORCED lethal at the release");
+                return true;
+            }
+            if (cs.IntendsKill)
+            {
+                Log(head + $"carries out what he decided when he took him ({cs.IntentWhy}) -> DECIDES TO KILL him");
+                Escalate(cs, s, $"meant to since he took him ({cs.IntentWhy})");
+                return true;
+            }
+            var why = new StringBuilder();
+            float k = Weigh(cs, s, cs.Incomplete, out bool hurt, why);
+            bool news = cs.Incomplete || (hurt && !cs.IntentHurt);
+            if (!news)
+            {
+                Log(head + $"lets him go, as he decided when he took him ({cs.IntentWhy})");
+                return false;
+            }
+            float now = Cap(Settings.LethalIntent.Value * k);
+            float add = cs.IntentChance >= 0.999f ? 1f : Mathf.Clamp01(1f - (1f - now) / (1f - cs.IntentChance));
             float roll = Dice.Value;
-            bool lethal = f == JudgeForce.Lethal || (f == JudgeForce.Auto && roll < chance);
-            Log($"{cs.Name}: done with {s.Name} ({Time.time - cs.Since:0} s, plan {cs.PlanName}; {(cs.Incomplete ? "he kept something back" : "he did as told")}): " +
-                $"kill instead of letting go? chance {chance:0.00} (base {Settings.ExecuteChance.Value:0.00} x aggression {aggr:0.00}{(hurt ? $" x violence ({vWhy})" : "")}" +
-                $"{(cs.Incomplete ? $" x kept back {Settings.IncompleteWeight.Value:0.0}" : "")} x discipline {1f - Settings.Discipline.Value * exp:0.00}), roll {roll:0.00}" +
-                $"{(f != JudgeForce.Auto ? $" (FORCED {f})" : "")} -> {(lethal ? "DECIDES TO KILL him" : "lets him go")}");
+            bool lethal = roll < add;
+            Log(head + $"something new since he took him ({(cs.Incomplete ? "a weapon kept back" : "")}{(cs.Incomplete && hurt && !cs.IntentHurt ? ", " : "")}{(hurt && !cs.IntentHurt ? "he learned the man shot at them" : "")}): " +
+                $"now {now:0.00} (base {Settings.LethalIntent.Value:0.00} x {why}) vs {cs.IntentChance:0.00} at custody, extra chance {add:0.00}, roll {roll:0.00} -> {(lethal ? "DECIDES TO KILL him" : "lets him go")}");
             if (!lethal) return false;
-            Escalate(cs, s, cs.Incomplete ? "done with a man who kept a weapon back" : hurt ? $"done with him ({vWhy})" : "done with him (his own nature)");
+            Escalate(cs, s, cs.Incomplete ? "done with a man who kept a weapon back" : "done with a man who shot at them");
             return true;
         }
 
@@ -225,77 +300,110 @@ namespace HandsAreHigh
             HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: DECIDES TO KILL {s.Name} ({why}); his squad's own decisions stand");
             RestraintEntry entry = Restraint.Set(s, o, RestraintKind.Reject, $"decides to kill him: {why}", squad: false);
             if (entry != null) entry.Final = true;
+            LootPlan loot = cs.Loot;
             CaptorVoice.Interrupt(cs.Bot);
             CaptorVoice.Say(cs.Bot, CaptorLine.Resist);
             Captors.End(cs, $"decided to kill him ({why})");
+            bool held = Restraint.HoldsFire(cs.Bot, s.Bot);
+            EnemyInfo info = null;
             try
             {
-                EnemyInfo info = Perception.InfoAbout(o, s.Bot);
+                info = Perception.InfoAbout(o, s.Bot);
                 if (info != null && o.Memory != null) o.Memory.GoalEnemy = info;
             }
             catch (System.Exception e) { HandsAreHighPlugin.Report("judgement target", e); }
-            Watch(o, s, why);
+            // The restraint transition, read back: nothing of ours may still hold his fire.
+            Log($"{cs.Name}: restraint on {s.Name} now {(entry == null ? "none" : $"{entry.Kind}{(entry.Final ? " (final)" : "")}")}; still holding fire at him: {(held ? "YES (blocked)" : "no")}; " +
+                $"the game's ignore flag on him: {(info == null ? "no EnemyInfo yet" : info.IgnoreUntilAggression ? "SET (blocked)" : "clear")}; " +
+                $"vanilla target {(o.Memory?.GoalEnemy != null && Perception.Same(o.Memory.GoalEnemy.Person, s.Bot) ? "him" : "not him")}{(SainTargetFilter.Patched ? "; SAIN chooses its own target (watched, steered to him)" : "")}");
+            Watch(o, s, why, loot);
         }
 
         // ---- 0.17.0: a man running from custody --------------------------------------------------
 
         // Once per bolt, only for a run he saw (Captors.Check): let him run, or fire. Not an attack:
-        // a judgement, from his nature, what this man did to him and what he saw him keep back.
-        // True when he decided to fire (custody already ended by Escalate).
+        // a judgement, from his nature, rivalry, what this man did to him and what he saw him keep
+        // back. A captor who meant to kill him anyway fires. True when he decided to fire.
         internal static bool OnBolt(CaptorState cs, SurrenderState s)
         {
-            float aggr = Aggression(cs.Bot);
-            bool hurt = KnownViolence(cs.Owner, s.Bot, out string vWhy);
-            float exp = Experience(cs.Owner);
-            float chance = Settings.BoltLethal.Value * aggr * (hurt ? Settings.ViolenceWeight.Value : 1f) *
-                           (cs.Incomplete ? Settings.IncompleteWeight.Value : 1f) * (1f - Settings.Discipline.Value * exp);
-            chance = Mathf.Clamp(chance, 0f, Settings.ExecuteMax.Value);
+            var why = new StringBuilder();
+            float k = Weigh(cs, s, cs.Incomplete, out _, why);
+            float chance = Cap(Settings.BoltLethal.Value * k);
             JudgeForce f = ForcedFor(cs.Bot);
             float roll = Dice.Value;
-            bool lethal = f == JudgeForce.Lethal || (f == JudgeForce.Auto && roll < chance);
-            Log($"{cs.Name}: {s.Name} runs from his custody ({s.Phase}, unarmed): fire on him? chance {chance:0.00} (base {Settings.BoltLethal.Value:0.00} x aggression {aggr:0.00}" +
-                $"{(hurt ? $" x violence ({vWhy})" : "")}{(cs.Incomplete ? $" x kept back {Settings.IncompleteWeight.Value:0.0}" : "")} x discipline {1f - Settings.Discipline.Value * exp:0.00}), roll {roll:0.00}" +
-                $"{(f != JudgeForce.Auto ? $" (FORCED {f})" : "")} -> {(lethal ? "DECIDES TO KILL him" : "lets him run")}");
+            bool lethal = f == JudgeForce.Lethal || (f == JudgeForce.Auto && (cs.IntendsKill || roll < chance));
+            Log($"{cs.Name}: {s.Name} runs from his custody ({s.Phase}, unarmed): fire on him? chance {chance:0.00} (base {Settings.BoltLethal.Value:0.00} x {why}), roll {roll:0.00}" +
+                $"{(cs.IntendsKill ? " (he meant to kill him anyway)" : "")}{(f != JudgeForce.Auto ? $" (FORCED {f})" : "")} -> {(lethal ? "DECIDES TO KILL him" : "lets him run")}");
             if (!lethal) return false;
             Escalate(cs, s, "he ran from custody");
             return true;
         }
 
-        // Debug scenarios: the decision only (forced); the restraint change, targeting and firing
-        // that follow are the real ones (and watched below).
+        // Debug (scenario event, Ctrl+U): the decision only (forced); the restraint change,
+        // targeting and firing that follow are the real ones (and watched below).
         internal static string ForceKillNow(Player captor)
         {
             if (captor == null || !Captors.TryGet(captor, out CaptorState cs)) return "isn't guarding anyone";
             SurrenderState s = cs.Prisoner;
             if (s == null || s.Dead) return "his prisoner is gone";
-            HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: decision FORCED by the scenario (the decision only; what follows is the real path)");
-            Escalate(cs, s, "FORCED by a debug scenario");
+            HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: lethal decision FORCED (debug; the decision only, everything after it is the real path)");
+            Escalate(cs, s, "FORCED by debug");
             return null;
         }
 
-        // ---- 0.17.0: is a kill decision carried out? ------------------------------------------------
+        // ---- 0.17.0 / 0.18.0: is a kill decision carried out? --------------------------------------
         //
-        // After Escalate: every 0.5 s, from the bot's real state: his target, whether he pressed the
-        // trigger since (Restraint.NoteShot via TriggerPatch), whether the man is dead. His target is
-        // set again (at most 3 times) if something else took it while the man is in his sight; after
-        // 10 s without a shot the reason is logged (layer, target, hands, sight, restraint) and the
-        // watch ends. Nothing here fires a shot or touches health: the AI's own combat does it.
+        // After Escalate: every 0.5 s, from the bot's real state. Logged once each: target acquired
+        // (the game's GoalEnemy, or SAIN's own choice, read in SainTargetFilter), first trigger press
+        // (TriggerPatch), the outcome. At 3 s without a shot an interim status line; at 10 s an
+        // EXECUTION FAILURE warning naming what stands in the way (layer, SAIN's target, the game's
+        // target and ignore flag, hands, sight, aim, restraint, shield). The game's target is set
+        // back at most 3 times; a SAIN bot is steered by SainTargetFilter (his visible-enemy choice
+        // made the prisoner while nothing is shooting at him). Nothing here fires a shot or touches
+        // health: the AI's own combat does it.
         private sealed class KillOrder
         {
             internal BotOwner Owner;
             internal Player Captor, Prisoner;
+            internal SurrenderState State;
+            internal LootPlan Loot;
             internal string Name, Victim, Why;
-            internal float Since, FirstShot = -1f;
-            internal int Retargets;
+            internal float Since, FirstShot = -1f, Acquired = -1f;
+            internal int Retargets, SainSteers;
+            internal bool Interim;
+            internal string SainGoal = "?";
+            internal bool SainOn;
         }
 
         private static readonly List<KillOrder> Kills = new List<KillOrder>(2);
         internal static bool Watching => Kills.Count > 0;
 
-        private static void Watch(BotOwner o, SurrenderState s, string why)
+        private static void Watch(BotOwner o, SurrenderState s, string why, LootPlan loot)
         {
             if (Kills.Count >= 8) Kills.RemoveAt(0);
-            Kills.Add(new KillOrder { Owner = o, Captor = o.GetPlayer, Prisoner = s.Bot, Name = Restraint.Name(o.GetPlayer), Victim = s.Name, Why = why, Since = Time.time });
+            Kills.Add(new KillOrder { Owner = o, Captor = o.GetPlayer, Prisoner = s.Bot, State = s, Loot = loot, Name = Restraint.Name(o.GetPlayer), Victim = s.Name, Why = why, Since = Time.time });
+        }
+
+        private static KillOrder OrderOf(BotOwner o)
+        {
+            for (int i = 0; i < Kills.Count; i++) if (Kills[i].Owner == o) return Kills[i];
+            return null;
+        }
+
+        // SainTargetFilter: the man this bot decided to kill (null: none).
+        internal static Player KillTarget(BotOwner o) => OrderOf(o)?.Prisoner;
+
+        // SainTargetFilter, after SAIN chose: what it chose, and whether we steered it to him.
+        internal static void NoteSainGoal(BotOwner o, string goalName, bool steered, bool onVictim = false)
+        {
+            KillOrder k = OrderOf(o);
+            if (k == null) return;
+            k.SainOn = onVictim || steered;
+            k.SainGoal = k.SainOn ? k.Victim : goalName ?? "nobody";
+            if (!steered) return;
+            k.SainSteers++;
+            if (k.SainSteers <= 3 || k.SainSteers % 20 == 0)
+                Log($"{k.Name}: SAIN had chosen {goalName ?? "nobody"}; his target set to {k.Victim} (he sees him, nothing is shooting at him) [{k.SainSteers}]");
         }
 
         internal static void TickKills(float now)
@@ -304,8 +412,12 @@ namespace HandsAreHigh
             {
                 KillOrder k = Kills[i];
                 string done = null;
-                bool warn = false;
-                if (!Perception.Alive(k.Prisoner)) done = $"KILL DECISION CARRIED OUT: {k.Victim} is dead {now - k.Since:0.0} s after {k.Name}'s decision ({k.Why}){(k.FirstShot >= 0f ? $"; his first shot +{k.FirstShot - k.Since:0.0} s" : "; no trigger press of his seen (someone else's shot?)")}";
+                bool warn = false, carried = false;
+                if (!Perception.Alive(k.Prisoner))
+                {
+                    carried = true;
+                    done = $"KILL DECISION CARRIED OUT: {k.Victim} is dead {now - k.Since:0.0} s after {k.Name}'s decision ({k.Why}){(k.FirstShot >= 0f ? $"; his first shot +{k.FirstShot - k.Since:0.0} s" : "; no trigger press of his seen (someone else's shot?)")}";
+                }
                 else if (!Perception.Alive(k.Captor) || k.Owner == null || k.Owner.IsDead) done = $"kill decision about {k.Victim} ends: {k.Name} is down";
                 else
                 {
@@ -313,29 +425,40 @@ namespace HandsAreHigh
                     if (k.FirstShot < 0f && shot > k.Since)
                     {
                         k.FirstShot = shot;
-                        Log($"{k.Name}: opens fire on {k.Victim} {shot - k.Since:0.0} s after deciding to kill him");
+                        Log($"{k.Name}: FIRES at {k.Victim} (trigger pressed) {shot - k.Since:0.0} s after deciding to kill him");
                     }
                     EnemyInfo goal = k.Owner.Memory?.GoalEnemy;
                     bool onHim = goal != null && Perception.Same(goal.Person, k.Prisoner);
-                    if (!onHim && k.FirstShot < 0f && k.Retargets < 3 && Perception.Recognises(k.Owner, k.Prisoner))
+                    bool sainOn = k.SainOn;
+                    if (k.Acquired < 0f && (onHim || sainOn))
+                    {
+                        k.Acquired = now;
+                        Log($"{k.Name}: has {k.Victim} as his target {now - k.Since:0.0} s after deciding ({(sainOn ? "SAIN's choice" : "the game's GoalEnemy")})");
+                    }
+                    bool sees = Perception.Recognises(k.Owner, k.Prisoner);
+                    if (!onHim && k.FirstShot < 0f && k.Retargets < 3 && sees)
                     {
                         EnemyInfo info = Perception.InfoAbout(k.Owner, k.Prisoner);
                         if (info != null && k.Owner.Memory != null)
                         {
                             k.Owner.Memory.GoalEnemy = info;
                             k.Retargets++;
-                            Log($"{k.Name}: his target was {(goal == null ? "nobody" : Restraint.Name(Perception.PlayerOf(goal.Person)))}; set back to {k.Victim} ({k.Retargets}/3)");
+                            Log($"{k.Name}: the game's target was {(goal == null ? "nobody" : Restraint.Name(Perception.PlayerOf(goal.Person)))}; set back to {k.Victim} ({k.Retargets}/3)");
                         }
                     }
-                    if (k.FirstShot < 0f && now - k.Since > 10f)
+                    if (k.FirstShot < 0f && (now - k.Since > 10f || (!k.Interim && now - k.Since > 3f)))
                     {
-                        warn = true;
-                        string layer = "?";
-                        try { layer = k.Owner.Brain?.ActiveLayerName() ?? "?"; } catch { }
-                        Restraint.TryGet(k.Prisoner, k.Captor, out RestraintEntry e);
-                        done = $"KILL DECISION NOT CARRIED OUT after 10 s: {k.Name} -> {k.Victim}: layer {layer}, target {(goal == null ? "none" : Restraint.Name(Perception.PlayerOf(goal.Person)))}, " +
-                               $"hands {Arsenal.DescribeHands(k.Captor)}, sees him {Perception.Recognises(k.Owner, k.Prisoner)}, {Vector3.Distance(k.Captor.Position, k.Prisoner.Position):0} m, " +
-                               $"restraint {(e == null ? "none" : $"{e.Kind}{(e.Final ? " (final)" : "")}")}, shielded {ScenarioShield.Blocks(k.Captor, k.Prisoner)}";
+                        string state = Status(k, goal, sees);
+                        if (now - k.Since > 10f)
+                        {
+                            warn = true;
+                            done = $"EXECUTION FAILURE: KILL DECISION NOT CARRIED OUT after 10 s: {k.Name} -> {k.Victim}: {state}";
+                        }
+                        else
+                        {
+                            k.Interim = true;
+                            Log($"{k.Name}: no shot at {k.Victim} yet, 3 s after deciding: {state}");
+                        }
                     }
                     else if (k.FirstShot >= 0f && now - k.FirstShot > 20f) done = $"kill decision about {k.Victim}: {k.Name} fired, {k.Victim} still alive after 20 s (wounded, ran, or out of sight)";
                 }
@@ -343,7 +466,24 @@ namespace HandsAreHigh
                 Kills.RemoveAt(i);
                 if (warn) HandsAreHighPlugin.Log.LogWarning(done);
                 else HandsAreHighPlugin.Log.LogInfo(done);
+                // 0.18.0: what he made the man drop is still on the ground: fetched now, like after a release.
+                if (carried && k.Loot != null) { try { CaptorLoot.AfterKill(k.Owner, k.State, k.Loot); } catch (System.Exception e) { HandsAreHighPlugin.Report("gear after a kill", e); } }
             }
+        }
+
+        // Everything that could stand between a kill decision and a shot, from the bot's real state.
+        private static string Status(KillOrder k, EnemyInfo goal, bool sees)
+        {
+            string layer = "?";
+            try { layer = k.Owner.Brain?.ActiveLayerName() ?? "?"; } catch { }
+            Restraint.TryGet(k.Prisoner, k.Captor, out RestraintEntry e);
+            EnemyInfo info = Perception.InfoAbout(k.Owner, k.Prisoner);
+            Vector3 to = Perception.Chest(k.Prisoner) - Perception.Eye(k.Captor);
+            float aim = Vector3.Angle(k.Captor.LookDirection, to);
+            return $"layer {layer}, game target {(goal == null ? "none" : Restraint.Name(Perception.PlayerOf(goal.Person)))}, SAIN target {k.SainGoal}{(k.SainSteers > 0 ? $" (steered {k.SainSteers}x)" : "")}, " +
+                   $"hands {Arsenal.DescribeHands(k.Captor)}, sees him {sees} (EnemyInfo {(info == null ? "none" : $"visible {info.IsVisible}, ignore flag {info.IgnoreUntilAggression}")}), " +
+                   $"{to.magnitude:0.0} m, his aim {aim:0} deg off him, restraint {(e == null ? "none" : $"{e.Kind}{(e.Final ? " (final)" : "")}")}, " +
+                   $"still holding fire {Restraint.HoldsFire(k.Captor, k.Prisoner)}, shielded {ScenarioShield.Blocks(k.Captor, k.Prisoner)}, prisoner {k.State?.Phase}";
         }
 
         // ---- the end of a prisoner ---------------------------------------------------------------

@@ -35,6 +35,15 @@ namespace HandsAreHigh
     // the other guards he can see). His reaction to the prisoner moving is slower meanwhile
     // (Captors.Check). Any threat, the prisoner moving or the item gone ends it.
     //
+    // 0.18.0: the weapons he made the man drop (the gun at the surrender, guns and knife on Drop
+    // your weapons) are "demanded": always wanted (no appetite roll, no value threshold), fetched
+    // first, with their own risk tolerance (Risk he accepts for those). Items dropped AFTER the first
+    // weighing (every Drop your weapons answer comes later) are weighed when they land: 0.16-0.17
+    // weighed once, so a weapon dropped on his order was never considered (0.17.0 log, #13: the
+    // knife). A fetch interrupted by a threat or the man moving is weighed again once the situation
+    // changes (at most twice), not dropped for good and not retried at once. After a kill decision
+    // is carried out the killer fetches what he still wanted (AfterKill).
+    //
     // Coordination: an item another of our captors, a prisoner (TargetWeapon) or a squadmate's own
     // BotItemTaker is going for is left alone; a race lost to anyone else is a failed transaction
     // (the game allows one move), logged. Looting Bots, if installed, is asked not to start its own
@@ -52,6 +61,8 @@ namespace HandsAreHigh
         internal string Why;
         internal float Want;            // the appetite roll's chance (rolled once)
         internal bool Wanted;
+        internal bool Demanded;         // 0.18.0: a weapon he made him drop
+        internal int Tries;             // fetches started
     }
 
     internal sealed class LootJob
@@ -150,7 +161,7 @@ namespace HandsAreHigh
             if (s.Dropped.Count == 0 && s.DroppedWeapon == null) return false;
             LootPlan plan = cs.Loot ?? (cs.Loot = new LootPlan());
             int situation = Situation(cs, s);
-            if (!plan.Assessed)
+            if (!plan.Assessed || HasNew(s, plan))
             {
                 if (!Perception.TakeHeavy()) return false;   // a few slot/grid searches and a loot scan: a frame with budget
                 Assess(cs, s, plan, situation);
@@ -163,9 +174,7 @@ namespace HandsAreHigh
                 foreach (LootCandidate c in plan.Items)
                     if (c.Decision == "later") Reweigh(cs, s, c);
             }
-            LootCandidate next = null;
-            foreach (LootCandidate c in plan.Items)
-                if (c.Decision == "take" && (next == null || c.Value > next.Value)) next = c;
+            LootCandidate next = Pick(plan.Items, "take");
             if (next != null) return Start(cs.Owner, s, next, afterRelease: false, now);
             // Wanted but too risky: a turn-around order first (once), then weigh again.
             if (!plan.TurnAsked && Settings.TurnOrder.Value && !s.TurnedAway && !s.Turning && !Kneel.Active(s) && Any(plan, "later") && !cs.Plan.Contains(OrderKind.TurnAround))
@@ -187,29 +196,69 @@ namespace HandsAreHigh
         private static int Situation(CaptorState cs, SurrenderState s) =>
             (s.Kneel == KneelPhase.Down ? 1 : 0) | (s.TurnedAway ? 2 : 0) | (s.HeadHands >= 1f ? 4 : 0) | (SquadCover(cs, s, out _) ? 8 : 0);
 
+        // Demanded weapons first, then the most valuable.
+        private static LootCandidate Pick(List<LootCandidate> items, string decision)
+        {
+            LootCandidate next = null;
+            foreach (LootCandidate c in items)
+            {
+                if (c.Decision != decision) continue;
+                if (next == null || (c.Demanded && !next.Demanded) || (c.Demanded == next.Demanded && c.Value > next.Value)) next = c;
+            }
+            return next;
+        }
+
+        // Something on the ground he hasn't weighed yet (a Drop your weapons answered since).
+        private static bool HasNew(SurrenderState s, LootPlan plan)
+        {
+            if (s.DroppedWeapon != null && !Has(plan, s.DroppedWeapon)) return true;
+            for (int i = 0; i < s.Dropped.Count; i++) if (s.Dropped[i] != null && !Has(plan, s.Dropped[i])) return true;
+            return false;
+        }
+
+        private static bool Has(LootPlan plan, Item it)
+        {
+            foreach (LootCandidate c in plan.Items) if (c.Item == it) return true;
+            return false;
+        }
+
+        // A weapon the man dropped because a captor told him to (or at the surrender): guns and knives.
+        private static bool IsDemanded(Item it) => Settings.CollectDemanded.Value && (it is Weapon || Arsenal.IsMelee(it));
+
+        // Every item on the ground not weighed yet (all of them the first time).
         private static void Assess(CaptorState cs, SurrenderState s, LootPlan plan, int situation)
         {
+            bool first = !plan.Assessed;
             plan.Assessed = true;
             plan.SituationAt = situation;
-            var seen = new HashSet<Item>();
             var all = new List<Item>(s.Dropped);
             if (s.DroppedWeapon != null && !all.Contains(s.DroppedWeapon)) all.Insert(0, s.DroppedWeapon);
             float greed = Greed(cs.Bot, out string nature);
-            var log = new StringBuilder($"{cs.Name}: weighs what {s.Name} dropped ({nature} x{greed:0.00}, takes at most {Settings.LootMaxItems.Value}):");
+            var log = new StringBuilder($"{cs.Name}: weighs {(first ? "what" : "what else")} {s.Name} dropped ({nature} x{greed:0.00}, takes at most {Settings.LootMaxItems.Value} besides the weapons he made him drop):");
             int n = 0;
+            foreach (LootCandidate c in plan.Items) if (c.Wanted && !c.Demanded) n++;
+            int added = 0;
             foreach (Item it in all)
             {
-                if (it == null || !seen.Add(it)) continue;
-                var c = new LootCandidate { Item = it, Name = Compliance.Name(it) };
+                if (it == null || Has(plan, it)) continue;
+                added++;
+                var c = new LootCandidate { Item = it, Name = Compliance.Name(it), Demanded = IsDemanded(it) };
                 plan.Items.Add(c);
                 LootItem loose = ScenarioOps.FindLoose(it);
-                if (loose == null) { c.Decision = "leave"; c.Why = "not on the ground any more"; }
+                if (loose == null) { c.Decision = "leave"; c.Why = $"not on the ground any more{WhoHas(it)}"; }
                 else if (Claimed.Contains(it) || ClaimedByOther(cs, it, loose, out _)) { ClaimedByOther(cs, it, loose, out string by); c.Decision = "leave"; c.Why = $"{by ?? "another captor"} is going for it"; }
                 else
                 {
                     c.Value = Value(it);
                     ItemAddress where = AddressFor(cs.Bot, it, out c.Fit, out c.Gap);
-                    if (where == null) { c.Decision = "leave"; c.Why = $"no room for it ({c.Fit})"; }
+                    if (where == null) { c.Decision = "leave"; c.Why = $"{(c.Demanded ? "a weapon he made him drop, but " : "")}no room for it ({c.Fit})"; }
+                    else if (c.Demanded)
+                    {
+                        c.Want = 1f;
+                        c.Wanted = true;
+                        c.Why = $"the weapon he made him drop ({c.Value:0} roubles, into his {c.Fit})";
+                        Reweigh(cs, s, c);
+                    }
                     else if (n >= Settings.LootMaxItems.Value) { c.Decision = "leave"; c.Why = "has taken enough"; }
                     else
                     {
@@ -226,7 +275,23 @@ namespace HandsAreHigh
                 }
                 log.Append($"\n    {c.Name}: {c.Decision} ({c.Why})");
             }
+            if (added == 0) log.Append(" nothing on the ground he can identify as the man's");
             if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo(log.ToString());
+        }
+
+        // Who holds an item that left the ground (for the log): "" when unknown.
+        private static string WhoHas(Item it)
+        {
+            try
+            {
+                Item root = it?.Owner?.RootItem;
+                var world = Singleton<GameWorld>.Instance;
+                if (root == null || world?.AllAlivePlayersList == null) return "";
+                foreach (Player p in world.AllAlivePlayersList)
+                    if (p != null && p.Equipment == root) return $" ({Restraint.Name(p)} has it)";
+            }
+            catch { }
+            return "";
         }
 
         // Take now, later or leave, from the risk of walking over to it now.
@@ -235,12 +300,13 @@ namespace HandsAreHigh
             LootItem loose = ScenarioOps.FindLoose(c.Item);
             if (loose == null) { c.Decision = "leave"; c.Why += "; gone since"; return; }
             float risk = Risk(cs, s, loose.transform.position, out string riskWhy);
+            float accepts = c.Demanded ? Mathf.Max(Settings.LootRisk.Value, Settings.DemandedRisk.Value) : Settings.LootRisk.Value;
             string before = c.Decision;
-            c.Decision = risk <= Settings.LootRisk.Value ? "take" : Settings.LootAfterRelease.Value ? "later" : "leave";
+            c.Decision = risk <= accepts ? "take" : Settings.LootAfterRelease.Value || c.Demanded ? "later" : "leave";
             string verdict = c.Decision == "take" ? "takes it now" : c.Decision == "later" ? "too risky now: later" : "too risky: leaves it";
             int cut = c.Why.IndexOf("; risk ");
             if (cut >= 0) c.Why = c.Why.Substring(0, cut);
-            c.Why += $"; risk {risk:0.00} ({riskWhy}) vs {Settings.LootRisk.Value:0.00}: {verdict}";
+            c.Why += $"; risk {risk:0.00} ({riskWhy}) vs {accepts:0.00}: {verdict}";
             if (before != null && before != c.Decision && Settings.LogLoot.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: {c.Name}: weighed again ({riskWhy}): risk {risk:0.00} -> {verdict}");
         }
@@ -392,9 +458,10 @@ namespace HandsAreHigh
             Jobs[job.Bot] = job;
             Claimed.Add(c.Item);
             c.Decision = "fetching";
+            c.Tries++;
             LootingBotsAdapter.Hold(o, Settings.LootTimeLimit.Value + 5f);
             if (Settings.LogLoot.Value)
-                HandsAreHighPlugin.Log.LogInfo($"{job.Name}: goes to take {s.Name}'s {c.Name} ({Vector3.Distance(job.Bot.Position, job.At):0.0} m{(afterRelease ? ", after letting him go" : $", {Vector3.Distance(job.At, job.PrisonerFrom):0.0} m from him")})");
+                HandsAreHighPlugin.Log.LogInfo($"{job.Name}: goes to take {s.Name}'s {c.Name}{(c.Demanded ? " (the weapon he made him drop)" : "")} ({Vector3.Distance(job.Bot.Position, job.At):0.0} m{(afterRelease ? (s.Dead ? ", after the kill" : ", after letting him go") : $", {Vector3.Distance(job.At, job.PrisonerFrom):0.0} m from him")}{(c.Tries > 1 ? $", try {c.Tries}" : "")})");
             return true;
         }
 
@@ -406,7 +473,7 @@ namespace HandsAreHigh
             else if (!j.AfterRelease && (j.Prisoner == null || j.Prisoner.Dead || j.Prisoner.Phase != Phase.HandsUp)) stop = "the prisoner stopped complying";
             else if (!j.AfterRelease && j.Prisoner.Bot != null && (j.Prisoner.Bot.Position - j.PrisonerFrom).sqrMagnitude > 1.5f * 1.5f) stop = "the prisoner moved";
             // Taken by anyone: its LootItem is destroyed (or recycled for another item).
-            else if (!j.Asked && (j.Loose == null || !j.Loose.isActiveAndEnabled || j.Loose.Item != j.C.Item)) stop = "someone else took it";
+            else if (!j.Asked && (j.Loose == null || !j.Loose.isActiveAndEnabled || j.Loose.Item != j.C.Item)) stop = $"someone else took it{WhoHas(j.C.Item)}";
             else if (now - j.Since > Settings.LootTimeLimit.Value) stop = "took too long";
             else if (j.Stage == LootStage.Walk)
             {
@@ -423,7 +490,17 @@ namespace HandsAreHigh
                 Fallback(j);
             }
             if (stop == null) return;
-            End(j, stop, failed: true);
+            // 0.18.0: a threat or the man moving interrupts it; the item is weighed again when the
+            // situation changes (twice at most), never retried at once. Anything else (gone, stuck,
+            // too long, no room) ends it for good.
+            bool interrupted = stop == "something else needs his attention" || stop == "the prisoner moved" || stop == "the prisoner stopped complying";
+            End(j, stop, failed: true);   // always the full cleanup (a pick-up animation cut short)
+            if (interrupted && j.C.Tries < 2)
+            {
+                j.C.Decision = "later";
+                j.C.Why += "; weighed again later";
+                if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo($"{j.Name}: will weigh the {j.C.Name} again when things change (try {j.C.Tries} of 2)");
+            }
         }
 
         // CaptorLogic, standing still and settled over it: the game's pick-up.
@@ -491,6 +568,8 @@ namespace HandsAreHigh
                     try { if (ok) p.UpdateInteractionCast(); } catch { }
                     try { p.CurrentManagedState?.Pickup(false, null); } catch { }
                     if (Jobs.TryGetValue(p, out LootJob cur) && cur == j) Finish(j, ok, ok ? null : (result?.Error?.ToString() ?? "refused"));
+                    else if (Settings.LogLoot.Value)
+                        HandsAreHighPlugin.Log.LogInfo($"{j.Name}: the {j.C.Name} transaction finished after the fetch had ended ({(ok ? "it is his now" : "refused")})");
                 });
             }
             catch (System.Exception e)
@@ -537,12 +616,29 @@ namespace HandsAreHigh
         {
             if (TryJob(cs.Bot, out LootJob j) && !j.AfterRelease) End(j, released ? "let him go first" : "custody over", failed: true);
             if (!released || !Settings.LootAfterRelease.Value || cs.Loot == null || cs.Unsafe || !Perception.Alive(cs.Bot)) return;
-            var d = new Deferred { Owner = cs.Owner, Ex = cs.Prisoner, Since = Time.time, NextAt = Time.time + 1f };
-            foreach (LootCandidate c in cs.Loot.Items)
-                if ((c.Decision == "later" || c.Decision == "take" || (c.Decision == "failed" && c.Why.Contains("let him go first"))) && c.Wanted) { c.Decision = "later"; d.Items.Add(c); }
+            Defer(cs.Owner, cs.Prisoner, cs.Loot, "once he is well away");
+        }
+
+        // 0.18.0: a kill decision carried out (Judgement.TickKills): what he still wanted of the
+        // man's, the weapons he made him drop first, is fetched now (the same fetch as after a
+        // release; the dead man is "well away").
+        internal static void AfterKill(BotOwner o, SurrenderState s, LootPlan plan)
+        {
+            if (o == null || plan == null || !Settings.CaptorLooting.Value || !Perception.Alive(o.GetPlayer)) return;
+            Defer(o, s, plan, "now that he is dead");
+        }
+
+        private static void Defer(BotOwner o, SurrenderState ex, LootPlan plan, string when)
+        {
+            Player bot = o?.GetPlayer;
+            if (bot == null) return;
+            var d = new Deferred { Owner = o, Ex = ex, Since = Time.time, NextAt = Time.time + 1f };
+            foreach (LootCandidate c in plan.Items)
+                if (c.Wanted && (c.Decision == "later" || c.Decision == "take" || (c.Decision == "failed" && (c.Why.Contains("let him go first") || c.Why.Contains("custody over")))))
+                { c.Decision = "later"; d.Items.Add(c); }
             if (d.Items.Count == 0) return;
-            Later[cs.Bot] = d;
-            if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: will take {d.Items.Count} item(s) of {cs.Prisoner?.Name}'s once he is well away");
+            Later[bot] = d;
+            if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(bot)}: will take {d.Items.Count} item(s) of {ex?.Name}'s {when}");
         }
 
         // ---- after a release (Captors.Tick, 4x a second) -----------------------------------------
@@ -576,8 +672,7 @@ namespace HandsAreHigh
                     bool away = ex == null || d.Ex.Dead || !Perception.Alive(ex) || Vector3.Distance(ex.Position, p.Position) > 15f ||
                                 !Perception.LineClear(Perception.Eye(p), Perception.Eye(ex));
                     if (!away) continue;   // waits for the man to be well away
-                    LootCandidate next = null;
-                    foreach (LootCandidate c in d.Items) if (c.Decision == "later" && (next == null || c.Value > next.Value)) next = c;
+                    LootCandidate next = Pick(d.Items, "later");
                     if (next == null) { Later.Remove(p); continue; }
                     LootItem li = ScenarioOps.FindLoose(next.Item);
                     if (li == null || (li.transform.position - p.Position).sqrMagnitude > 25f * 25f)

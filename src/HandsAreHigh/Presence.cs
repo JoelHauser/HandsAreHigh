@@ -9,14 +9,24 @@ namespace HandsAreHigh
     // never means he will break and a frightened one never means he won't.
     //
     // Engine facts (0.16.9 decompile):
-    //   - Player.VisualPass -> PlayerBones.RotateHead only adds the player's free-look offset
-    //     (ProceduralWeaponAnimation.GetHeadRotation, Alt-look); bots have no head IK and no
-    //     look-at. The body animator sets the neck and head every frame; ArmPosePatch (postfix on
-    //     VisualPass) is the last writer, so a rotation applied there lasts one frame and nothing
-    //     accumulates (the animator rewrites the bones next frame).
-    //   - PlayerBones.Neck (Transform), PlayerBones.Head and PlayerBones.Spine3 (BifacialTransform)
-    //     exist; the head bone's own axes are not assumed: its forward is measured once per
-    //     surrender from the animated pose (HeadFwdLocal).
+    //   - Player.VisualPass -> PlayerBones.RotateHead adds the free-look offset
+    //     (ProceduralWeaponAnimation.GetHeadRotation = (yaw, 0, -pitch), half on the neck, half on
+    //     the head, in their local space). 0.18.0: bots DO use it: BotOwner.UpdateManual ->
+    //     BotHeadData.ManualUpdate turns the head (Player.Look, withReturn false, clamp +-40 deg)
+    //     towards BestObservedEnemy (EnemyVisibility) or by up to +-25 deg on patrol glances, and
+    //     holds it there. The body animator sets the neck and head every frame; ArmPosePatch
+    //     (postfix on VisualPass) is the last writer, so a rotation applied there lasts one frame
+    //     and nothing accumulates (the animator rewrites the bones next frame).
+    //   - Head bone axes (0.18.0, read from the installed skeleton.bundle rest pose with UnityPy:
+    //     Root_Joint +Z forward; Base HumanHead local +Y = world forward (the face), local X = world
+    //     down, local Z = world left; SAIN's PlayerTransformClass also takes head.up as the look).
+    //     0.13-0.17 measured a "forward" once per bot from one animated frame (HeadFwdLocal = the
+    //     body's forward in head space). That frame's head was wherever the game's free-look had it
+    //     (up to 40 deg towards whoever he watched): the error was kept for the raid (the sideways
+    //     gaze), and the pitch was applied about a "right" axis off the real one, which rolled the
+    //     head (the cocked head). Now the head is set to a full target rotation built from the rig's
+    //     face and up axes, upright (zero roll), and the game's free-look is centred while held
+    //     (HeadFreeLookPatch).
     //   - Breathing: the body animator's idle already moves the spine; the kneel only re-aims the
     //     pelvis (Kneel.ApplyBody), so that breathing still shows. No second breathing is added.
     //
@@ -42,9 +52,12 @@ namespace HandsAreHigh
         internal Vector3 GlancePoint;
         internal float GlanceUntil, NextGlanceAt;
         internal Quaternion HeadDelta = Quaternion.identity;
+        internal Quaternion HeadFinal = Quaternion.identity;   // 0.18.0: the head's rotation as we left it
         internal int HeadFrame = -1;
-        internal Vector3 HeadFwdLocal;          // the head bone's forward, in its own space
-        internal bool HeadAxisOk;
+        internal bool RigChecked;               // the rig's face/up axes checked against this bot once
+        internal bool RigOk = true;
+        internal int RigBad;
+        internal float DiagAt;
         internal float LastApply;
         internal float Assist;                  // torso yaw this frame (deg)
         // 0.15.0: his captor is behind him, out of what his eyes can reach (kneeling): he doesn't
@@ -97,6 +110,11 @@ namespace HandsAreHigh
 
         internal static bool On => Settings.Enabled.Value;
 
+        // 0.18.0: the Head neutral test (14. Debug), or a scenario switching it on for its run;
+        // TestDiag: pose diagnostics for a scenario's run. Both cleared with the scenario.
+        internal static bool TestNeutral, TestDiag;
+        internal static bool Neutral => TestNeutral || Settings.HeadNeutralTest.Value;
+
         private static float K => Settings.DemeanorEnabled.Value ? Settings.DemeanorStrength.Value : 0f;
 
         // A multiplier from the profile, scaled towards 1 by Demeanor strength (0 = all neutral).
@@ -140,8 +158,6 @@ namespace HandsAreHigh
             p.NextGlanceAt = Time.time + Dice.Range(1.5f, 3.5f);
             p.WarningShot = false;
             p.FlinchAmp = 0f;
-            // HeadAxisOk is kept: the head bone's axis belongs to the rig, not the encounter (a
-            // reset here left a man recaptured on his knees with no head look until he stood).
             if (s.Bot == null) return;
             if (!Settings.DemeanorEnabled.Value) { p.Demeanor = p.Base = DemeanorKind.Resigned; p.Chosen = true; return; }
 
@@ -255,7 +271,7 @@ namespace HandsAreHigh
             p.W = Mathf.MoveTowards(p.W, attend ? 1f : 0f, dt / (attend ? 0.5f : 0.2f));
 
             // Kneeling idle: only while settled on his knees, nothing else going on.
-            bool idle = On && Settings.KneelIdle.Value && s.Kneel == KneelPhase.Down && s.Phase == Phase.HandsUp && !s.Suspended && !s.WasHit;
+            bool idle = On && Settings.KneelIdle.Value && !Neutral && s.Kneel == KneelPhase.Down && s.Phase == Phase.HandsUp && !s.Suspended && !s.WasHit;
             p.IdleW = Mathf.MoveTowards(p.IdleW, idle ? 1f : 0f, dt / (idle ? 1.2f : 0.25f));
             if (p.IdleW > 0f) IdleSchedule(s, now);
 
@@ -299,6 +315,7 @@ namespace HandsAreHigh
                 return;
             }
             if (p.Glance != GlanceKind.Captor || now < p.NextGlanceAt) return;
+            if (Neutral) return;   // 14. Debug: only his captor
             float lo = Settings.GlanceMin.Value, hi = Mathf.Max(lo, Settings.GlanceMax.Value);
             p.NextGlanceAt = now + Dice.Range(lo, hi) * M(d.GlanceEvery);
             Pick(s, now, d);
@@ -411,7 +428,7 @@ namespace HandsAreHigh
         // and the layer's own hit response (a bolt) takes over.
         internal static void OnShot(Player shooter, Vector3 from, Vector3 dir)
         {
-            if (!Settings.Flinch.Value) return;
+            if (!Settings.Flinch.Value || Neutral) return;
             float radius = Settings.NearMissRadius.Value;
             float range = Settings.NearMissRange.Value;
             foreach (SurrenderState s in SurrenderRegistry.All)
@@ -537,8 +554,15 @@ namespace HandsAreHigh
             // and the chest under it is square to them (Kneel.SquareTorso). 0.14.0 let it carry up
             // to 35 deg from 8 deg on, on top of the animator's own trunk twist: the contortion.
             float maxA = TorsoMax(s);
-            float dead = Kneel.Active(s) ? 30f : 25f, share = 0.4f;
-            float a = Mathf.Sign(p.Yaw) * Mathf.Clamp((Mathf.Abs(p.Yaw) - dead) * share, 0f, maxA) * p.W;
+            // 0.18.0: the chest joins in early and gradually (a turn of the head carries the upper
+            // back with it), instead of a neck twisting alone up to 25-30 deg and the chest
+            // starting late: from 8 deg standing (15 kneeling), 35% of the look, eased in over
+            // 10 deg, up to the torso limit (kneeling 12: what planted knees allow).
+            bool kneelT = Kneel.Active(s);
+            float dead = kneelT ? 15f : 8f, share = 0.35f;
+            float over = Mathf.Max(0f, Mathf.Abs(p.Yaw) - dead);
+            float ease = Mathf.SmoothStep(0f, 1f, over / 10f);
+            float a = Mathf.Sign(p.Yaw) * Mathf.Min(over * share * ease, maxA) * p.W;
             p.Assist = a;
             if (Mathf.Abs(a) > 0.01f)
             {
@@ -604,7 +628,7 @@ namespace HandsAreHigh
             // 0.16.0: hands clasped on his head carry a bowed head with them: the demeanor's tilt is
             // halved there (a frightened man still lowers his eyes, not his whole head).
             float hands = Kneel.HandsWeight(s);
-            pitch += prof.Pitch * K * (onCaptor ? 1f : 0.3f) * (1f - 0.5f * hands);
+            if (!Neutral) pitch += prof.Pitch * K * (onCaptor ? 1f : 0.3f) * (1f - 0.5f * hands);
             // 0.15.0 limits, measured from his planted body (BodyFwd): the torso's share
             // (TorsoMax) plus the head's turn from the chest (HeadShare) is all he can turn.
             // 0.16.0: with his hands on his head (standing or kneeling) the neck bows and lifts only
@@ -717,10 +741,57 @@ namespace HandsAreHigh
             return f.sqrMagnitude > 1e-4f ? f.normalized : Vector3.zero;
         }
 
-        // Neck and head: the remaining yaw (after the torso's share) and the pitch, measured
-        // against where the animated head actually faces this frame; 40% neck, 60% head. A flinch
-        // ducks the head and turns it away from the side the round passed. HeadDelta is what the
-        // kneel's hands-behind-head follow.
+        // The head bone's face and up axes in its own space (see the header: read from the rig,
+        // not assumed and not taken from an animated frame).
+        internal static readonly Vector3 HeadFaceLocal = Vector3.up;
+        internal static readonly Vector3 HeadUpLocal = Vector3.left;
+        private static readonly Quaternion HeadRigInv = Quaternion.Inverse(Quaternion.LookRotation(HeadFaceLocal, HeadUpLocal));
+
+        // The head's world rotation that faces `face` with its crown along `up` (no roll).
+        private static Quaternion HeadRotationFor(Vector3 face, Vector3 up) => Quaternion.LookRotation(face, up) * HeadRigInv;
+
+        // Yaw (from bodyF, + = his right), pitch (+ = down) and roll (+ = crown to his right) of a
+        // head rotation, read through the rig's axes.
+        internal static void HeadAngles(Quaternion rot, Vector3 bodyF, out float yaw, out float pitch, out float roll)
+        {
+            Vector3 f = rot * HeadFaceLocal, u = rot * HeadUpLocal;
+            Vector3 flat = f; flat.y = 0f;
+            yaw = flat.sqrMagnitude > 1e-6f && bodyF.sqrMagnitude > 1e-6f ? Vector3.SignedAngle(bodyF, flat, Vector3.up) : 0f;
+            pitch = -Mathf.Asin(Mathf.Clamp(f.normalized.y, -1f, 1f)) * Mathf.Rad2Deg;
+            Vector3 upright = Vector3.ProjectOnPlane(Vector3.up, f);
+            Vector3 crown = Vector3.ProjectOnPlane(u, f);
+            roll = upright.sqrMagnitude > 1e-6f && crown.sqrMagnitude > 1e-6f ? -Vector3.SignedAngle(upright, crown, f) : 0f;
+        }
+
+        // Once per bot: the rig's axes against his animated head. Every EFT body shares the one
+        // skeleton, so this should always pass; if it doesn't (a modded body with another rig), the
+        // look is switched off for him rather than turning a head about the wrong axes.
+        private static bool RigCheck(Player pl, SurrenderState s, Transform head)
+        {
+            PresenceState p = s.Look;
+            if (p.RigChecked) return p.RigOk;
+            Vector3 bf = pl.Transform.Original.forward; bf.y = 0f;
+            if (bf.sqrMagnitude < 1e-4f) return false;
+            bf.Normalize();
+            HeadAngles(head.rotation, bf, out float y, out float pt, out float r);
+            Vector3 u = head.rotation * HeadUpLocal;
+            bool ok = Mathf.Abs(y) < 75f && Mathf.Abs(pt) < 60f && u.y > 0.3f;
+            if (!ok && ++p.RigBad < 30) return false;   // one odd frame (a flinch, a stumble) is not the rig
+            p.RigChecked = true;
+            p.RigOk = ok;
+            float fl = pl.HeadRotation.y;
+            HandsAreHighPlugin.Log.LogInfo(ok
+                ? $"{s.Name}: head rig checked: face = bone +Y, crown = bone -X; animated head {y:+0;-0;0} deg yaw, {pt:+0;-0;0} pitch, {r:+0;-0;0} roll from his body (game free-look {fl:+0;-0;0} deg); the look sets the head upright from here"
+                : $"{s.Name}: head rig doesn't match (animated head {y:+0;-0;0} yaw, {pt:+0;-0;0} pitch, crown up {u.y:0.00}); head look OFF for him (no guessing the axes)");
+            return ok;
+        }
+
+        // Neck and head (0.18.0): the head is set to an absolute target (the smoothed yaw/pitch from
+        // his planted body, crown upright: no roll), blended in by W; the turn from the animated
+        // head is shared 40% neck, 60% head. Whatever the animator or the game's free-look left in
+        // the head (a turn, a tilt) is replaced, not added to. A flinch ducks the head and turns it
+        // away from the side the round passed. HeadDelta (the turn applied) is what the hands
+        // behind the head follow.
         internal static void ApplyHead(Player pl, SurrenderState s)
         {
             PresenceState p = s.Look;
@@ -729,46 +800,75 @@ namespace HandsAreHigh
             if (head == null) return;
             float fl = Flinch(s);
             if (p.W <= 0f && fl <= 0f) return;
-            if (!p.HeadAxisOk)
-            {
-                // The head bone's own forward, from the animated pose (standing: head looks along
-                // his body). Measured once per bot; no assumption about the rig's axes. Not on a
-                // frame whose torso we already turned or hunched (the measurement would keep it).
-                if (Kneel.Posing(s) || Mathf.Abs(p.Assist) > 0.5f || fl > 0.01f) return;
-                // 0.16.1: only on a frame where his look, his hips and the horizon agree. The animator
-                // turns the upper body (and head) towards the look by up to 45 deg off the hips, and
-                // tilts it with the aim pitch: a measurement taken during that twist (typically the
-                // first frame of a surrender, still aiming) left the head off by that much for the
-                // rest of the raid: he looked the wrong way at his captor.
-                Vector3 lk = pl.LookDirection, rf = pl.Transform.Original.forward;
-                Vector3 lkf = lk; lkf.y = 0f; rf.y = 0f;
-                if (lkf.sqrMagnitude < 1e-4f || rf.sqrMagnitude < 1e-4f || Vector3.Angle(lkf, rf) > 4f || Mathf.Abs(lk.normalized.y) > 0.08f) return;
-                Vector3 bf = pl.Transform.Original.forward;
-                p.HeadFwdLocal = Quaternion.Inverse(head.rotation) * bf;
-                p.HeadAxisOk = true;
-            }
-            Vector3 hf = head.rotation * p.HeadFwdLocal;
-            Vector3 flat = hf; flat.y = 0f;
+            if (!RigCheck(pl, s, head)) return;
             Vector3 bodyF = BodyFwd(pl, s);
-            if (flat.sqrMagnitude < 1e-4f || bodyF.sqrMagnitude < 1e-4f) return;
-            float curYaw = Vector3.SignedAngle(bodyF, flat, Vector3.up);
-            float curPitch = -Mathf.Asin(Mathf.Clamp(hf.normalized.y, -1f, 1f)) * Mathf.Rad2Deg;
-            // p.Yaw / p.Pitch are already within the limits (Smooth); the turn applied is what
-            // takes the animated head there, bounded as a safety net.
-            float yaw = Mathf.Clamp((p.Yaw - curYaw) * p.W, -90f, 90f) - fl * 10f * p.FlinchSide;
-            float pitch = Mathf.Clamp((p.Pitch - curPitch) * p.W, -50f, 50f) + fl * 16f;
-            Vector3 right = Vector3.Cross(Vector3.up, flat.normalized);
-            Quaternion q = Quaternion.AngleAxis(yaw, Vector3.up) * Quaternion.AngleAxis(pitch, right);
+            if (bodyF.sqrMagnitude < 1e-4f) return;
+            Quaternion anim = head.rotation;
+            Vector3 face = Quaternion.AngleAxis(p.Yaw, Vector3.up) * bodyF;
+            Vector3 side = Vector3.Cross(Vector3.up, face);
+            face = Quaternion.AngleAxis(p.Pitch, side) * face;
+            Quaternion want = Quaternion.Slerp(anim, HeadRotationFor(face, Vector3.up), p.W);
+            if (fl > 0.001f)
+            {
+                Vector3 wf = want * HeadFaceLocal; wf.y = 0f;
+                Vector3 wr = wf.sqrMagnitude > 1e-6f ? Vector3.Cross(Vector3.up, wf.normalized) : side;
+                want = Quaternion.AngleAxis(-fl * 10f * p.FlinchSide, Vector3.up) * Quaternion.AngleAxis(fl * 16f, wr) * want;
+            }
+            Quaternion q = want * Quaternion.Inverse(anim);
+            q.ToAngleAxis(out float ang, out Vector3 ax);
+            if (ang > 180f) ang -= 360f;
+            if (Mathf.Abs(ang) > 110f) q = Quaternion.AngleAxis(Mathf.Sign(ang) * 110f, ax);   // safety net only
             Transform neck = b.Neck;
             if (neck != null && head.IsChildOf(neck) && neck != head)
             {
                 Quaternion qn = Quaternion.Slerp(Quaternion.identity, q, 0.4f);
                 neck.rotation = qn * neck.rotation;
-                head.rotation = q * Quaternion.Inverse(qn) * head.rotation;
             }
-            else head.rotation = q * head.rotation;
+            head.rotation = q * anim;
             p.HeadDelta = q;
+            p.HeadFinal = head.rotation;
             p.HeadFrame = Time.frameCount;
+            if (Settings.LogPose.Value || TestDiag) GazeDiag(pl, s, anim, bodyF);
+        }
+
+        // 14. Debug "Log pose diagnostics": once a second, standing or kneeling: where the animated
+        // head pointed before us, the game's free-look, where we left it (yaw/pitch/ROLL), the chest
+        // against the hips, and his captor's bearing. Head roll after us should read ~0.
+        private static void GazeDiag(Player pl, SurrenderState s, Quaternion anim, Vector3 bodyF)
+        {
+            PresenceState p = s.Look;
+            float now = Time.time;
+            if (now < p.DiagAt) return;
+            p.DiagAt = now + 1f;
+            Transform head = pl.PlayerBones?.Head?.Original;
+            if (head == null) return;
+            HeadAngles(anim, bodyF, out float ay, out float ap, out float ar);
+            HeadAngles(head.rotation, bodyF, out float hy, out float hp, out float hr);
+            float chest = 0f;
+            if (ArmPose.TorsoFrame(pl, pl.PlayerBones, out _, out _, out Vector3 tf)) { tf.y = 0f; if (tf.sqrMagnitude > 1e-4f) chest = Vector3.SignedAngle(bodyF, tf, Vector3.up); }
+            string captor = "none";
+            if (s.Captor != null)
+            {
+                Vector3 d = s.Captor.Position - pl.Position; d.y = 0f;
+                if (d.sqrMagnitude > 0.01f) captor = $"{Vector3.SignedAngle(bodyF, d, Vector3.up):+0;-0;0} deg, {d.magnitude:0.0} m";
+            }
+            MovementContext mc = pl.MovementContext;
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: gaze: {(Kneel.Active(s) ? "kneeling" : "standing")}{(s.HandsOnHead ? ", hands on head" : "")}; captor at {captor}; " +
+                $"animated head yaw {ay:+0;-0;0} pitch {ap:+0;-0;0} roll {ar:+0;-0;0} (game free-look {pl.HeadRotation.y:+0;-0;0}, look-to-body {(mc != null ? mc.HandsToBodyAngle : 0f):+0;-0;0}); " +
+                $"after: head yaw {hy:+0;-0;0} pitch {hp:+0;-0;0} roll {hr:+0;-0;0}, target yaw {p.Yaw:+0;-0;0} pitch {p.Pitch:+0;-0;0}; chest {chest:+0;-0;0} from body (our torso turn {p.Assist:+0;-0;0}); attention {p.Glance}{(Neutral ? " [neutral test]" : "")}");
+        }
+
+        // 0.18.0: the skull's own frame as the look left it this frame (false: not posed this frame),
+        // for the hands on the head: they sit on the head wherever it points, never the reverse.
+        internal static bool SkullFrame(SurrenderState s, out Vector3 fwd, out Vector3 up, out Vector3 right)
+        {
+            fwd = up = right = Vector3.zero;
+            if (s.Look.HeadFrame != Time.frameCount) return false;
+            Quaternion r = s.Look.HeadFinal;
+            fwd = r * HeadFaceLocal;
+            up = r * HeadUpLocal;
+            right = Vector3.Cross(up, fwd).normalized;
+            return right.sqrMagnitude > 0.5f;
         }
 
         // This frame's head turn, for the kneel's hands (identity if the head wasn't turned).

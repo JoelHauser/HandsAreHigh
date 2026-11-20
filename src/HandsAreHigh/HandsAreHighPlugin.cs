@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using BepInEx;
 using BepInEx.Logging;
@@ -17,7 +17,7 @@ namespace HandsAreHigh
     {
         public const string PluginGuid = "com.joelhauser.handsarehigh";
         public const string PluginName = "Hands Are High";
-        public const string PluginVersion = "0.17.0";
+        public const string PluginVersion = "0.18.0";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").
@@ -78,6 +78,7 @@ namespace HandsAreHigh
             _teardown.Add(Voice.Reset);
             _teardown.Add(CommandVoice.Reset);
             _teardown.Add(ErrorLoggedAt.Clear);
+            _teardown.Add(() => { Presence.TestNeutral = Presence.TestDiag = false; });   // 0.18.0
 
             var harmony = new Harmony(PluginGuid);
             harmony.PatchAll(typeof(HandsAreHighPlugin).Assembly);

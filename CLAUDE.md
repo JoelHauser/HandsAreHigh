@@ -6,6 +6,110 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.18.0 (2026-11-20): head set from the rig's real axes (sideways gaze / cocked head), the game's
+bot head free-look centred while held, captor lethal intent decided once at custody, SAIN steered
+onto a kill decision, demanded weapons collected, turn-around order bug, pick-up window for the
+prisoner. Release packed (dist/HandsAreHigh-0.18.0.zip, DLL only) and installed in H:\SPT4.1.X (0.17.0
+DLL backed up in that session's scratchpad). UNCOMMITTED. NEVER RUN IN GAME: nothing below is
+confirmed in a raid.**
+
+From the 0.17.0 log (LogOutput.log 2026-11-20 12:13, 13 scenarios): 9 release rolls, all "lets him
+go" at 2-4% (base 0.04 x aggression x "discipline" 0.86-0.95); no DECIDES TO KILL anywhere, so the
+execution path never ran; "orders him to turn around first" 4x, Turn around never given by a bot;
+#13 the knife dropped on Drop your weapons was never weighed; pick-ups that did run worked (3x
+"took ... pick-up animation").
+
+Root causes and fixes:
+- Gaze (Presence.ApplyHead): the head's "forward" was measured ONCE per bot from one animated frame
+  (HeadFwdLocal = body forward in head space). The game's own bot head free-look (BotOwner.UpdateManual
+  -> BotHeadData.ManualUpdate -> Player.Look(withReturn false), +-40 deg clamp; towards
+  BestObservedEnemy, or +-25 deg patrol glances; applied in VisualPass by PlayerBones.RotateHead as
+  GetHeadRotation = (yaw, 0, -pitch) on neck+head local) was whatever it was on that frame: that angle
+  became a permanent sideways gaze, and the pitch, applied about a "right" axis taken from the skewed
+  forward, leaked into roll. Offline replay of the old code (tools/headsim/headmath.py; rig axes: tools/headsim/rig_axes.py <skeleton.bundle>): free-look 15/25/40
+  at measurement -> gaze +15/+25/+40 with the captor dead ahead, and 2.6/4.3/6.5 deg roll at 10 deg
+  pitch. Rig axes READ from the installed skeleton.bundle (UnityPy): Root_Joint +Z forward; Base
+  HumanHead local +Y = face, local X = down, local Z = left (SAIN also uses head.up as the look). Now
+  the head is set to an absolute target from those axes (LookRotation(face, world up) x rig inverse):
+  yaw/pitch from his planted body, ZERO roll, blended by W, 40% neck / 60% head; whatever the animator
+  or the free-look left in the head is replaced, not added to. Verified offline: rest pose reproduced
+  exactly; yaw -70..70 x pitch -20..40 -> 0.0 deg error, 0.0 roll. RigCheck per bot logs "head rig
+  checked: ... animated head N yaw/pitch/roll (game free-look N)" and switches the look off for a rig
+  that doesn't match (none expected: one shared skeleton).
+- HeadFreeLook.cs: prefix on BotHeadData.ManualUpdate: while HandsUp (not asleep), target 0 and the
+  game's own UpdateHeadRotation returns the head; his head states aren't run. Released/rearmed: untouched.
+- Torso with the head: chest share from 8 deg (kneeling 15), 35%, eased over 10 deg, to the limit
+  (kneeling 12: planted knees). Hands on head now sit in the skull's own final frame
+  (Presence.SkullFrame), never pull the head.
+- Debug: "Head neutral test" (14.): only the captor, no glances/demeanor tilt/tremble/flinch/idle/
+  gestures. "Log pose diagnostics" now also logs, standing or kneeling, once a second: `gaze: ...
+  captor at N deg; animated head yaw/pitch/roll (game free-look, look-to-body); after: head yaw/pitch/
+  roll, target; chest N from body (our torso turn)`. New preset "Head straight check" turns both on
+  for its run (cleared at cleanup/teardown).
+- Lethal: decision existed, reachability didn't (2-4%), and experience reduced every lethal chance
+  ("Experience restrains" = mercy by level). Now: Judgement.Intend at Captors.Accept, ONCE: "Lethal
+  intent toward a prisoner" 0.25 x aggression (Wreckless 2.5 .. Timmy 0.5) x "Weight: rival faction"
+  1.4 (BEAR/USEC, Scav/PMC either way) x he-shot-me 2.5, cap "Lethal decision cap" 0.85 (new key names
+  so the defaults apply; old keys orphaned in the cfg). Logged "intent about X (decided once, at
+  custody) ... MEANS TO KILL HIM / means to let him go". Carried out at the release point (after the
+  disarming and the gear); something new since (a weapon kept back, learned he shot them) adds only
+  the extra chance, once. Refusal and bolt: a captor with lethal intent fires; else their own rolls
+  (no experience factor). Level/skill: only noticing a kept weapon (unchanged). Discipline key removed.
+- Execution: (1) SAIN keeps its own target; 0.17.0's retarget only set BotMemory.GoalEnemy, which SAIN
+  overwrites: SainTargetFilter.Steer (postfix on ChooseEnemy, only while a kill is watched) sets SAIN's
+  public GoalEnemy to the prisoner when he is in SAIN's VisibleEnemies and the captor isn't under fire
+  (Suppression < 1), mirrors BotMemory.GoalEnemy like SAIN's setGoalEnemy. (2) TriggerPatch returned
+  without NoteShot when a shield was active and nobody restrained: shots could go unseen by the watch.
+  (3) Escalate logs the restraint transition read back (Reject final, still holding fire no, ignore
+  flag clear, vanilla target). Watch logs: target acquired (SAIN/game), "FIRES at ... (trigger
+  pressed)", 3 s interim status, 10 s "EXECUTION FAILURE: KILL DECISION NOT CARRIED OUT" (layer, game
+  target, SAIN target, hands, sight/EnemyInfo visible/ignore flag, distance, aim angle, restraint,
+  holding fire, shield, prisoner phase), CARRIED OUT. Verified not a blocker: BotStandBy (needs nearest
+  enemy > 130 m); SAIN IsEnemyActive (standby only). Health is never touched.
+- Debug key Ctrl+U (22., debug keys on): the captor under the crosshair, or the captor of the prisoner
+  under it, makes the lethal decision now (decision only; U is unbound in EFT and in every installed
+  mod cfg).
+- Turn-around bug (Captors.Check): `next` was read before CaptorLoot.Step inserted TurnAround at
+  cs.Step; the stale order was given again and Step++ skipped the turn. Re-read after Step.
+- Demanded weapons (CaptorLoot): items dropped after the first weighing are weighed when they land
+  (HasNew). A gun or knife he made him drop (surrender drop or Drop your weapons) is Demanded: always
+  wanted (no appetite/value), fetched first, "Risk he accepts for those" 0.9 (21.; "Collects the
+  weapons he made him drop" on). Room is still the game's own slot answer (bots never pack guns:
+  no empty weapon slot -> "no room", logged, left; nothing of his dropped/deleted). Same pick-up path as
+  0.16 (PickUpState + BotItemTaker transaction, read back from his equipment). Interrupted (threat,
+  man moved/resisted): full cleanup (Pickup(false)), then "later" (weighed again when the situation
+  changes, 2 tries max). "someone else took it (X has it)" names the holder. A transaction finishing
+  after the job ended is logged. After a kill decision is carried out the killer fetches what he still
+  wanted (AfterKill -> the after-release fetch).
+- Pick-up window (prisoner): "walking over" with the captor's eyes off him is now a clear opening
+  (reaction time only; was +1.5 s, longer than most pick-ups); DecideOnOpening x pick-up window: 1.6 with
+  a weapon still on him, 0.8 with nothing, x 0.8-1.3 by his fight. Covering squadmates still close the
+  opening (Reactions.SquadCovers). The captor still reacts only to what shows (Reactions.Shows), slower
+  while bent over (0.35-0.8 s extra, unchanged). Concealed weapons: still only Judgement.Visible.
+- New presets: "Head straight check" (you or a PMC in front, standing/kneeling, hands up/on head,
+  variation off/on) and "Weapon pickup opportunity" (squad 1-2, keeps pistol/slung/nothing, draws
+  FORCED or own decision, interruption: prisoner killed / captor killed at the pick-up, weapon removed
+  before he gets there). Offline: installed DLL loaded in PowerShell, all 27 presets build.
+
+### In-game test plan (0.18.0)
+Log decisions, judgement, gear decisions on; Log pose diagnostics on for 1-2.
+1. Head straight check, You, each posture x hands, Variation Off: `head rig checked` (note the
+   animated yaw and free-look numbers: they are the old error), then `gaze:` with captor ~0 deg: after
+   head yaw ~0, roll ~0, chest ~0. Walk to his left and right: yaw follows, roll stays ~0, chest grows
+   with it; standing past 70 deg a stepping turn. Variation On: same, plus glances. Screenshot.
+2. Same with PMC bot captor; Turn around and hands on head (no turn back; head not bowed by the hands).
+3. Captor execution check, Kill now, squad 1 and 3, each posture: `restraint ... Reject (final);
+   still holding fire: no`, `has ... as his target`, `FIRES at`, `CARRIED OUT`; any `EXECUTION FAILURE`
+   line is the bug report. Also Ctrl+U on a natural captor.
+4. Captor judgement, He complies, His own roll, ~8 runs (vary captor personality): `intent about`
+   lines with both outcomes; the MEANS TO KILL ones end in `carries out ... DECIDES TO KILL` and a
+   CARRIED OUT line. Natural bot-vs-bot captures in a raid: same lines.
+5. Weapon pickup opportunity: keeps pistol / slung / nothing, squad 1 vs 2, each interruption:
+   `goes to take ... (the weapon he made him drop)`, `took ... into his ... slot (pick-up animation)`,
+   prisoner `pick-up window x`, draws or keeps still; with squad 2 `but PMC-2 is` (covered); interrupted
+   lines + `will weigh ... again`; no stuck hands on either.
+6. Any captor plan with "turned away": the bot now actually gives Turn around before fetching.
+
 **0.17.0 (2026-11-20): facing/turning via the game's stepping turn, lethal path made reachable and
 watched, committed retreats, compact menu. Packed (dist/HandsAreHigh-0.17.0.zip) and installed in
 H:\SPT4.1.X. Committed and pushed to main with 0.16.0/0.16.1 (2026-11-20, no tag/release). NEVER RUN IN

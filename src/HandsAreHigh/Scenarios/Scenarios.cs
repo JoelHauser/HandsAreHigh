@@ -497,6 +497,7 @@ namespace HandsAreHigh
             int staged = ScenarioStaging.Release(sc, "cleanup");
             foreach (Participant p in sc.People)
                 if ((object)p.Player != null) { Compliance.Force(p.Player, ComplianceChoice.Auto); Judgement.Force(p.Player, JudgeForce.Auto); }
+            Presence.TestNeutral = Presence.TestDiag = false;   // 0.18.0: Head straight check
             int lifted = ScenarioShield.Remove(sc);
             var report = new StringBuilder();
             report.Append($"Scenario {sc.Title} report ({(sc.Mode == ScenarioMode.Forced || sc.Forced.Count > 0 ? "FORCED STATE: not evidence that natural surrender works" : "natural trigger")}), ended after {sc.Since:0} s: {why}");

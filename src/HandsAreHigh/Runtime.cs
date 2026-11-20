@@ -85,6 +85,7 @@ namespace HandsAreHigh
             if (Settings.KneelUrgentKey.Value.IsDown()) DebugCommand("kneel urgent rise", me);
             if (Settings.HandsOnHeadKey.Value.IsDown()) DebugCommand("hands", me);
             if (Settings.TurnKey.Value.IsDown()) DebugCommand("turn around", me);
+            if (Settings.KillKey.Value.IsDown()) DebugCommand("captor decides to kill", me);
         }
 
         // Every debug key acts on exactly one bot: the one under the crosshair, resolved once
@@ -131,6 +132,15 @@ namespace HandsAreHigh
                         Perception.KnownPosition(target.AIData?.BotOwner, foe, out _));
                     outcome = SurrenderRegistry.HoldsBot(target) ? $"surrenders to {foe.Profile?.Nickname} (see the log for his decision)" : "didn't surrender";
                 }
+            }
+            else if (command == "captor decides to kill")
+            {
+                // 0.18.0: the captor under the crosshair, or the captor of the prisoner under it. The
+                // lethal decision only; what follows is the real path (Judgement.TickKills logs it).
+                Player captor = Captors.TryGet(target, out _) ? target
+                              : SurrenderRegistry.TryGet(target, out SurrenderState held) && held.Custody != null ? held.Custody.Bot : null;
+                outcome = captor == null ? "isn't a bot captor and isn't held by one"
+                        : (Judgement.ForceKillNow(captor) is string no ? $"{Restraint.Name(captor)} {no}" : $"{Restraint.Name(captor)} decides to kill his prisoner now (watch the log)");
             }
             else if (!SurrenderRegistry.TryGet(target, out SurrenderState s))
             {

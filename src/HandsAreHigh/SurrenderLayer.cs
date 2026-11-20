@@ -430,18 +430,35 @@ namespace HandsAreHigh
             float poseK = PostureFactor(s, out string poseWhy);
             float fire = Mathf.Clamp01(Suppression.Decayed(SurrenderRegistry.HistoryOf(Me), now) / Mathf.Max(1f, Settings.SustainedFireEvents.Value));
             float fireK = 1f - 0.4f * fire;
+            float pickK = PickupWindow(s, captor, out string pickWhy);
             float chance = Mathf.Clamp01(Settings.BreakChance.Value * nerveScale * s.OpeningStrength *
-                                         (1f + Settings.OpportunityBoost.Value * scramble) * squad * hurt * closeK * poseK * fireK);
+                                         (1f + Settings.OpportunityBoost.Value * scramble) * squad * hurt * closeK * poseK * fireK * pickK);
             float roll = Dice.Value;
             bool acts = roll < chance;
             string why = $"{s.OpeningKind} for {now - s.OpenSince:0.0} s";
             if (Settings.VerboseLogs.Value || debug || Settings.LogDecisions.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: opening ({why}, {dist:0.0} m{(debug ? ", debug" : "")}): nerve {s.Nerve:0.00}, " +
                     $"opening x{s.OpeningStrength:0.00}, own gun {scramble:0.00} ({scrambleWhy}), squad x{squad:0.00} ({allies} near), hurt x{hurt:0.00}, " +
-                    $"range x{closeK:0.00} ({closeWhy}), posture x{poseK:0.00} ({poseWhy}), fire x{fireK:0.00}; " +
+                    $"range x{closeK:0.00} ({closeWhy}), posture x{poseK:0.00} ({poseWhy}), fire x{fireK:0.00}{(pickWhy != null ? $", pick-up window x{pickK:0.00} ({pickWhy})" : "")}; " +
                     $"chance {chance:0.00}, roll {roll:0.00} -> {(acts ? "acts" : "keeps still")}");
             if (!acts) return;
             TakeOpening(s, captor, dist, scramble, scrambleWhy, allies, why);
+        }
+
+        // 0.18.0: his captor bending for (or walking to) the gear he made him drop: his gun is off
+        // him and his hands are busy. A man with a weapon still on him (one he kept back, or one the
+        // captor never asked for) weighs it more, by his own fight; one with nothing on him less
+        // (his only chance is the gun the captor is reaching for). Only what the prisoner can see:
+        // the captor's own covering squadmates already closed the opening (Reactions.Covered).
+        private float PickupWindow(SurrenderState s, Player captor, out string why)
+        {
+            why = null;
+            if (captor == null || !captor.IsAI || !CaptorLoot.Busy(captor, out string busy)) return 1f;
+            bool armed = Arsenal.GunOnBody(Me) != null || Arsenal.HasMelee(Me);
+            float nature = Mathf.Lerp(0.8f, 1.3f, Mathf.InverseLerp(0.6f, 1.6f, s.Fight));
+            float k = (armed ? 1.6f : 0.8f) * nature;
+            why = $"his captor {busy}, {(armed ? "a weapon still on him" : "nothing on him")}, fight x{nature:0.00}";
+            return k;
         }
 
         // 0.15.0: how close the man covering him is. Within arm's reach plus a step (2.5 m) a man

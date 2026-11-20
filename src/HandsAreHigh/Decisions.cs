@@ -62,7 +62,18 @@ namespace HandsAreHigh
                 if (o.WeaponManager?.Selector?.IsChanging == true) { kind = "his captor switches weapons"; strength = 1f; clear = true; return false; }
                 if (captor.IsSprintEnabled) { kind = "his captor is running"; strength = 0.95f; clear = true; return false; }
                 // 0.16.0: his captor going for (or bent over) his gear: eyes and gun elsewhere.
-                if (CaptorLoot.Busy(captor, out string busy)) { kind = $"his captor is {busy}"; strength = busy.StartsWith("walking") ? 0.7f : 0.9f; clear = !busy.StartsWith("walking"); return false; }
+                // 0.18.0: walking over with his eyes on the item (not on him) is as plain to see as
+                // the pick-up itself: noticed in his reaction time, not reaction + 1.5 s (which
+                // usually outlasted the whole pick-up). Eyes still on him: gradual, as before.
+                if (CaptorLoot.Busy(captor, out string busy))
+                {
+                    bool walking = busy.StartsWith("walking");
+                    float off = Vector3.Angle(captor.LookDirection, Perception.Chest(bot) - Perception.Eye(captor));
+                    kind = $"his captor is {busy}";
+                    strength = walking ? (off > watchAngle ? 0.8f : 0.6f) : 0.9f;
+                    clear = !walking || off > watchAngle;
+                    return false;
+                }
             }
 
             // Only what he can see or hear: where the gun points, and gunfire (0.9.0: no longer

@@ -274,6 +274,7 @@ namespace HandsAreHigh
         // 0.15.0: pose ownership and diagnostics
         internal static ConfigEntry<KneelPoseIsolate> KneelPoseIsolate;
         internal static ConfigEntry<bool> LogPose;
+        internal static ConfigEntry<bool> HeadNeutralTest;
         internal static ConfigEntry<float> KneelHeadYaw;
         internal static ConfigEntry<float> KneelTorsoYaw;
         // 0.15.0: bot captors close in and kneel prisoners
@@ -804,6 +805,8 @@ namespace HandsAreHigh
                 "Turns one contributor of the kneeling pose off to see which one distorts it: LookAlign (the bot's look kept on his planted body, so the game's trunk twist stays at 0), PelvisSquare, TorsoSquare, LegHinge (legs posed on their own knee hinge instead of swung), Head (head and torso look), Hands (hands behind the head), BodyOnly (legs, pelvis and torso only). All: everything on (normal).");
             LogPose = c.Bind(Debug, "Log pose diagnostics", false,
                 "Once a second per kneeling bot: the game's look-to-body angle (what twists the animated trunk), root yaw vs where he knelt, hip-line and shoulder-line yaw, our torso and head turn, and how far the head is turned from the chest.");
+            HeadNeutralTest = c.Bind(Debug, "Head neutral test", false,
+                "Every held man only looks at his captor: no glances, no demeanor head tilt, no tremble, flinch, kneeling idle or gestures. For checking that the head sits straight and upright with the captor in front (Log pose diagnostics prints the numbers).");
             KneelBracePalmFlip = c.Bind(Debug, "Kneel brace palm flip", false,
                 "Turns the bracing hand over (180 deg about the fingers). Only if the palm shows the back of the hand on the thigh: which side of the rig's palm bone faces down was inferred from the thumb root, not seen in game.");
             BindKneel(c);

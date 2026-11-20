@@ -24,10 +24,18 @@ namespace HandsAreHigh
     //     private Enemy _goalEnemy; BotOwner BotOwner (from BotBase)
     //   ...EnemyClasses.Enemy.EnemyProfileId (string)
     // Anything missing: not patched, logged once, the trigger guard stays the last line.
+    //
+    // 0.18.0, the other way round: a bot that DECIDED to kill his prisoner (Judgement.Escalate) gets
+    // that man as SAIN's target when SAIN chose someone (or nobody) else, the man is in SAIN's own
+    // VisibleEnemies and nothing is shooting at the bot (a real threat still comes first). Set
+    // through SAIN's public GoalEnemy setter (its EnemyChanged event fires as for its own choice)
+    // and mirrored to BotMemory.GoalEnemy as SAIN's setGoalEnemy does. 0.17.0 only set the game's
+    // GoalEnemy, which SAIN overwrites with its own pick: the retarget did nothing on SAIN bots.
     internal static class SainTargetFilter
     {
         private static bool _tried;
-        private static PropertyInfo _owner, _visible, _known, _enemyId;
+        private static PropertyInfo _owner, _visible, _known, _enemyId, _goalProp, _enemyInfo;
+        internal static bool Patched;
         private static FieldInfo _goal;
         internal static int Filtered;     // times a prisoner was kept out of SAIN's choice
 
@@ -37,7 +45,7 @@ namespace HandsAreHigh
             internal readonly List<object> Known = new List<object>(2);
         }
 
-        internal static void Reset() { _tried = false; Filtered = 0; }
+        internal static void Reset() { _tried = false; Filtered = 0; Patched = false; }
 
         internal static void TryPatch(Assembly sain)
         {
@@ -53,6 +61,8 @@ namespace HandsAreHigh
                 _known = ctrl != null ? AccessTools.Property(ctrl, "KnownEnemies") : null;
                 _goal = ctrl != null ? AccessTools.Field(ctrl, "_goalEnemy") : null;
                 _enemyId = enemy != null ? AccessTools.Property(enemy, "EnemyProfileId") : null;
+                _goalProp = ctrl != null ? AccessTools.Property(ctrl, "GoalEnemy") : null;
+                _enemyInfo = enemy != null ? AccessTools.Property(enemy, "EnemyInfo") : null;
                 if (choose == null || _owner == null || _visible == null || _known == null || _goal == null || _enemyId == null ||
                     !typeof(IList).IsAssignableFrom(_visible.PropertyType) || HandsAreHighPlugin.Harmony == null)
                 {
@@ -63,7 +73,9 @@ namespace HandsAreHigh
                 HandsAreHighPlugin.Harmony.Patch(choose,
                     prefix: new HarmonyMethod(typeof(SainTargetFilter), nameof(Prefix)),
                     postfix: new HarmonyMethod(typeof(SainTargetFilter), nameof(Postfix)));
-                HandsAreHighPlugin.Log.LogInfo("SAIN target filter on: a bot that holds fire at a prisoner doesn't pick him as SAIN's target");
+                Patched = true;
+                HandsAreHighPlugin.Log.LogInfo($"SAIN target filter on: a bot that holds fire at a prisoner doesn't pick him as SAIN's target; " +
+                    $"a bot that decided to kill one is steered to him ({(_goalProp?.GetSetMethod() != null ? "yes" : "NO: GoalEnemy has no public setter")})");
             }
             catch (Exception e)
             {
@@ -114,15 +126,65 @@ namespace HandsAreHigh
             }
         }
 
-        private static void Postfix(object __instance, object __state)
+        private static void Postfix(object __instance, object __state, ref object __result)
         {
-            if (!(__state is Removed r)) return;
+            if (__state is Removed r)
+            {
+                try
+                {
+                    Put(_visible.GetValue(__instance, null) as IList, r.Visible);
+                    Put(_known.GetValue(__instance, null) as IList, r.Known);
+                }
+                catch { }
+            }
+            if (Judgement.Watching) Steer(__instance, ref __result);
+        }
+
+        // 0.18.0: see the header. Only bots with a kill decision being watched get here.
+        private static void Steer(object ctrl, ref object result)
+        {
             try
             {
-                Put(_visible.GetValue(__instance, null) as IList, r.Visible);
-                Put(_known.GetValue(__instance, null) as IList, r.Known);
+                BotOwner o = _owner.GetValue(ctrl, null) as BotOwner;
+                Player victim = Judgement.KillTarget(o);
+                if (victim == null) return;
+                string chosen = result != null ? _enemyId.GetValue(result, null) as string : null;
+                if (chosen == victim.ProfileId) { Judgement.NoteSainGoal(o, Restraint.Name(victim), steered: false, onVictim: true); return; }
+                string chosenName = chosen == null ? null : Restraint.Name(FindPlayer(chosen)) ?? chosen;
+                MethodInfo set = _goalProp?.GetSetMethod();
+                if (set == null || Suppression.Decayed(SurrenderRegistry.HistoryOf(o.GetPlayer), UnityEngine.Time.time) >= 1f)
+                {
+                    Judgement.NoteSainGoal(o, chosenName, steered: false);
+                    return;
+                }
+                IList vis = _visible.GetValue(ctrl, null) as IList;
+                if (vis == null) { Judgement.NoteSainGoal(o, chosenName, steered: false); return; }
+                for (int i = 0; i < vis.Count; i++)
+                {
+                    object e = vis[i];
+                    if (e == null || (_enemyId.GetValue(e, null) as string) != victim.ProfileId) continue;
+                    set.Invoke(ctrl, new[] { e });
+                    if (_goalProp.GetValue(ctrl, null) != e) break;   // SAIN refused it (no known position yet)
+                    result = e;
+                    if (_enemyInfo?.GetValue(e, null) is EnemyInfo info && o.Memory != null && o.Memory.GoalEnemy != info)
+                    {
+                        o.Memory.IsPeace = false;
+                        try { o.Memory.GoalEnemy = info; } catch { }
+                    }
+                    Judgement.NoteSainGoal(o, chosenName, steered: true);
+                    return;
+                }
+                Judgement.NoteSainGoal(o, chosenName, steered: false);
             }
             catch { }
+        }
+
+        private static Player FindPlayer(string profileId)
+        {
+            var world = Comfort.Common.Singleton<GameWorld>.Instance;
+            if (world?.AllAlivePlayersList == null) return null;
+            foreach (Player p in world.AllAlivePlayersList) if (p != null && p.ProfileId == profileId) return p;
+            return null;
         }
 
         private static void Put(IList list, List<object> items)

@@ -686,7 +686,9 @@ namespace HandsAreHigh
                     ScenarioShield.LogBlocked(shooter, shielded, "trigger");
                     return;
                 }
-                if (!Restraint.Any) return;
+                // 0.18.0: noted here too (a shield active, nobody restrained): 0.17.0 returned
+                // without noting, so a kill decision's shots could go unseen by the watch.
+                if (!Restraint.Any) { Restraint.NoteShot(shooter); return; }
                 if (!Restraint.AimedAtRestrained(shooter, out Player prisoner)) { Restraint.NoteShot(shooter); return; }
                 pressed = false;
                 Restraint.LogLeakBlocked(shooter, prisoner, "trigger");

@@ -316,6 +316,7 @@ namespace HandsAreHigh
             why = null;
             if (s.Dead || !Perception.Alive(bot)) { why = "dead"; return false; }
             if (s.Phase != Phase.HandsUp) { why = $"now {s.Phase}"; return false; }
+            if (Presence.Neutral) { why = "head neutral test"; return false; }
             if (s.Suspended) { why = "asleep"; return false; }
             if (s.Kneel != KneelPhase.Standing) { why = "kneeling"; return false; }   // the kneel owns body and arms
             if (s.HandsOnHead || s.HeadHands > 0f) { why = "hands on his head"; return false; }   // 0.16.0: the hands-up gestures need hands up
