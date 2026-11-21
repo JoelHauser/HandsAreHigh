@@ -10,7 +10,7 @@ Last updated: 2026-11-21 (0.28.1: release-quality pass, Forge description in MOD
 
 | Version | Where | Level |
 |---|---|---|
-| 0.28.6 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.6.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.5 DLL + cfg in that session scratchpad `backup-0.28.5`) | build passed (Debug + Release, 0 warnings); not run in game |
+| 0.28.6 | main @ a6c0d2f + README e1efe57 (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.28.6.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.5 DLL + cfg in that session scratchpad `backup-0.28.5`) | build passed (Debug + Release, 0 warnings); not run in game |
 | 0.28.5 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.5.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.4 DLL + cfg in that session scratchpad `backup-0.28.4`) | build passed (Debug + Release, 0 warnings); not run in game |
 | 0.28.4 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.4.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.3 DLL + cfg in that session scratchpad `backup-0.28.3`) | build passed (Debug + Release, 0 warnings), simulation passed (tools/firesim 13/13); not run in game |
 | 0.28.3 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.3.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.2 DLL + cfg in that session scratchpad `backup-0.28.2`) | build passed (Debug + Release, 0 warnings); not run in game |
@@ -34,7 +34,7 @@ captor decision deferred, shooter named on hits.
 oGRiZe lost Кот), stuck walk-ups logged with layer/mover/speed, log double space.
 Joel ended live testing 2026-11-21 after one 0.28.6 surrender (refused + killed as decided, 0 warnings). Still unseen in raid: the 2 s blind-captor retry and the stuck walk-up details. Next (when convenient): a raid with a bot-custody surrender (captor keeps his man; any `stops walking up ... stuck`
 detail). Open for Joel: "lull" rule for surrenders mid close-range firefight; Verbose logs off;
-commit everything since 988d6e9 (incl. MOD-PAGE.md); release when he asks.
+release when he asks (committed + pushed a6c0d2f/e1efe57).
 
 ## What the 0.25.0 raid log showed (verified in raid, log level)
 
