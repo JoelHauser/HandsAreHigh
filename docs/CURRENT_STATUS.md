@@ -10,7 +10,7 @@ Last updated: 2026-11-21 (after the 0.25.0 work and the docs reorganisation).
 
 | Version | Where | Level |
 |---|---|---|
-| 0.25.0 | working tree, UNCOMMITTED; installed in H:\SPT4.1.X (`dist/HandsAreHigh-0.25.0.zip`); 0.24.0 DLL + cfg backed up in that session's scratchpad (`backup-0.24.0`) | build passed (Debug + Release, 0 warnings), cfg bind passed, simulation passed (overhand, kneelsim, abandonsim); **never run in a raid** |
+| 0.25.0 | main @ f2a4d51 (pushed 2026-11-21, no tag/release); installed in H:\SPT4.1.X (`dist/HandsAreHigh-0.25.0.zip`); 0.24.0 DLL + cfg backed up in that session's scratchpad (`backup-0.24.0`) | build passed (Debug + Release, 0 warnings), cfg bind passed, simulation passed (overhand, kneelsim, abandonsim); **never run in a raid** |
 | 0.24.0 | main @ f5f9180 (pushed, no tag/release) | ran in one raid: LogOutput 2026-11-21 02:47, 8 scenarios + Joel's screenshot (stacked fingers behind the head) |
 
 No GitHub release exists for any version. Joel decides commits/pushes.
@@ -62,4 +62,4 @@ Older, still open:
 1. Joel runs the 0.25.0 checks (docs/testing/in-raid-regression.md items 1-6) and sends LogOutput.log
    + screenshots of hands behind the head and the settled kneel.
 2. Read the `hand-off timeline` lines first: the longest step names where any remaining delay is.
-3. If fine: commit 0.25.0 (+ this docs reorganisation) when Joel asks.
+3. If fine: a GitHub release only when Joel asks (none exists for any version).
