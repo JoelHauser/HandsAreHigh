@@ -1,4 +1,4 @@
-# Code map (src/HandsAreHigh, 0.28.0)
+# Code map (src/HandsAreHigh, 0.28.6)
 
 Files and the symbols to search for first. Verified against the tree on 2026-11-21; prefer
 `grep -n "SymbolName"` over line numbers. Many files open with a header comment that explains the
@@ -38,7 +38,7 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
   the advanced flag and display order, `Bind`, `Migrate` + `CurrentConfigVersion`), one file per F12
   section `Settings.1General.cs` .. `Settings.7Debugging.cs`, `Settings.Layout.cs` (`Moves`: old ->
   new keys, `MigrateLayout`, the three merged settings). Names must avoid `= \ " ' [ ]`.
-- `Dice.cs` (seedable rolls), `Perf.cs` (profiler sections), `FastAccess.cs` (compiled SAIN readers).
+- `Dice.cs` (seedable rolls), `Perf.cs` (profiler sections; detail sections Kit/Start/Decide are not summed), `FastAccess.cs` (compiled SAIN readers).
 
 **Natural surrender and decisions**
 - `NaturalSurrender.cs` (`Tick`, `Eligible`, `Injury`, `Experience`, `ClassOf`; header has the model),
@@ -52,7 +52,8 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
   `Presence.cs` (demeanor, attention, head/torso look, flinch, idle).
 
 **Captors, custody, encounters, hostility**
-- `Captors.cs`: `OnSurrender`/`Decide`/`Impractical`/`Accept`, `Tick`/`Check` (plan steps), `Threat`,
+- `Captors.cs`: `OnSurrender` -> `Due`/`TickDue` (0.28.5: decided a frame later) -> `Decide`/`Impractical`/`Accept`,
+  walk-up `Approach` (`StuckWhy`), `Tick`/`Check` (plan steps), `Threat`,
   `HandTo`, `Interrupt`, `End`/`EndCustody`, `MaybeTakeOver`, `ForceAccept`, `WantsControl`,
   `CaptorLayer`/`CaptorLogic`. 0.28.0 ignored surrenders: `TryIgnore` (chance x personality/situation),
   `Ignore`, `ForceIgnore` (debug key); the prisoner side is `SurrenderState.IgnoredBy`/`Ignored`,
@@ -65,7 +66,8 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 - `Judgement.cs`: lethal intent and kill decisions (`Intend`, `AtRelease`, `OnBolt`, `AfterDemand`,
   `TickKills` execution watch). `Restraint.cs`: per-(observer, prisoner) hold-fire decisions
   (`Set`, `InformSquad`, `Detach`/`TickDetached`, `ForgetPrisoner`, `OnArmed`, `OnPrisonerHit`) and
-  the patches `GoalEnemyPatch`, `ShootDataPatch`, `TriggerPatch`. `SainTargetFilter.cs`: SAIN
+  the patches `GoalEnemyPatch`, `ShootDataPatch`, `TriggerPatch`, plus the per-round burst guard
+  `ShotAtRestrained` (from `Suppression.ShotPatch`, on `Perception.OnLineOfFire`). `SainTargetFilter.cs`: SAIN
   ChooseEnemy filter/steer. `FireBreak.cs`: incoming fire breaks a hold-up.
 - `Overwatch.cs`: squad guard (`CoverGuard`, `Visibly`, `Covered`, `HoldForCover`).
 - `Orders.cs` (`CanGive`, `Give`: the only order path, human take-over included), `CaptorVoice.cs`,
@@ -74,12 +76,12 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 **Release, escape, recovery, hand-off**
 - `SurrenderLayer.cs`: `Retreating`, `PickRetreat`, `LegDone`, `QuickClear` (0.25 mid-stride
   hand-off), `Regroup`/`Regrouping`/`Decide` (kept gun, own gun, scavenge, knife, else `HandBack`),
-  `Recovering`, `PickingUp`, `AfterPickUp`, `GiveUpOn`, `GoHide`/`Hiding`, `TakeCoverFromFire`,
+  `Recovering`, `PickingUp`, `AfterPickUp` (`InHands`), `GiveUpOn`, `GoHide`/`Hiding` (`SetHideTime`), `TakeCoverFromFire`,
   `Rearm`/`Rearmed`, `HandBack`, `Released`, `SpottedAgain`, `MoveTo`, `Stalled`, `Stamp`.
 - `Perception.cs`: `FleePoint`, `CoverPoint`, `RetreatPoint`, `PathTo`, `Reachable`, `RoutePassesNear`,
   `Sees`, `Recognises`, `CanSee`, `LineClear`, `InLineOfFire`, `KnownPosition`, `PlayerOf/Same/InfoAbout`,
   `TakeHeavy` (search budget).
-- `Escape.cs` (capture memory, `KeepAwayLayer`, `CheckObjective` -> `OrbitObjectives.RetireIfBack` in
+- `Escape.cs` (capture memory, `KeepAwayLayer` keyed on the ex-captor via `CaptorAtSpot`, `StuckWhy`, `CheckObjective` -> `OrbitObjectives.RetireIfBack` in
   Compat.cs: drops an ORBIT objective that leads back to the capture), `ReleaseWatch.cs` (+15..+120 s
   lines, hand-off timeline), `WeaponState.cs` (`HaveBulletsPatch`, `TryReloadPatch`).
 - 0.26.0 gun at his feet: `SurrenderLayer.TryGunAtFeet` / `Endangered` (first thing in `LeftDecide`
@@ -136,5 +138,5 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 | Debug scenarios | engine/ai-and-movement.md (spawning) | Scenarios/*.cs | ScenarioShield vs Restraint, cleanup report |
 | Settings / config | testing/build-and-checks.md (config check) | Settings*.cs | Migrate, pack.ps1 name check, Joel's cfg values |
 | SAIN / ORBIT / other mods | engine/integrations.md | SainAdapter, SainTargetFilter, FastAccess, Compat | teardown, version of the installed mod |
-| Performance | (this file: Perf) | Perf.cs, any IsActive / per-frame path | "Profile" section; no measured baseline exists |
+| Performance | (this file: Perf) | Perf.cs, any IsActive / per-frame path | CLAUDE.md "Performance" (measured 0.28.x; GC frames are not ours) |
 | Lifecycle / hot reload | engine/integrations.md (BigBrain) | HotReloadTeardown, HandsAreHighPlugin.Awake, *.Clear/Reset | every new static cache, patch, event hook or layer |
