@@ -25,7 +25,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> HitGrace;
         private static ConfigEntry<int> ConfigVersion;
 
-        private const int CurrentConfigVersion = 22;
+        private const int CurrentConfigVersion = 25;
 
         private static void BindV19(ConfigFile c)
         {
@@ -48,14 +48,15 @@ namespace HandsAreHigh
             ConfigVersion = c.Bind(Debug, "Config version (set by the mod)", 0,
                 new ConfigDescription("Which default changes have been applied to this file. Not a setting.", null,
                     new ConfigurationManagerAttributes { Browsable = false }));
-            Migrate();
+            // 0.25.0: Migrate runs from Settings.Bind after every section is bound (it now moves
+            // keys of section 25, bound after this one).
         }
 
         // Defaults changed in 0.19.0 (natural surrender was effectively unreachable in ordinary
         // fights; see NaturalSurrender and tools/natsim). A value still at its OLD default moves to
         // the new one, once; anything the user set themselves is left alone.
         // 0.22.0: per version, so a file already at 19 still gets the later steps.
-        private static void Migrate()
+        internal static void Migrate()
         {
             int from = ConfigVersion.Value;
             if (from >= CurrentConfigVersion) return;
@@ -75,6 +76,13 @@ namespace HandsAreHigh
                 Move(UpperArmForward, 25f, moved);
                 Move(ForearmForward, 12f, moved);
                 Move(ForearmInward, 8f, moved);
+            }
+            if (from < 25)
+            {
+                // Abandonment noticed from the cues, then a reaction time (0.24.0: 2.5-9 s on top of
+                // the cues; the 0.24.0 raid log: men stood 7-10 s after their captor walked off).
+                Move(AbandonAssessMin, 2.5f, moved);
+                Move(AbandonAssessMax, 9f, moved);
             }
             ConfigVersion.Value = CurrentConfigVersion;
             if (moved.Count > 0)

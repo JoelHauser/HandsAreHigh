@@ -105,7 +105,7 @@ namespace HandsAreHigh
         internal bool CanBrace => BraceInB > 0f;
     }
 
-    internal static class Kneel
+    internal static partial class Kneel
     {
         // Descents. Offline-checked (scratchpad kneel_sim2.py): nothing under the ground, knee
         // 44-129 deg, continuous at 20-60 fps, reversals continuous.
@@ -327,6 +327,7 @@ namespace HandsAreHigh
             if (s.Dead || s.Bot == null) return;
             if (s.KneelFade > 0f) s.KneelFade = Mathf.Max(0f, s.KneelFade - dt);
             if (s.Suspended) return;   // asleep: the pose stays where it is
+            VariantTick(s, dt);        // 0.25.0: the eased move into (or out of) his kneel variant
             float now = Time.time;
 
             // Bones gone (body rebuilt, despawn racing us): stop posing at once; the animator
@@ -418,7 +419,8 @@ namespace HandsAreHigh
                         s.KneelVel = 0f;
                         s.KneelBrace = false;
                         s.Kneel = KneelPhase.Down;
-                        Log(s, $"kneel: on his knees, {(s.HandsOnHead ? "hands behind his head" : "hands up")} ({s.KneelStyle.Name}; {Timeline(s)})");
+                        VariantDown(s);   // 0.25.0: settles back / leans in from here
+                        Log(s, $"kneel: on his knees, {(s.HandsOnHead ? "hands behind his head" : "hands up")} ({s.KneelStyle.Name}; {Timeline(s)}){(s.KVarTarget != KneelVariantKind.Upright ? $"; now {Describe(s.KVarTarget)}" : "")}");
                         s.KneelTestNextAt = now + 1.2f;
                     }
                     break;
@@ -427,6 +429,7 @@ namespace HandsAreHigh
                     HoldRoot(s);
                     if (!want) { StartRise(s, KneelRise.Compliant, WhyUp(s)); break; }
                     CheckMoved(s, now);
+                    VariantCheck(s, now);
                     break;
 
                 case KneelPhase.GettingUp:
@@ -635,16 +638,20 @@ namespace HandsAreHigh
                 s.KneelStepNow = Mathf.Min(s.KneelStyle.Step, s.KneelStep + 0.06f);   // no longer than the room found
                 if (Settings.LogKneel.Value && braceWhy != null) Log(s, $"kneel: brace on his knee: {braceWhy}");
             }
+            // 0.25.0: sat back on his heels, he brings his weight forward over his knees first; the
+            // rise's clock waits for most of that shift (the rest overlaps the start of the rise).
+            float shift = fresh ? VariantRise(s, rise) : 0f;
             s.KneelRise = rise;
             s.KneelSecs = RiseSeconds(s, rise);
             // From rest at full speed (the windows ease in); mid-motion Advance eases the change.
-            if (fresh) s.KneelVel = -1f / Mathf.Max(0.1f, s.KneelSecs);
+            if (fresh) s.KneelVel = shift > 0f ? 0f : -1f / Mathf.Max(0.1f, s.KneelSecs);
             if (!retime) { s.Kneel = KneelPhase.GettingUp; StartClock(s); }
+            if (shift > 0f) s.KneelHoldUntil = Time.time + shift;
             string ceiling = "";
             MovementContext mc = s.Bot.MovementContext;
             if (!retime && mc != null && !mc.CanStandAt(1f)) ceiling = "; low ceiling: the game will keep him crouched";
             Log(s, $"kneel: {(retime ? "rise retimed" : "gets up")} from {s.KneelT:0.00} ({why}): {rise} rise, {s.KneelSecs:0.00} s, " +
-                   $"{s.KneelStyle.Name} motion{(s.KneelBrace ? ", hand on his knee" : "")}{ceiling}");
+                   $"{s.KneelStyle.Name} motion{(s.KneelBrace ? ", hand on his knee" : "")}{(shift > 0f ? $", weight forward off his heels first ({shift:0.00} s)" : "")}{ceiling}");
         }
 
         // The hand pushes on the front thigh: not with arms busy drawing, not with that arm's
@@ -734,6 +741,7 @@ namespace HandsAreHigh
             }
             Commit(s, o, f, s.KneelScratch);
             ReadLimbs(s);
+            ChooseVariant(s, o, f, r);   // 0.25.0: upright, settled or tense (KneelVariant.cs)
 
             KneelStyle style = PickDescent(s, out string styleWhy);
             // Lead leg (goes back and down first; the other is the front leg that lowers him and
@@ -1476,7 +1484,7 @@ namespace HandsAreHigh
             if (live.sqrMagnitude > 1e-4f)
             {
                 Vector3 refUp = WorldDir(s.KneelRefSpine, f, r);
-                Vector3 kneelUp = Quaternion.AngleAxis(Settings.KneelLean.Value + s.KneelLeanOff, r) * Vector3.up;
+                Vector3 kneelUp = Quaternion.AngleAxis(Settings.KneelLean.Value + s.KneelLeanOff + s.KVarLean, r) * Vector3.up;
                 Vector3 want = Vector3.Slerp(refUp, kneelUp, Ss(st.LeadA, st.TrailB, t));
                 float bump = st.LeanDeg * Settings.KneelLeanScale.Value * Bell(st.LeanA, st.LeanB, t) + BraceLean * BraceWeight(s);
                 want = Quaternion.AngleAxis(bump, r) * want;
@@ -1490,8 +1498,11 @@ namespace HandsAreHigh
             Vector3 hipsNow = (rig.Legs[0].Hip.position + rig.Legs[1].Hip.position) * 0.5f;
             float gK = o.y + 0.5f * (s.KneelGround[0] + s.KneelGround[1]);
             float thigh = 0.5f * (rig.Legs[0].Thigh + rig.Legs[1].Thigh);
-            Vector3 kneelHips = o + f * Settings.KneelHipsForward.Value;
-            kneelHips.y = gK + Settings.KneeHeight.Value + thigh * Mathf.Cos(Tilt(s));
+            // 0.25.0: the variant moves the hips along the arc that keeps the thigh reaching the same
+            // knee point (Layout's, from the base tilt): back and down when settled, forward when tense.
+            float tiltB = TiltBody(s);
+            Vector3 kneelHips = o + f * (Settings.KneelHipsForward.Value + thigh * (Mathf.Sin(Tilt(s)) - Mathf.Sin(tiltB)));
+            kneelHips.y = gK + Settings.KneeHeight.Value + thigh * Mathf.Cos(tiltB);
             Vector3 refMid = (RH[0] + RH[1]) * 0.5f;
             Vector3 wantHips = Vector3.Lerp(refMid, kneelHips, Ss(st.LeadA, st.LeadB, t)) + r * shift;
             rig.Pelvis.position += Vector3.Lerp(hipsNow, wantHips, w) - hipsNow;
@@ -1721,6 +1732,30 @@ namespace HandsAreHigh
         // elbow flips, hand/elbow steps <= 0.75 cm per 1/120 of the move.
         // 0.16.0: standing too (Hands on head); the weight is the hand-position order's (HandsPose),
         // which keeps each kneel style's own hand timing while he goes down or gets up.
+        // 0.25.0 hands over hands (tools/fingersim/overhand.py, either hand on top, helmet on/off:
+        // 0.36 cm clear between the hands, no capsule closer to the skull than the 0.24 hands, the top
+        // fingers resting <= 2 cm off the bottom hand). A real interlace is not used: on this rig the
+        // knuckles are 2.3-2.7 cm apart, less than two gloved fingers, and the best laced layout of
+        // ~3,000 tried (interlace.py) still had fingers 0.7 cm inside each other at the webs.
+        private const float OverBottom = 0.06f, OverAlong = 0.05f, OverLift = 0.038f;
+        private const float OverLag = 0.15f;   // the top hand's share of the move it waits / the bottom one leads
+
+        internal static bool OverHands(SurrenderState s, out int top)
+        {
+            top = -1;
+            if (!Settings.HandsOverHands.Value || s == null) return false;
+            // Most people put the right hand over the left; chosen once per man.
+            if (s.HeadTopHand < 0) s.HeadTopHand = Dice.Value < 0.6f ? 1 : 0;
+            top = s.HeadTopHand;
+            return true;
+        }
+
+        // Each hand's own progress from the shared, eased hands-to-head weight: the bottom hand
+        // leads (done at 1 - OverLag), the top one follows (starts at OverLag); reversed, the top
+        // hand leaves first. Smoothstep ends: neither hand starts or stops with a jump.
+        internal static float HandT(float h, bool over, bool isTop) =>
+            !over ? h : isTop ? Ss(OverLag, 1f, h) : Ss(0f, 1f - OverLag, h);
+
         internal static void ApplyHands(Player p, SurrenderState s)
         {
             float h = HandsPose.Weight(s);
@@ -1746,7 +1781,18 @@ namespace HandsAreHigh
             float minR = HeadRadius + helmet + 0.02f;
             float elbowsOut = Settings.ElbowsOut.Value + Presence.IdleElbow(s);
             HandRig hr = ArmPose.HandsOf(p, s);
-            float roll = Ss(0f, 0.4f, h), ww = Ss(0.35f, 1f, h);
+            // 0.25.0: one hand over the other (tools/fingersim/overhand.py). The bottom hand's palm on
+            // the back of the skull, OverBottom to its own side, fingers towards the middle; the top
+            // hand's palm OverAlong along the bottom hand's fingers and OverLift off its back, palm
+            // parallel to it, fingers the other way (over the bottom hand's back towards its wrist).
+            // Both targets come from the skull frame, never from the other hand's live bones, so
+            // neither drags the other. The top hand arrives after the bottom one and leaves first.
+            bool over = OverHands(s, out int top);
+            float sb = top == 1 ? -1f : 1f;   // the bottom hand's side (-1 left)
+            Vector3 palmB = skull - fwdL * (Settings.HandsBehindHead.Value + helmet) + rightL * (sb * OverBottom);
+            Vector3 faceB = (skull - palmB).normalized;
+            Vector3 fingB = Vector3.ProjectOnPlane(-rightL * sb + upL * 0.25f, faceB).normalized;
+            Vector3 palmT = palmB + fingB * OverAlong - faceB * OverLift;
             for (int side = -1; side <= 1; side += 2)
             {
                 if (!Arm(b, side, right, out Transform upper, out Transform fore, out Transform palm)) continue;
@@ -1755,12 +1801,27 @@ namespace HandsAreHigh
                 float a = Vector3.Distance(sh, el), c = Vector3.Distance(el, pa);
                 if (a < 0.05f || c < 0.05f) continue;
                 bool hand = hr != null && hr.Ok(hi);
+                bool isTop = over && hi == top;
+                float hh = HandT(h, over, isTop);
+                if (hh <= 0.001f) continue;
+                float roll = Ss(0f, 0.4f, hh), ww = Ss(0.35f, 1f, hh);
 
                 // Where the palm ends: its centre on the back of the skull, a little to his side
                 // of the middle (the two hands overlap there), fingers round towards the middle.
-                Vector3 palmAt = skull - fwdL * (Settings.HandsBehindHead.Value + helmet) + rightL * (side * 0.05f);
-                Vector3 faceEnd = skull - palmAt;
-                Vector3 fingEnd = Vector3.ProjectOnPlane(-rightL * side + upL * 0.25f, faceEnd).normalized;
+                // 0.25.0 over: the bottom / top targets above.
+                Vector3 palmAt, faceEnd, fingEnd;
+                if (over)
+                {
+                    palmAt = isTop ? palmT : palmB;
+                    faceEnd = faceB;
+                    fingEnd = isTop ? -fingB : fingB;
+                }
+                else
+                {
+                    palmAt = skull - fwdL * (Settings.HandsBehindHead.Value + helmet) + rightL * (side * 0.05f);
+                    faceEnd = skull - palmAt;
+                    fingEnd = Vector3.ProjectOnPlane(-rightL * side + upL * 0.25f, faceEnd).normalized;
+                }
                 Vector3 wristAt = hand ? palmAt - fingEnd * PalmCentre : palmAt;
 
                 // The way there: a quadratic curve in skull space from where the hand is now,
@@ -1768,9 +1829,12 @@ namespace HandsAreHigh
                 Vector3 p0 = pa - skull, p2 = wristAt - skull;
                 float lat = Mathf.Max(Mathf.Abs(Vector3.Dot(p0, rightL)), 0.22f);
                 Vector3 p1 = rightL * (side * lat) + upL * 0.06f - fwdL * 0.02f;
-                float u = 1f - h;
-                Vector3 off = p0 * (u * u) + p1 * (2f * h * u) + p2 * (h * h);
-                if (off.sqrMagnitude < minR * minR) off = (off.sqrMagnitude > 1e-6f ? off.normalized : -fwdL) * minR;
+                float u = 1f - hh;
+                Vector3 off = p0 * (u * u) + p1 * (2f * hh * u) + p2 * (hh * hh);
+                // The top hand travels outside the shell the bottom hand lies on (it lands on it from
+                // above, never through it); a little inside its own end point so that stays reachable.
+                float minHand = isTop ? Mathf.Max(minR, Mathf.Min(p2.magnitude, (palmB - skull).magnitude + 0.6f * OverLift)) : minR;
+                if (off.sqrMagnitude < minHand * minHand) off = (off.sqrMagnitude > 1e-6f ? off.normalized : -fwdL) * minHand;
                 Vector3 pos = skull + off;
 
                 // Elbow: from where it is towards out to his side (a little forward and up), so it
@@ -1782,14 +1846,14 @@ namespace HandsAreHigh
                 // short of an unreachable point instead (anatomy over exact contact), and nothing
                 // else (neck, spine) is bent to reach it.
                 pos = ClampReach(sh, pos, a, c);
-                TwoBone(sh, pos, a, c, Vector3.Slerp(bendNow, bendOut, h), out Vector3 elbow, out Vector3 wrist);
+                TwoBone(sh, pos, a, c, Vector3.Slerp(bendNow, bendOut, hh), out Vector3 elbow, out Vector3 wrist);
                 ArmPose.PoseArm(upper, fore, palm, elbow - sh, wrist - elbow, s, hi, 1f, roll);
 
                 // Wrist: palm to the skull, fingers round it towards the middle, thumb down.
                 if (hand)
                 {
-                    Vector3 face = skull - palm.position;
-                    Vector3 fingers = Vector3.ProjectOnPlane(-rightL * side + upL * 0.25f, face);
+                    Vector3 face = over ? faceB : skull - palm.position;
+                    Vector3 fingers = over ? fingEnd : Vector3.ProjectOnPlane(-rightL * side + upL * 0.25f, face);
                     ArmPose.SetWrist(palm, hr.Middle[hi], hr.Thumb[hi], hr.TwistA[hi], hr.TwistB[hi],
                                      palm.position - fore.position, fingers, -upL, face, ww);
                 }

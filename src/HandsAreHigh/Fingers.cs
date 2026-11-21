@@ -60,6 +60,12 @@ namespace HandsAreHigh
         {
             { float.NaN, 10f, 12f }, { 14f, 24f, 14f }, { 17f, 27f, 15f }, { 19f, 29f, 17f }, { 21f, 31f, 19f },
         };
+        // 0.25.0: the top hand of hands-over-hands (tools/fingersim/overhand.py): lightly bent over
+        // the bottom hand's back, each finger a little more than the one before.
+        private static readonly float[,] OverTop =
+        {
+            { float.NaN, 10f, 12f }, { 15f, 10f, 6f }, { 17f, 12f, 7f }, { 19f, 14f, 8f }, { 21f, 16f, 10f },
+        };
         private static readonly float[,] Flat =
         {
             { float.NaN, 3f, 4f }, { 3f, 5f, 3f }, { 3f, 5f, 3f }, { 3f, 5f, 3f }, { 3f, 5f, 3f },
@@ -112,10 +118,17 @@ namespace HandsAreHigh
             if (hr == null) return;
             Init();
             Observe(s, hr);
-            float cup = Mathf.Clamp01(s.HeadHands);
             float brace = Kneel.BraceFor(s, out int braceHand);
+            // 0.25.0: each hand's own progress to the head (the bottom one leads, the top one follows):
+            // the fingers stay open while the hand travels and settle into their shape as it lands
+            // (the last 45% of its move), and open first when it leaves.
+            bool over = Kneel.OverHands(s, out int top);
+            float head = Mathf.Clamp01(s.HeadHands);
             for (int hi = 0; hi < 2; hi++)
             {
+                bool isTop = over && hi == top;
+                float cup = over ? Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.55f, 1f, Kneel.HandT(head, true, isTop))) : head;
+                float[,] shape = isTop ? OverTop : Cupped;
                 float w = s.Weight * strength;
                 if (hi == 0) w *= 1f - s.GestureArm;   // the game's gesture has the left hand
                 float flat = hi == braceHand ? brace : 0f;
@@ -137,7 +150,7 @@ namespace HandsAreHigh
                         if (float.IsNaN(o)) target = Bind[d, j];
                         else
                         {
-                            float f = Mathf.Lerp(Mathf.Lerp(o, Cupped[d, j], cup), Flat[d, j], flat);
+                            float f = Mathf.Lerp(Mathf.Lerp(o, shape[d, j], cup), Flat[d, j], flat);
                             target = _swing[d, j] * Quaternion.AngleAxis(f, Vector3.forward);
                         }
                         if (hi == 1) target = new Quaternion(-target.x, -target.y, target.z, target.w);

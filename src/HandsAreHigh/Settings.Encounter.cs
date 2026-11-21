@@ -37,10 +37,10 @@ namespace HandsAreHigh
             GuardStaysBehind = c.Bind(EndSec, "A squadmate may stay behind to watch him", true,
                 "When the captor walks away and a squadmate is covering the prisoner, the captor may hand custody to him: the squad moves on, one guard stays a little longer, then ends it his own way.");
             PrisonerNoticesAbandon = c.Bind(EndSec, "Prisoners notice they were left", true,
-                "A held man whose captor walks away (back turned, walking off, gun away from him, or out of sight) and whom nobody else is visibly covering takes it in over a personality-dependent moment, then lowers his hands, gets up if kneeling, and goes back to his own AI (may pick up his own gun first if it is still there and safe). A squadmate still covering him keeps him in place. Off: the 0.22 reaction (a run, hide or draw as if his captor vanished).");
-            AbandonAssessMin = c.Bind(EndSec, "Prisoner takes in being left min (s)", 2.5f,
-                Range("How long a held man watches his captor leave before he believes it (x nerve and personality: frightened men wait longer).", 0.5f, 30f));
-            AbandonAssessMax = c.Bind(EndSec, "Prisoner takes in being left max (s)", 9f, Range("", 0.5f, 60f));
+                "A held man whose captor walks away (back turned, walking off, gun away from him, or out of sight) and whom nobody else is covering (a squadmate of the captor, or a player aiming his way) notices it from what he sees and hears, then lowers his hands, gets up if kneeling, and leaves (or goes for his own gun or one he kept, by his nature). A captor bending for gear a few metres away is not leaving. Off: the 0.22 reaction (a run, hide or draw as if his captor vanished).");
+            AbandonAssessMin = c.Bind(EndSec, "Prisoner takes in being left min (s)", 0.3f,
+                Range("His reaction once the cues are clear (his captor walking off with his back turned for a moment, or out of sight): this long before he acts (x nerve and personality, at most 2.5 s). The cues themselves take about a second to build up. 0.24 used 2.5 to 9 s here: men stood for 7-10 s before reacting.", 0.1f, 30f));
+            AbandonAssessMax = c.Bind(EndSec, "Prisoner takes in being left max (s)", 1.2f, Range("", 0.1f, 60f));
             NoRecaptureSeconds = c.Bind(EndSec, "No recapture after an ending for (s)", 60f,
                 Range("After a captor lets a man go or walks away from him, that captor (and his squad) don't take the same man prisoner again for this long, and the man doesn't surrender to them again. Not immunity: fighting stays possible (a weapon in his hands ends any hold-fire).", 0f, 300f));
             SquadFloor = c.Bind(EndSec, "One voice per encounter", true,

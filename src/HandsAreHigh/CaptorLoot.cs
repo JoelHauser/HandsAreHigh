@@ -208,6 +208,18 @@ namespace HandsAreHigh
 
         internal static bool Fetching(Player captor) => TryJob(captor, out LootJob j) && !j.AfterRelease;
 
+        // 0.25.0 (SurrenderLogic.Abandonment): the captor is seeing to gear lying close to the
+        // prisoner (his dropped gun, kit at his feet), during custody or just after it: from the
+        // prisoner's side that is a man stepping aside for a moment, not a man leaving.
+        internal static bool GatheringNear(Player captor, Vector3 prisoner, float radius, out string what)
+        {
+            what = null;
+            if (!TryJob(captor, out LootJob j)) return false;
+            if (Perception.Flat(j.At, prisoner) > radius || Perception.Flat(captor.Position, prisoner) > radius + 3f) return false;
+            what = j.Stage == LootStage.Walk ? $"walking over to the {j.C.Name}" : $"seeing to the {j.C.Name}";
+            return true;
+        }
+
         internal static void Clear()
         {
             // Raid teardown / hot reload: nobody is left frozen in a pick-up.

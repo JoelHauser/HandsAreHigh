@@ -658,8 +658,11 @@ namespace HandsAreHigh
                     HistoryOf(p).CooldownUntil = Time.time + Settings.SurrenderCooldown.Value;
                     // His own AI starts from here, not from our last path (a non-SAIN brain would
                     // otherwise keep walking it: an outdated destination).
-                    try { BotOwner o = p.AIData?.BotOwner; if (s.Moving) o?.StopMove(); o?.Sprint(false); } catch { }
+                    // 0.25.0: except a man handed back mid-stride (QuickHandBack): he walks on along our
+                    // last path (away from his captor) until his AI's first move replaces it.
+                    try { BotOwner o = p.AIData?.BotOwner; if (s.Moving && !s.HandBackMoving) o?.StopMove(); if (!s.HandBackMoving) o?.Sprint(false); } catch { }
                     s.Moving = false;
+                    s.TLayerOff = Time.time;
                     ReleaseWatch.Start(s, p);
                     Escape.Begin(s, p);     // 0.24.0
                     Release(s, "left surrender");

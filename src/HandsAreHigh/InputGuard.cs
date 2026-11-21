@@ -35,6 +35,15 @@ namespace HandsAreHigh
     //     released for a moment (two frames and two fixed steps, so a release-type slot or a
     //     delivery in a later FixedUpdate can't leak). A fresh press then works as before.
     //     Other keys and other commands are never filtered after the menu closes.
+    //
+    // 0.25.0: the interact key (EGameKey.Interact -> ToggleInputKeyCombination BeginInteracting /
+    // EndInteracting, InputManager.Init; verified in the 0.16.9 decompile) opens and confirms the
+    // order menu when "Interact key opens the order menu" is on. Its commands are removed while the
+    // menu owns input AND while you look at a man the menu could open on (ClaimInteract, renewed
+    // every frame by OrderMenu: the game may dispatch this frame's input before our Update runs, so
+    // the press that opens the menu must already be ours), and a press made then is latched like a
+    // hotbar key: its hold and release stay ours until it has been let go. So F never also opens a
+    // door, loots or picks something up, and a held F is one press.
     internal static class InputGuard
     {
         // The hotbar, as EGameKey -> ECommand (InputManager.Init's combinations).
@@ -93,12 +102,17 @@ namespace HandsAreHigh
         private static readonly Stack<Latch> Pool = new Stack<Latch>(8);
 
         private static int _claimFrame = -100;
+        private static int _hoverFrame = -100;
+        // The interact key(s) as bound in the game (F unless rebound); read with the hotbar bindings.
+        private static readonly List<KeyCode> InteractKeys = new List<KeyCode>(2);
+        private static bool _interactRead;
         private static int _blocked;           // commands removed, for the log
 
         // One bool read per delivery when nothing is going on.
         internal static bool Engaged;
 
         internal static bool Owning => Time.frameCount - _claimFrame <= 2;
+        private static bool Hovering => Time.frameCount - _hoverFrame <= 2;
         internal static int LatchCount => Latches.Count;
 
         static InputGuard()
@@ -110,6 +124,8 @@ namespace HandsAreHigh
             }
             WhileOpen[(int)ECommand.ScrollNext] = true;       // mouse wheel moves the highlight
             WhileOpen[(int)ECommand.ScrollPrevious] = true;
+            WhileOpen[(int)ECommand.BeginInteracting] = true;    // 0.25.0: the interact key is the menu's
+            WhileOpen[(int)ECommand.EndInteracting] = true;
         }
 
         private static int MaxCommand()
@@ -126,7 +142,9 @@ namespace HandsAreHigh
         {
             Bindings.Clear();
             BoundKeys.Clear();
+            InteractKeys.Clear();
             _bindingsRead = false;
+            _interactRead = true;
             try
             {
                 KeyGroup[] groups = Singleton<SettingsManager>.Instance?.Control?.Settings?.GetAllKeyBindings();
@@ -135,6 +153,23 @@ namespace HandsAreHigh
                 {
                     if (g?.variants == null) continue;
                     ECommand command;
+                    if (g.keyName == EGameKey.Interact)
+                    {
+                        // 0.25.0: its two commands go with the key (latched like a hotbar key).
+                        foreach (InputSource v in g.variants)
+                        {
+                            if (v == null || v.isAxis || v.keyCode == null) continue;
+                            foreach (KeyCode k in v.keyCode)
+                            {
+                                if (IsModifier(k) || k == KeyCode.None) continue;
+                                Bindings.Add(new Binding { Key = k, Command = ECommand.BeginInteracting });
+                                Bindings.Add(new Binding { Key = k, Command = ECommand.EndInteracting });
+                                if (!BoundKeys.Contains(k)) BoundKeys.Add(k);
+                                if (!InteractKeys.Contains(k)) InteractKeys.Add(k);
+                            }
+                        }
+                        continue;
+                    }
                     if (!HotbarCommand(g.keyName, out command)) continue;
                     foreach (InputSource v in g.variants)
                     {
@@ -186,6 +221,30 @@ namespace HandsAreHigh
             }
         }
 
+        internal static string InteractLabel => InteractKeys.Count > 0 ? InteractKeys[0].ToString() : "F";
+
+        // 0.25.0: the interact key went down this frame (the game's binding; F if it couldn't be read).
+        internal static bool InteractDown()
+        {
+            if (!_interactRead) ReadBindings();
+            if (InteractKeys.Count == 0) return Input.GetKeyDown(KeyCode.F);
+            for (int i = 0; i < InteractKeys.Count; i++)
+                if (Input.GetKeyDown(InteractKeys[i])) return true;
+            return false;
+        }
+
+        // 0.25.0: every frame you look at a man the menu could open on (menu closed): the interact
+        // commands are kept from the game, and a press of the key now is latched (its release too).
+        internal static void ClaimInteract()
+        {
+            if (!_interactRead) ReadBindings();
+            _hoverFrame = Time.frameCount;
+            Engaged = true;
+            if (InteractKeys.Count == 0) { if (Input.GetKeyDown(KeyCode.F)) LatchKey(KeyCode.F); return; }
+            for (int i = 0; i < InteractKeys.Count; i++)
+                if (Input.GetKeyDown(InteractKeys[i])) LatchKey(InteractKeys[i]);
+        }
+
         // The menu closed (order given, cancelled, target lost): ownership ends now; latched
         // keys keep their own commands blocked until released.
         internal static void Release()
@@ -202,7 +261,9 @@ namespace HandsAreHigh
         internal static void Reset()
         {
             _claimFrame = -100;
+            _hoverFrame = -100;
             _blocked = 0;
+            _interactRead = false;   // re-read at the next use (bindings can change between raids)
             for (int i = 0; i < Latches.Count; i++) Pool.Push(Latches[i]);
             Latches.Clear();
             Array.Clear(Latched, 0, Latched.Length);
@@ -230,6 +291,7 @@ namespace HandsAreHigh
                 if (!_bindingsRead)
                 {
                     Array.Copy(Hotbar, Latched, Hotbar.Length);
+                    Latched[(int)ECommand.BeginInteracting] = Latched[(int)ECommand.EndInteracting] = true;
                     return;
                 }
                 for (int b = 0; b < Bindings.Count; b++)
@@ -259,7 +321,7 @@ namespace HandsAreHigh
                 changed = true;
             }
             if (changed) RebuildLatched();
-            if (Latches.Count == 0 && !Owning) Engaged = false;
+            if (Latches.Count == 0 && !Owning && !Hovering) Engaged = false;
         }
 
         // Also from Runtime.Update, so latches expire even when no input is delivered.
@@ -274,12 +336,14 @@ namespace HandsAreHigh
         {
             ExpireLatches();
             bool owning = Owning;
-            if (!owning && Latches.Count == 0) { Engaged = false; return; }
+            bool hovering = Hovering;
+            if (!owning && !hovering && Latches.Count == 0) { Engaged = false; return; }
             for (int i = commands.Count - 1; i >= 0; i--)
             {
                 int c = (int)commands[i];
                 if (c < 0 || c >= CommandCount) continue;
-                if ((owning && WhileOpen[c]) || Latched[c])
+                bool interact = c == (int)ECommand.BeginInteracting || c == (int)ECommand.EndInteracting;
+                if ((owning && WhileOpen[c]) || Latched[c] || (hovering && interact))
                 {
                     commands.RemoveAt(i);
                     _blocked++;

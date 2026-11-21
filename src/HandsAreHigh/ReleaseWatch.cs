@@ -16,6 +16,11 @@ namespace HandsAreHigh
     // +30, +60, +90, +120 s, the furthest he got from where he was held, and CIRCLED BACK when he is
     // back within the keep-away radius after having been 15 m further out (Escape.cs acts on that;
     // this only reports it).
+    // 0.25.0: the hand-off timeline. For the first 10 s after the hand-back the active layer is read
+    // every frame (at most 16 bots, one name lookup each) until his own AI is seen driving him and
+    // moving him; then one line: from the first "left" cue (or the escape) to his AI moving him, every
+    // step with its time and the longest gap named, so a lingering prisoner shows where the time went
+    // (cues, his reaction, the arms, the rise, our flight, the layer switch, or his AI's first move).
     internal static class ReleaseWatch
     {
         private sealed class Entry
@@ -28,6 +33,13 @@ namespace HandsAreHigh
             internal float Furthest;
             internal int Reported;
             internal bool Circled;
+            // 0.25.0 timeline (Time.time, -1 unknown)
+            internal float TCue, TNoticed, TEscape, TArmsDown, TOnFeet, TFirstMove, TLayerOff;
+            internal string EscapeKind;
+            internal bool Walking;
+            internal float AiAt = -1f, AiMoveAt = -1f;
+            internal string AiLayer;
+            internal bool TimelineDone;
         }
 
         private static readonly List<Entry> Entries = new List<Entry>(4);
@@ -45,8 +57,58 @@ namespace HandsAreHigh
             Entries.Add(new Entry
             {
                 Bot = p, Name = s.Name, HeldAt = s.HeldSet ? s.HeldAt : s.DropPosition, HeldKnown = true,
-                HandedAt = p.Position, Last = p.Position, Since = now, NextSample = now + 1f, LastMoveAt = now
+                HandedAt = p.Position, Last = p.Position, Since = now, NextSample = now + 1f, LastMoveAt = now,
+                TCue = s.TLeftCue, TNoticed = s.TLeftNoticed, TEscape = s.TEscape, TArmsDown = s.THandsDown, TOnFeet = s.TOnFeet,
+                TFirstMove = s.TFirstMove, TLayerOff = s.TLayerOff >= 0f ? s.TLayerOff : now, EscapeKind = s.EscapeKind, Walking = s.HandBackMoving
             });
+        }
+
+        // Every frame for an entry whose timeline isn't logged yet (<= 10 s after the hand-back).
+        private static void WatchHandoff(Entry e, float now)
+        {
+            BotOwner o = e.Bot.AIData?.BotOwner;
+            if (e.AiAt < 0f)
+            {
+                string layer = null;
+                try { if (o != null) layer = BrainManager.GetActiveLayerName(o); } catch { }
+                if (!string.IsNullOrEmpty(layer) && layer != "HandsAreHigh_Surrender") { e.AiAt = now; e.AiLayer = layer; }
+            }
+            if (e.AiAt >= 0f && e.AiMoveAt < 0f && e.Bot.Velocity.sqrMagnitude > 0.5f * 0.5f) e.AiMoveAt = now;
+            if ((e.AiAt >= 0f && e.AiMoveAt >= 0f) || now - e.Since > 10f) LogTimeline(e, now);
+        }
+
+        private static readonly string[] StepNames = new string[9];
+        private static readonly float[] StepTimes = new float[9];
+
+        private static void LogTimeline(Entry e, float now)
+        {
+            e.TimelineDone = true;
+            if (!Settings.LogEscape.Value && !Settings.LogEncounter.Value) return;
+            int n = 0;
+            void Add(string name, float t) { if (t >= 0f) { StepNames[n] = name; StepTimes[n] = t; n++; } }
+            Add("left cues", e.TCue);
+            Add("noticed", e.TNoticed);
+            Add(e.EscapeKind ?? "escape", e.TEscape);
+            Add("arms down", e.TArmsDown);
+            Add("on his feet", e.TOnFeet);
+            Add("moving", e.TFirstMove);
+            Add("our layer off" + (e.Walking ? " (mid-stride)" : ""), e.TLayerOff);
+            Add($"his AI ({e.AiLayer ?? "not seen"})", e.AiAt);
+            Add("moved by his AI", e.AiMoveAt);
+            if (n == 0) return;
+            float t0 = StepTimes[0];
+            for (int i = 1; i < n; i++) if (StepTimes[i] < t0) t0 = StepTimes[i];
+            var sb = new System.Text.StringBuilder($"{e.Name}: hand-off timeline: ");
+            float gap = -1f; string gapAt = null;
+            for (int i = 0; i < n; i++)
+            {
+                sb.Append(i == 0 ? "" : ", ").Append(StepNames[i]).Append(" +").Append((StepTimes[i] - t0).ToString("0.00"));
+                if (i > 0 && StepTimes[i] - StepTimes[i - 1] > gap) { gap = StepTimes[i] - StepTimes[i - 1]; gapAt = $"{StepNames[i - 1]} -> {StepNames[i]}"; }
+            }
+            if (e.AiAt < 0f) sb.Append("; HIS OWN AI NOT SEEN DRIVING HIM WITHIN 10 s");
+            else if (e.AiMoveAt < 0f) sb.Append("; his AI didn't move him within 10 s");
+            if (gapAt != null) sb.Append($"; longest step {gapAt} ({gap:0.00} s)");
+            HandsAreHighPlugin.Log.LogInfo(sb.ToString());
         }
 
         internal static void Tick()
@@ -57,6 +119,10 @@ namespace HandsAreHigh
             for (int i = Entries.Count - 1; i >= 0; i--)
             {
                 Entry e = Entries[i];
+                if (!e.TimelineDone && Perception.Alive(e.Bot) && !SurrenderRegistry.HoldsBot(e.Bot))
+                {
+                    try { WatchHandoff(e, now); } catch (System.Exception ex) { e.TimelineDone = true; HandsAreHighPlugin.Report("hand-off timeline", ex); }
+                }
                 if (now < e.NextSample) continue;
                 e.NextSample = now + 1f;
                 if (!Perception.Alive(e.Bot))

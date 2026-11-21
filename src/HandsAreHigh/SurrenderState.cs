@@ -232,6 +232,27 @@ namespace HandsAreHigh
         // 0.21.0: leaving us (Phase.Released): why, and the hand-off log.
         internal string HandBackWhy;
         internal float LeftHeldAt = -1f;    // when he stopped holding his hands up (first time this surrender)
+        // 0.25.0: a let-go or a walk-off is handed to his own AI mid-stride (no stop, no regroup):
+        // QuickHandBack marks such a flight; HandBackMoving = he was still walking our last path
+        // when the registry let go of him (the next layer's move replaces it).
+        internal bool QuickHandBack, HandBackMoving, QuickEnded;
+        // 0.25.0: the hand-off timeline (Time.time; -1 = didn't happen). Logged by ReleaseWatch once
+        // his own AI is seen driving him, so "where does the delay come from" is a log fact.
+        internal float TLeftCue = -1f, TLeftNoticed = -1f, TEscape = -1f, THandsDown = -1f, TOnFeet = -1f,
+                       TFirstMove = -1f, TLayerOff = -1f;
+        internal string EscapeKind;
+
+        // 0.25.0: hands behind the head, one over the other (Kneel.ApplyHands): which hand lies on
+        // top (0 left, 1 right; -1 not chosen yet). Chosen once per surrender, kept.
+        internal int HeadTopHand = -1;
+        // 0.25.0: kneel variants (KneelVariant.cs): the one he holds and the blend towards it.
+        internal KneelVariantKind KVarTarget = KneelVariantKind.Upright;
+        internal float KVarThigh, KVarLean;                      // current offsets on the base kneel (deg)
+        internal float KVarFromThigh, KVarFromLean, KVarToThigh, KVarToLean;
+        internal float KVarBlendT = 1f, KVarBlendSecs = 1f;
+        internal float KVarChosenAt = -1000f, KVarCheckAt, KVarRoll = -1f;
+        internal bool KVarShifting;                              // weight going forward before a rise
+        internal string KVarWhy;
 
         // Set by Player.BeingHitAction (bullets, melee, explosions; never bleeding).
         internal bool WasHit;
@@ -494,6 +515,9 @@ namespace HandsAreHigh
             FireRecover = false;
             HandBackWhy = null;
             LeftHeldAt = -1f;
+            QuickHandBack = HandBackMoving = false;
+            TLeftCue = TLeftNoticed = TEscape = THandsDown = TOnFeet = TFirstMove = TLayerOff = -1f;
+            EscapeKind = null;
             OfferUntil =Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * Nerve);
             Gestures.Cancel(this, "new surrender");
         }
@@ -561,6 +585,11 @@ namespace HandsAreHigh
         // Runs: arms down (fast if hurt), grace before he can be caught, orders cancelled.
         internal void BeginRetreat(string reason, bool emergency)
         {
+            // 0.25.0: a calm way out (let go, left behind) is handed to his own AI as soon as he is
+            // on his way (SurrenderLogic.QuickClear), not after legs of our flight and a regroup.
+            QuickHandBack = !emergency && Settings.QuickHandBack.Value;
+            QuickEnded = false;
+            if (TEscape < 0f) { TEscape = Time.time; EscapeKind = emergency ? "flight" : CalmFlight ? "walk-off" : "let go"; }
             MarkFlight();
             // On his knees: a bolt needs the fastest rise he can manage; being let go, a calm one.
             HandsAreHigh.Kneel.Urge(this, emergency ? KneelRise.Escape : KneelRise.Compliant);

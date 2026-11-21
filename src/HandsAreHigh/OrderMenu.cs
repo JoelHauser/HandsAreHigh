@@ -93,6 +93,7 @@ namespace HandsAreHigh
         private float _sightLostAt = -1f;
         private float _nextHover;
         private int _submitFrame = -1;
+        private int _openFrame = -1;       // 0.25.0: the key press that opened it never also submits
         private int _flashIndex = -1;
         private float _flashAt = -10f;
         private string _footerMsg;
@@ -141,23 +142,37 @@ namespace HandsAreHigh
                 return;
             }
 
-            if (!screenFree || !SurrenderRegistry.Any) { _hover = null; return; }
-            bool menuKey = Pressed(Settings.MenuKey.Value);
+            if (!screenFree || !SurrenderRegistry.Any) { if (_hover != null) _version++; _hover = null; return; }
+            // 0.25.0: the interact key (F) opens it too. Looked for before the hover refresh so a man
+            // just aimed at is found on the press itself.
+            bool interact = Settings.InteractOpensMenu.Value && InputGuard.InteractDown();
+            bool menuKey = Pressed(Settings.MenuKey.Value) || interact;
             if (menuKey || Time.time >= _nextHover)
             {
                 _nextHover = Time.time + 0.1f;
                 SurrenderState h = LookedAt(me);
                 if (h != _hover) { _hover = h; _version++; }
             }
+            // While you look at a man it could open on, the interact key is the menu's (no door,
+            // no loot, no pick-up on the same press); released as soon as you look away.
+            if (_hover != null && Settings.InteractOpensMenu.Value) InputGuard.ClaimInteract();
             if (menuKey && _hover != null) Open(_hover);
         }
+
+        // 0.25.0: debug keys on and "Debug: order prisoners held by bots": the menu also opens on a
+        // bot's prisoner (debug scenarios). Explicit and debug-only; the order takes him over
+        // (Orders.Give ends the bot's custody first: one captor, one controller).
+        private static bool DebugAuthority => Settings.DebugKeys.Value && Settings.DebugOrderBotPrisoners.Value;
 
         private void Open(SurrenderState s)
         {
             InputGuard.ReadBindings();
             BuildOptions();
             _open = s;
+            _openFrame = Time.frameCount;
             _openedAt = Time.realtimeSinceStartup;
+            if (s.Custody != null)
+                HandsAreHighPlugin.Log.LogInfo($"Order menu (DEBUG): opened on {s.Name}, held by {Restraint.Name(s.Custody.Bot)}; the first order you give takes him over");
             _sightLostAt = -1f;
             _nextSight = 0f;
             _footerMsg = null;
@@ -267,7 +282,7 @@ namespace HandsAreHigh
             if (!SurrenderRegistry.TryGet(s.Bot, out SurrenderState now) || now != s) return $"{s.Name} isn't surrendered any more";
             if (s.Phase != Phase.HandsUp) return $"{s.Name} isn't holding his hands up";
             if (s.Suspended) return $"{s.Name} is out of reach";
-            if (s.Custody != null) return $"{s.Name} is {Restraint.Name(s.Custody.Bot)}'s prisoner";
+            if (s.Custody != null && !DebugAuthority) return $"{s.Name} is {Restraint.Name(s.Custody.Bot)}'s prisoner";
             Vector3 eye = Perception.Eye(me);
             Vector3 chest = Perception.Chest(s.Bot);
             Vector3 to = chest - eye;
@@ -313,7 +328,10 @@ namespace HandsAreHigh
                 if (wheel < -0.01f) Move(1);
                 else if (wheel > 0.01f) Move(-1);
             }
-            if (Pressed(Settings.MenuKey.Value)) Submit(_index, me);
+            // 0.25.0: the confirm key or the interact key, never on the frame the menu opened (the
+            // opening press). A held key is one press (GetKeyDown), and the menu closes on Submit.
+            bool confirm = Pressed(Settings.MenuKey.Value) || (Settings.InteractOpensMenu.Value && InputGuard.InteractDown());
+            if (confirm && Time.frameCount != _openFrame) Submit(_index, me);
         }
 
         private static readonly string[] NoDigit =
@@ -388,7 +406,7 @@ namespace HandsAreHigh
             {
                 // A bot guarding him (custody) keeps him: no menu. Nobody guarding him (yours, a
                 // spared man, an allied bot's, or his captor gone): you can take over by ordering.
-                if (s.Bot == null || s.Dead || s.Phase != Phase.HandsUp || s.Suspended || s.Custody != null) continue;
+                if (s.Bot == null || s.Dead || s.Phase != Phase.HandsUp || s.Suspended || (s.Custody != null && !DebugAuthority)) continue;
                 Vector3 to = Perception.Chest(s.Bot) - eye;
                 if (to.magnitude > range) continue;
                 float angle = Vector3.Angle(me.LookDirection, to);
@@ -592,14 +610,15 @@ namespace HandsAreHigh
                         : Kneel.Active(s) ? "kneeling"
                         : s.TurnedAway || s.Turning ? "facing away"
                         : "standing";
-                    _tagC.text = $"{SideTag(s.Bot)}  {state}{(s.HandsOnHead ? ", hands on head" : "")}";
+                    _tagC.text = $"{SideTag(s.Bot)}  {state}{(s.HandsOnHead ? ", hands on head" : "")}" +
+                                 (s.Custody != null ? $"  DEBUG: {Restraint.Name(s.Custody.Bot)}'s" : "");
                     _subC.text = "";
                 }
 
                 if (m._open == null)
                 {
                     // The closed-menu prompt: [ / ]  Orders: Name
-                    _hintKeyC.text = KeyText(Settings.MenuKey.Value.MainKey);
+                    _hintKeyC.text = Settings.InteractOpensMenu.Value ? InputGuard.InteractLabel : KeyText(Settings.MenuKey.Value.MainKey);
                     _hintC.text = s != null ? $"Orders  {s.Name}" : "";
                     Vector2 kz = _badge.CalcSize(_hintKeyC);
                     Vector2 hz = _hint.CalcSize(_hintC);

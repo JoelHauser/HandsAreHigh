@@ -1286,6 +1286,7 @@ namespace HandsAreHigh
                 if (c.Group != o.BotsGroup || c.Busy || c.Prisoner == null || c.Prisoner.Phase != Phase.HandsUp) continue;
                 if (!Restraint.TryGet(c.Prisoner.Bot, p, out RestraintEntry e) || !e.Holds || Time.time >= e.WatchUntil) continue;
                 if (o.Memory?.GoalEnemy != null || o.Memory?.IsUnderFire == true) return false;
+                if (Encounter.EndedBy(o, c.Prisoner.Bot)) continue;   // 0.25.0: he just moved on from him
                 prisoner = c.Prisoner;
                 return true;
             }

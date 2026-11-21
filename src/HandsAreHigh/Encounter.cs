@@ -248,6 +248,21 @@ namespace HandsAreHigh
         }
 
         // The man's side: no surrender to the captor (or the captor's squad) he was just let go by.
+        // 0.25.0: this bot himself ended an encounter with this man (walked away, let him go): he isn't
+        // pulled back into watching him as an idle squadmate (Captors.WantsControl). 0.24.0 log #7: a
+        // PMC who had just moved on stood still on the captor layer 4 s later.
+        internal static bool EndedBy(BotOwner o, Player prisoner)
+        {
+            if (o == null || prisoner == null || Endings.Count == 0) return false;
+            float now = Time.time;
+            for (int i = Endings.Count - 1; i >= 0; i--)
+            {
+                Ended e = Endings[i];
+                if (e.Owner == o && e.Prisoner == prisoner && now < e.Until) return true;
+            }
+            return false;
+        }
+
         internal static bool RecentlyFreedFrom(Player prisoner, Player captor, out string why)
         {
             why = null;

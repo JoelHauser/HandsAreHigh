@@ -35,11 +35,13 @@ namespace HandsAreHigh
                 else if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(by)}: order {order} to {s?.Name} not given ({why})");
                 return false;
             }
-            if (human && s.Captor != by)
+            // 0.25.0: also when he is somehow both yours and a bot's (never two captors).
+            if (human && (s.Captor != by || s.Custody != null))
             {
                 // Taking over: from nobody, a captor who's gone, or an allied bot (the menu only
                 // offers it then). His custody, if any, ends cleanly first.
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: you take over from {Restraint.Name(s.Captor)}");
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: you take over from {Restraint.Name(s.Captor)}" +
+                    (s.Custody != null ? $" (DEBUG: {Restraint.Name(s.Custody.Bot)} held him; his custody ends first)" : ""));
                 Captors.EndCustody(s, "the player took over");
             }
             s.Captor = by;
