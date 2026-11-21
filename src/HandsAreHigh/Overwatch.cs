@@ -773,7 +773,7 @@ namespace HandsAreHigh
             bool dropping = s.DropPending || s.HandsPending || s.DropQueue.Count > 0;
             if (s.DrawPending) { armed = true; return "drawing a weapon"; }
             if (!Arsenal.HandsEmpty(b) && !dropping) { armed = true; return "with a weapon in his hands"; }
-            bool ordered = s.Order == Order.Follow || s.KneelSpotMoving || s.Turning || (Kneel.Active(s) && !s.KneelUrgent);
+            bool ordered = s.Order == Order.Follow || s.Order == Order.StepBack || s.KneelSpotMoving || s.Turning || (Kneel.Active(s) && !s.KneelUrgent);
             Vector3 v = b.Velocity; v.y = 0f;
             if (!ordered && v.sqrMagnitude > 0.6f * 0.6f)
             {

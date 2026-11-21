@@ -137,6 +137,12 @@ namespace HandsAreHigh
         internal string AloneWhy, AloneKey;
         internal float CoverWaitSince = -1f;
         internal string CoverWaitFor, CoverAcceptedFor, CoverNotedFor;
+        // 0.23.0: how it ends (Encounter.WrapUp) and the gear he asked for (GearNeeds).
+        internal Encounter.Ending Wrap;
+        internal float DoneSince = -1f, WrapAt;
+        internal string WrapWhy;
+        internal bool WalkedAway;
+        internal GearDemand Gear;
 
         internal bool Busy => Mode == CaptorMode.Engage;
     }
@@ -233,6 +239,8 @@ namespace HandsAreHigh
             // 0.21.0: nobody is taken in the middle of the fire that broke a hold-up.
             if (FireBreak.BlocksCustody(c)) return "under fire (a hold-up of his was just broken by it)";
             if (FireBreak.Blocks(s.Bot)) return $"{s.Name} is under fire";
+            // 0.23.0: he (or his squad) just ended an encounter with this man: no recapture loop.
+            if (Encounter.Recently(o, s.Bot, out string ended)) return $"{ended}: not taking him again";
             if (ByBot.Count >= Settings.MaxAiEncounters.Value) return $"{ByBot.Count} bot-held prisoners already";
             if (ByBot.ContainsKey(c)) return "already guarding someone";   // one prisoner per bot
             if (!(c.HandsController is Player.FirearmController)) return "no gun in his hands";
@@ -363,7 +371,7 @@ namespace HandsAreHigh
             return true;
         }
 
-        private static void Accept(SurrenderState s, BotOwner o, string why, bool takingOver = false)
+        private static void Accept(SurrenderState s, BotOwner o, string why, bool takingOver = false, CaptorState inheritFrom = null)
         {
             Player c = o.GetPlayer;
             Pending.Remove(s);
@@ -379,7 +387,15 @@ namespace HandsAreHigh
             };
             BuildPlan(cs);
             SurrenderStats.Acknowledged(s, botCustody: true);
-            try { Judgement.Intend(cs, s); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor intent", e); }
+            // 0.23.0: a squadmate left to watch him carries out the leader's decision to let him go
+            // (no second lethal roll for the same encounter).
+            if (inheritFrom != null)
+            {
+                cs.IntendsKill = false;
+                cs.ReleaseJudged = true;
+                cs.IntentWhy = $"{inheritFrom.Name}'s decision to let him go";
+            }
+            else try { Judgement.Intend(cs, s); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor intent", e); }
             cs.DemandSeen = s.DemandDoneAt;   // 0.16.0: an earlier demand (someone else's) isn't his to judge
             ByBot[c] = cs;
             s.Custody = cs;
@@ -387,6 +403,9 @@ namespace HandsAreHigh
             s.CaptorLastSeen = c.Position;
             s.CaptorHiddenSince = -1f;
             s.FaceSet = false;
+            // 0.23.0: a new custody: nothing of a previous "being left" carries over.
+            s.LeftSince = -1f; s.LeftEvidence = 0f; s.LeftDecideAt = -1f; s.LeftCoveredLogged = s.LeftCancelLogged = false;
+            s.ClosestDist = Vector3.Distance(c.Position, s.Bot.Position);
             s.Accept(takingOver ? $"{cs.Name} takes over custody" : $"{cs.Name} takes custody");
             Restraint.Set(s, o, RestraintKind.Respect, why, squad: true);
             Restraint.InformSquad(s, o, "prisoner", custody: true);
@@ -427,6 +446,8 @@ namespace HandsAreHigh
         internal static void Tick()
         {
             float now = Time.time;
+            // 0.23.0: hand-backs followed once in the log (empty almost always).
+            try { Encounter.Tick(); } catch (System.Exception e) { HandsAreHighPlugin.Report("encounter endings", e); }
             if (Pending.Count > 0 && now >= _nextPending)
             {
                 _nextPending = now + 0.5f;
@@ -608,7 +629,17 @@ namespace HandsAreHigh
             // gear, not with him watching). 0.16-0.17 kept the step read above: the old order was
             // given again and Step++ skipped the turn ("orders him to turn around first", never given).
             next = cs.Plan[Mathf.Min(cs.Step, cs.Plan.Count - 1)];
-            if (next == OrderKind.Leave && now < cs.HoldUntil && !cs.PlanName.StartsWith("disarm and release")) return;
+            if (next == OrderKind.Leave)
+            {
+                // 0.23.0: gear he lacks is asked for before the end (GearNeeds: one slot at a time,
+                // weighed again after each transfer); then the ending is his own decision
+                // (Encounter.WrapUp: linger, Leave order, walk away, or a squadmate left to watch).
+                // 0.22 waited for the hold time here on every plan but "disarm and release".
+                if (GearNeeds.Consider(cs, s, now)) return;
+                if (Settings.NaturalEndings.Value) { if (Encounter.WrapUp(cs, s, now, t)) return; }
+                else if (now < cs.HoldUntil && !cs.PlanName.StartsWith("disarm and release")) return;
+                if (!ByBot.ContainsKey(cs.Bot) || s.Custody != cs) return;
+            }
             if (cs.AwaitKneel && next != OrderKind.Leave) return;   // the kneel is still being carried out
 
             // 0.15.0: closing in once the prisoner is under control (a contextual choice).
@@ -628,14 +659,29 @@ namespace HandsAreHigh
             if (next == OrderKind.Kneel && !KneelReady(cs, s, now, out next)) return;
             // 0.16.0: hands on head / turn around need his hands empty and up (and, to turn, not
             // halfway up or down); waited for up to 10 s, else the step is skipped (logged).
-            if ((next == OrderKind.HandsOnHead || next == OrderKind.TurnAround) && !StepReady(cs, s, now, next)) return;
+            if ((next == OrderKind.HandsOnHead || next == OrderKind.TurnAround || next == OrderKind.DropItem) && !StepReady(cs, s, now, next)) return;
+            // 0.23.0: the item he asked for, checked again just before the order (still on him,
+            // still needed): otherwise the step is dropped, never an order for what isn't there.
+            if (next == OrderKind.DropItem && !GearNeeds.Arm(cs, s))
+            {
+                cs.Step++;
+                cs.NextOrderAt = now + 0.5f;
+                return;
+            }
             // 0.16.0: the plan is done: let him go, or his judgement says otherwise (once).
             if (next == OrderKind.Leave && Judgement.AtRelease(cs, s)) return;
 
             if (Orders.Give(s, next, cs.Bot, human: false, out string whyNot))
             {
                 cs.OrderFailures = 0;
-                if (next == OrderKind.Leave) { End(cs, "let him go", released: true); return; }
+                if (next == OrderKind.Leave)
+                {
+                    Encounter.Remember(cs.Owner, s, "let him go");
+                    End(cs, "let him go", released: true);
+                    Encounter.WatchHandback(cs.Bot, cs.Name, $"let {s.Name} go");
+                    return;
+                }
+                if (next == OrderKind.DropItem) GearNeeds.Given(cs, s, now);
                 if (next == OrderKind.Kneel)
                 {
                     cs.AwaitKneel = true;
@@ -1064,6 +1110,26 @@ namespace HandsAreHigh
             ByBot[cs.Bot] = cs;   // nobody free: he keeps custody while he fights
         }
 
+        // 0.23.0 (Encounter.LeaveGuard): custody to a named squadmate, only if it is practical for
+        // him (the same rule as taking a prisoner). The old captor's custody, cover and ORBIT block
+        // end first; the new one goes through the real Accept (plan, restraint, squad, voice).
+        internal static bool HandTo(CaptorState cs, SurrenderState s, BotOwner m, string why, out CaptorState next, out string refused)
+        {
+            next = null;
+            refused = null;
+            if (m == null || m.IsDead) { refused = "he is down"; return false; }
+            ByBot.Remove(cs.Bot);
+            refused = Impractical(m, s, out _);
+            if (refused != null) { ByBot[cs.Bot] = cs; return false; }
+            try { CaptorLoot.OnCustodyEnd(cs, released: false); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after custody", e); }
+            Overwatch.Release(cs, $"custody goes to {Restraint.Name(m.GetPlayer)}", resisted: false);
+            OrbitAdapter.KeepAwake(cs.Owner, false, "handed his prisoner over");
+            s.Custody = null;
+            HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: hands {s.Name} over to {Restraint.Name(m.GetPlayer)} ({why}) after {Time.time - cs.Since:0} s");
+            Accept(s, m, $"takes over from {cs.Name} ({why})", takingOver: true, inheritFrom: cs);
+            return ByBot.TryGetValue(m.GetPlayer, out next);
+        }
+
         // 0.20.0: who takes custody when the captor can't keep it: his covering squadmate first (he
         // is already on the man), then any squadmate, each only if practical (Impractical).
         private static BotOwner SuccessorFor(CaptorState cs, SurrenderState s)
@@ -1141,7 +1207,7 @@ namespace HandsAreHigh
         internal static void End(CaptorState cs, string why, bool released = false, bool interrupted = false)
         {
             if (!ByBot.Remove(cs.Bot) && cs.Prisoner?.Custody != cs) return;
-            try { CaptorLoot.OnCustodyEnd(cs, released && !interrupted); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after custody", e); }
+            try { CaptorLoot.OnCustodyEnd(cs, released && !interrupted && !cs.WalkedAway); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor gear after custody", e); }
             SurrenderState s = cs.Prisoner;
             // 0.20.0: his squadmate's cover ends with the custody (a man resisting is still watched
             // by him for a moment: his own reaction).
@@ -1182,6 +1248,7 @@ namespace HandsAreHigh
             Pending.Clear();
             PendingScratch.Clear();
             CaptorLoot.Clear();
+            Encounter.Clear();   // 0.23.0 (raid end, teardown)
             OrbitAdapter.ReleaseAll();
         }
 
@@ -1413,11 +1480,14 @@ namespace HandsAreHigh
             float now = Time.time;
             if (j.Stage == LootStage.Walk)
             {
+                // 0.23.0: to the chosen stand spot beside the item (CaptorLoot.StandPoint), the whole
+                // path, ending on it; 0.22 walked at the item itself (into a man standing on it).
+                Vector3 dest = j.HasStand ? j.Stand : j.At;
                 if (!j.PathIssued)
                 {
                     j.PathIssued = true;
-                    if (!Perception.PathTo(me.Position, j.At, out Vector3[] corners, out _)) { j.ProgressSince = -1000f; return; }
-                    Vector3[] way = Captors.Shorten(corners, 0.7f);
+                    if (!Perception.PathTo(me.Position, dest, out Vector3[] corners, out _)) { j.ProgressSince = -1000f; return; }
+                    Vector3[] way = j.HasStand ? corners : Captors.Shorten(corners, 0.7f);
                     if (way.Length >= 2)
                     {
                         if (!_moving) Relink();
@@ -1426,12 +1496,15 @@ namespace HandsAreHigh
                         BotOwner.Sprint(false);
                         BotOwner.SetTargetMoveSpeed(j.Distant ? 0.8f : 0.65f);
                         BotOwner.MovementResume();
-                        BotOwner.Mover.GoToByWay(way, 0.3f);
+                        BotOwner.Mover.GoToByWay(way, j.HasStand ? 0.2f : 0.3f);
                     }
                 }
-                float sq = (me.Position - j.At).sqrMagnitude;
+                float sq = (me.Position - dest).sqrMagnitude;
                 if (_moving && sq < 2f * 2f) BotOwner.SetTargetMoveSpeed(0.4f);   // eases into the stop
-                bool close = sq < 3f * 3f;
+                // 0.23.0: once close, close (no flipping between looking at the man and at the item
+                // around the 3 m mark while he steps about).
+                if (!j.Close && (me.Position - j.At).sqrMagnitude < 3f * 3f) j.Close = true;
+                bool close = j.Close;
                 if (j.Distant && !close)
                 {
                     if (watchable && now >= j.NextGlanceBack)

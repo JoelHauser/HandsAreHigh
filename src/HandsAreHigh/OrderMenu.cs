@@ -6,7 +6,9 @@ namespace HandsAreHigh
 {
     // 0.16.0: HandsOnHead / HandsUp (where his hands are, apart from posture) and TurnAround. New kinds
     // go at the end: the menu's numbering of the older orders never changes.
-    internal enum OrderKind { DropWeapons, DropKit, ArmourOff, Follow, Kneel, Stay, Leave, Stand, HandsOnHead, HandsUp, TurnAround }
+    // 0.23.0 DropItem / StepBack: bot captors only (never in the menu): one named item he wears
+    // (GearNeeds), and a step off the gear at his feet (CaptorLoot.StandPoint).
+    internal enum OrderKind { DropWeapons, DropKit, ArmourOff, Follow, Kneel, Stay, Leave, Stand, HandsOnHead, HandsUp, TurnAround, DropItem, StepBack }
 
     internal enum NoteKind { Info, Success, Error }
 

@@ -33,6 +33,7 @@ namespace HandsAreHigh
             internal float NextNormal;
             internal float SpokeAt = -1000f;
             internal EPhraseTrigger Last = EPhraseTrigger.None;
+            internal bool FloorLogged;
         }
 
         private static readonly Dictionary<Player, Speaker> Speakers = new Dictionary<Player, Speaker>();
@@ -109,7 +110,9 @@ namespace HandsAreHigh
             {
                 case OrderKind.DropWeapons:
                 case OrderKind.DropKit:
-                case OrderKind.ArmourOff: return CaptorLine.Disarm;
+                case OrderKind.ArmourOff:
+                case OrderKind.DropItem: return CaptorLine.Disarm;
+                case OrderKind.StepBack: return CaptorLine.Demand;
                 case OrderKind.Follow: return CaptorLine.Follow;
                 case OrderKind.Kneel: return CaptorLine.Kneel;
                 case OrderKind.Leave: return CaptorLine.Leave;
@@ -126,6 +129,9 @@ namespace HandsAreHigh
         internal static void Say(Player bot, CaptorLine line, float delay = 0f, bool behind = false)
         {
             if (!Settings.CaptorSpeech.Value || !Settings.BotVoice.Value || bot == null || !Perception.Alive(bot)) return;
+            // 0.23.0: one voice per encounter: orders are the custody holder's; a covering
+            // squadmate only speaks for his role (Encounter.MaySay).
+            if (!Encounter.MaySay(bot, line, out string notHis)) { Log(bot, $"{line}: {notHis}", verbose: true); return; }
             if (!Speakers.TryGetValue(bot, out Speaker sp)) { sp = new Speaker { Bot = bot }; Speakers[bot] = sp; }
             float now = Time.time;
             VoicePriority pr = PriorityOf(line);
@@ -180,6 +186,13 @@ namespace HandsAreHigh
                 if (speaker == null) { sp.Pending = null; continue; }
                 if (speaker.Speaking || speaker.Busy) continue;            // his own, SAIN's or anyone's line
                 if (sp.Priority < VoicePriority.Urgent && PrisonerTalking(sp.Bot)) continue;
+                // 0.23.0: someone else of this encounter has the floor (his line and a short gap).
+                if (!Encounter.FloorFree(sp.Bot, null, sp.Priority, now, out string busy))
+                {
+                    if (!sp.FloorLogged) { sp.FloorLogged = true; Log(sp.Bot, $"{line}: waits ({busy})", verbose: true); }
+                    continue;
+                }
+                sp.FloorLogged = false;
                 Play(sp, line, speaker, now);
             }
             for (int i = 0; i < Done.Count; i++) { Speakers.Remove(Done[i]); _behind.Remove(Done[i]); }
@@ -222,6 +235,7 @@ namespace HandsAreHigh
                 sp.SpokeAt = now;
                 sp.Last = trig;
                 sp.NextNormal = now + Settings.CaptorVoiceGap.Value;
+                Encounter.TookFloor(sp.Bot, null, speaker.Clip != null ? speaker.Clip.Length : 1.5f);
                 Voice.VerifyLater(sp.Bot, speaker.Clip, $"{line}: {trig} ({speaker.PlayerVoice})");
                 return;
             }

@@ -180,6 +180,8 @@ namespace HandsAreHigh
             if (s.PendingPriority < VoicePriority.Urgent && FloorTaken(s, now)) return;
             // His captor (a bot) is speaking: answer after him, not over him.
             if (s.PendingPriority < VoicePriority.Urgent && s.Custody != null && CaptorVoice.Talking(s.Custody.Bot)) return;
+            // 0.23.0: a covering squadmate of his captor mid-line (the encounter's floor).
+            if (!force && !Encounter.FloorFree(s.Bot, s, s.PendingPriority, now, out _)) return;
             Play(s, e, speaker, now, force);
         }
 
@@ -256,6 +258,7 @@ namespace HandsAreHigh
                 s.NextChatter = Mathf.Max(s.NextChatter, now + Settings.ChatterMin.Value);
                 s.VerifyAt = now + VerifyAfter;
                 s.VerifyClip = speaker.Clip;
+                Encounter.TookFloor(s.Bot, s, speaker.Clip != null ? speaker.Clip.Length : 1.5f);
                 s.VerifyWhat = $"{e}: {line} ({voice})";
                 return;
             }

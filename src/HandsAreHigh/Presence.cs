@@ -63,6 +63,7 @@ namespace HandsAreHigh
         // 0.15.0: his captor is behind him, out of what his eyes can reach (kneeling): he doesn't
         // twist after him. Now and then a glance over that shoulder, as far as a neck goes.
         internal bool Lost;
+        internal float LostLoggedAt = -1000f;   // 0.23.0: the "loses sight" line at most every 10 s
         internal float LostSide;                // -1 left, +1 right: where he last had him
         internal float BehindUntil, NextBehindAt;
 
@@ -672,7 +673,7 @@ namespace HandsAreHigh
                     p.LostSide = Mathf.Abs(yaw) > 1f ? Mathf.Sign(yaw) : (Dice.Value < 0.5f ? -1f : 1f);
                     p.NextBehindAt = now + Dice.Range(1.5f, 4f);
                     p.BehindUntil = 0f;
-                    if (Settings.LogAttention.Value) Log(s, $"loses sight of his captor (about {Mathf.Abs(yaw):0} deg round, past what he can turn to: {reach:0} + {Peripheral:0} from the corner of his eye); stops tracking him");
+                    if (Settings.LogAttention.Value && now - p.LostLoggedAt > 10f && (p.LostLoggedAt = now) > 0f) Log(s, $"loses sight of his captor (about {Mathf.Abs(yaw):0} deg round, past what he can turn to: {reach:0} + {Peripheral:0} from the corner of his eye); stops tracking him");
                 }
                 else if (!lost && p.Lost)
                 {

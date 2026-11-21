@@ -141,7 +141,9 @@ namespace HandsAreHigh
         private const float StandAtT = 0.50f;     // rising: the game's stand (capsule) from here
         private const float LegsFreeT = 0.15f;    // fallback hand-off when no style is set
         private const float PivotSpan = 0.12f;    // t before the hand-off in which he may turn on his planted feet
-        private const float MaxPivot = 70f;       // deg his body may turn on his feet before they lift
+        // 0.23.0: 70 -> 40. The feet stay in the kneel's frame during the pivot (FeetFrame): 70 deg of
+        // body over planted feet is a twisted ankle; ~40 is what a man pivots on the balls of his feet.
+        private const float MaxPivot = 40f;       // deg his body may turn on his feet before they lift
         internal const int MaxSpotMoves = 2;      // walks to a better spot per kneel order
         private const float SpotArrive = 0.3f, SpotStall = 2f, SpotLimit = 6f;
         private static readonly float[] SpotRings = { 0.25f, 0.45f, 0.7f, 1f };   // x Room search radius
@@ -393,6 +395,7 @@ namespace HandsAreHigh
                     break;
 
                 case KneelPhase.GoingDown:
+                    HoldRoot(s);
                     if (!want) { StartRise(s, s.KneelUrgent ? s.KneelRise : KneelRise.Compliant, WhyUp(s)); break; }
                     // Nothing moves until his standing pose is captured from an animated frame
                     // (ApplyBody): starting the clock first made the first posed frame a jump.
@@ -421,11 +424,13 @@ namespace HandsAreHigh
                     break;
 
                 case KneelPhase.Down:
+                    HoldRoot(s);
                     if (!want) { StartRise(s, KneelRise.Compliant, WhyUp(s)); break; }
                     CheckMoved(s, now);
                     break;
 
                 case KneelPhase.GettingUp:
+                    if (!PivotOpen(s)) HoldRoot(s);
                     // A freeze first (an escape called off): still, then whichever way he goes.
                     if (now < s.KneelHoldUntil) { Hold(s, dt); break; }
                     if (want && !s.KneelUrgent)
@@ -691,6 +696,13 @@ namespace HandsAreHigh
             else if (s.DropPending || s.HandsPending || s.DrawPending) wait = "hands busy";
             else if (s.Moving || bot.IsSprintEnabled) wait = "still moving";
             else if (s.KneelFade > 0f) wait = "still settling from the last rise";
+            // 0.23.0: never commit the kneel's frame (KneelAnchorFwd, the feet's orientation) while his
+            // body is still turning: the game's stepping turn clip goes on turning the root by its root
+            // motion after our driver lets go, and the pivot finishes the last degrees. Committed
+            // mid-turn, the legs were solved in the old direction while the hips kept turning: the
+            // twisted foot after "Turn around" from his knees (0.22.0 log: "kneel: moved while down"
+            // right after every re-kneel). Bounded: 2.5 s, then he kneels the way he faces.
+            else if (StillTurning(s, now, out string turning)) wait = turning;
             else if (bot.CustomAnimationsAreProcessing) wait = "playing an animation";
             else if (bot.MovementContext?.PlayerAnimator?.AnimatedInteractions?.IsInteractionPlaying == true) wait = "an interaction is playing";
             if (wait != null)
@@ -747,6 +759,8 @@ namespace HandsAreHigh
             }
 
             Gestures.Cancel(s, "getting down on his knees");
+            s.KneelDrift = 0f;
+            s.KneelDriftLogged = false;
             s.Kneel = KneelPhase.GoingDown;
             s.KneelUrgent = false;
             s.KneelT = 0f;
@@ -775,6 +789,45 @@ namespace HandsAreHigh
             Log(s, $"kneel: gets down, {style.Name} ({styleWhy}), {s.KneelSecs:0.0} s, {(lead == 1 ? "right" : "left")} knee first{legWhy}{stepWhy}; " +
                    $"ground {s.KneelGround[0]:+0.00;-0.00}/{s.KneelGround[1]:+0.00;-0.00} knees, {s.KneelGround[2]:+0.00;-0.00}/{s.KneelGround[3]:+0.00;-0.00} feet, " +
                    $"{(s.KneelHelmet ? "helmet" : "no helmet")}{(s.KneelMoves > 0 ? $", after {s.KneelMoves} step(s) to find room" : "")}");
+        }
+
+        // 0.23.0: the root's yaw while any part of the kneel has his legs (down, going down, rising
+        // before the pivot opens) is held on the way his knees point. Whatever turns it (the rest of
+        // a turn clip's root motion, the game's AI root snap) would otherwise turn his hips over feet
+        // that are posed in the kneel's frame. MovementContext.ApplyRotation, as TurnDriver uses it.
+        private static void HoldRoot(SurrenderState s)
+        {
+            MovementContext mc = s.Bot?.MovementContext;
+            Vector3 a = s.KneelAnchorFwd; a.y = 0f;
+            if (mc == null || a.sqrMagnitude < 0.5f) return;
+            Vector3 f = s.Bot.Transform.Original.forward; f.y = 0f;
+            if (f.sqrMagnitude < 1e-4f) return;
+            float off = Vector3.SignedAngle(f, a, Vector3.up);
+            if (Mathf.Abs(off) < 0.25f) return;
+            if (Mathf.Abs(off) > s.KneelDrift) s.KneelDrift = Mathf.Abs(off);
+            try { mc.ApplyRotation(Quaternion.AngleAxis(off, Vector3.up) * mc.TransformRotation); } catch { return; }
+            if (!s.KneelDriftLogged && Mathf.Abs(off) > 2f && Settings.LogKneel.Value)
+            {
+                s.KneelDriftLogged = true;
+                Log(s, $"kneel: his body turned {off:+0;-0} deg off the way his knees point ({s.Kneel}); held on his knees (no turn over planted feet)");
+            }
+        }
+
+        // Is his root still turning (the driver, or the yaw still moving between checks)?
+        private static bool StillTurning(SurrenderState s, float now, out string why)
+        {
+            why = null;
+            float yaw = s.Bot.Transform.Original.eulerAngles.y;
+            float moved = s.KneelYawAt > 0f ? Mathf.Abs(Mathf.DeltaAngle(s.KneelYawPrev, yaw)) : 0f;
+            s.KneelYawPrev = yaw;
+            bool first = s.KneelYawAt <= 0f;
+            s.KneelYawAt = now;
+            if (s.DriveMode != 0) why = "still turning";
+            else if (!first && moved > 1.2f) why = $"his body is still turning ({moved:0.0} deg in the last moment)";
+            if (why == null) { s.KneelTurnWaitSince = -1f; return false; }
+            if (s.KneelTurnWaitSince < 0f) s.KneelTurnWaitSince = now;
+            if (now - s.KneelTurnWaitSince > 2.5f) { s.KneelTurnWaitSince = -1f; return false; }
+            return true;
         }
 
         // 0.15.0: before going down he turns to KneelFaceDir (fixed when the order was taken). The

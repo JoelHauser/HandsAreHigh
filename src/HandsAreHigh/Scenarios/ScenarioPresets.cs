@@ -1392,6 +1392,283 @@ namespace HandsAreHigh
                         break;
                 }
             };
+
+            // ---- 0.23.0: encounter endings, squads, kneeling turns, gear, pick-ups ----
+
+            // A lone captor walks away (or lets him go): the ending is his own unless forced.
+            p = new ScenarioPreset
+            {
+                Name = "Encounter ending: captor walks away",
+                Tests = "Once a lone captor is done with his prisoner he lingers, decides once how it ends (Leave order or simply walking off), goes back to his own AI; a prisoner left behind notices it from what he sees (back turned, walking off, gun away, out of sight), takes it in, lowers his hands, gets up if kneeling and walks off (or gets his own gun if it is still there and safe). Nobody recaptures anybody.",
+                Watch = "'done with ... lingers N s', 'how his hold on ... ends: ... -> walks off / tells him to go' (or FORCED), 'stops holding ... (walks away; ... is left standing / on his knees, hands up)', 'back to his own AI (walked away from ...)', '4 s after the hand-back: layer <SAIN / ORBIT / vanilla layer>, N m moved, moving'. Prisoner: 'notices <captor> walks off with his back to him ... takes it in for N s', 'left by ...: ... -> walk off / get his gun', 'back to his own AI (left by ...: walks off ...)', then 'after release +15 s / +30 s'. Never 'STILL NEAR THE CAPTURE SPOT', never 'flees to a spot'.",
+                Prereq = "Forced start: surrendered, forced custody, mercy forced (the ending is the test). The plan's steps are forced (Stay or Kneel); the linger, the ending (unless forced), the prisoner's noticing and decision are real.",
+                Natural = false
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(25f)); p.Params.Add(Sep(8f));
+            p.Params.Add(ParamDef.Choice("pose", "Prisoner", new[] { "Standing", "Kneeling", "Kneeling, turned away" }));
+            p.Params.Add(ParamDef.Choice("end", "Ending", new[] { "His own decision", "Walks away (FORCED)", "Leave order (FORCED)" }));
+            p.Params.Add(ParamDef.Choice("gun", "His dropped gun", new[] { "Left where it fell", "Removed (none for him)" }));
+            p.Params.Add(NerveP("n", "Prisoner nerve")); p.Params.Add(Pers("pe", "Prisoner personality")); p.Params.Add(Pers("cpe", "Captor personality"));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                Participant cap = Squad(sc, "BEAR", 1, -h, 0f, "Prisoner");
+                From(cap, sc.Values, null, null, null, null, "cpe");
+                From(Add(sc, "Prisoner", "Scav", "B", h, 0f, "PMC"), sc.Values, null, null, null, "n", "pe");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Conditions(sc);
+                Participant cap = sc.Find("PMC"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                string pose = sc.Values.S("pose"), end = sc.Values.S("end");
+                sc.Step($"{cap.Tag}: plan and ending", () =>
+                {
+                    if (!cap.Active || !pr.Active) return (cap.Dead || pr.Dead) ? "a participant died" : "";
+                    Judgement.Force(cap.Player, JudgeForce.Mercy);
+                    CaptorLoot.ForceWant(cap.Player, true);
+                    sc.Force($"{cap.Tag}'s answers forced to mercy; he wants the dropped weapon (so the fetch comes before the ending)");
+                    if (end.StartsWith("Walks")) { Encounter.ForceEnding(cap.Player, Encounter.Ending.WalkAway); sc.Force($"{cap.Tag} walks away at the end (FORCED ending; the linger and everything after are real)"); }
+                    else if (end.StartsWith("Leave")) { Encounter.ForceEnding(cap.Player, Encounter.Ending.Release); sc.Force($"{cap.Tag} ends it with a Leave order (FORCED ending)"); }
+                    return pose == "Standing" ? Captors.DebugSteps(cap.Player, "ending test", OrderKind.Stay)
+                         : pose == "Kneeling" ? Captors.DebugSteps(cap.Player, "ending test", OrderKind.Kneel)
+                         : Captors.DebugSteps(cap.Player, "ending test", OrderKind.Kneel, OrderKind.TurnAround);
+                });
+                if (sc.Values.S("gun").StartsWith("Removed"))
+                    sc.After(4f, "his dropped gun is removed", () => ScenarioEvents.Run(sc, ScenarioEvent.RemoveGun, pr));
+            };
+            list.Add(p.Done());
+
+            // A squad moves on and leaves one guard behind.
+            p = new ScenarioPreset
+            {
+                Name = "Encounter ending: squad leaves a guard",
+                Tests = "A squad's captor is done; with a squadmate covering, the squad may move on and leave that squadmate to watch the prisoner (custody handed over with the leader's decision to let him go: no new lethal roll). The prisoner, still covered by the guard, stays put; when the guard ends it too, he notices and leaves.",
+                Watch = "'how his hold on ... ends: ...; <guard> covers him: leave him to watch? ... -> yes' (or FORCED GuardBehind), 'hands ... over to <guard> (stays behind to watch him ...)', 'moves on and leaves <guard> to watch ...', '<guard>: holds ... (takes over from ...); plan watches him after ...', the leader's '4 s after the hand-back: layer ...'. Prisoner: 'his captor isn't on him, but <guard> still covers him: stays put' (if the old captor is still his reference), then the guard's own 'how his hold ... ends', 'notices <guard> walks off ...', 'left by <guard>: ...'.",
+                Prereq = "Forced start: surrendered, forced custody of PMC-1, mercy forced. The guard is the mod's own pick (Squad cover on). Ending of PMC-1 forced to 'leave a guard' (falls back to walking away if nobody covers him at that moment); the guard's own ending is his.",
+                Natural = false
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(8f, 4f, 12f));
+            p.Params.Add(ParamDef.Number("squad", "Captor squad size", 2f, 3f, 1f, 3f));
+            p.Params.Add(ParamDef.Choice("end", "Leader's ending", new[] { "Leave a guard (FORCED)", "His own decision" }));
+            p.Params.Add(Pers("pe", "Prisoner personality"));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                int n = sc.Values.I("squad");
+                Add(sc, "PMC-1", "BEAR", "A", -h, 0f, "Prisoner");
+                Add(sc, "PMC-2", "BEAR", "A", -h - 1f, 3f, "Prisoner");
+                if (n >= 3) Add(sc, "PMC-3", "BEAR", "A", -h - 2f, -3.5f, "Prisoner");
+                From(Add(sc, "Prisoner", "Scav", "B", h, 0f, "PMC-1"), sc.Values, null, null, null, null, "pe");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Conditions(sc);
+                Participant cap = sc.Find("PMC-1"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                sc.Step($"{cap.Tag}: plan and ending", () =>
+                {
+                    if (!cap.Active || !pr.Active) return (cap.Dead || pr.Dead) ? "a participant died" : "";
+                    foreach (Participant q in sc.People) if (q.Tag.StartsWith("PMC") && q.Player != null) Judgement.Force(q.Player, JudgeForce.Mercy);
+                    sc.Force("every captor's answers forced to mercy (the ending is the test)");
+                    if (sc.Values.S("end").StartsWith("Leave")) { Encounter.ForceEnding(cap.Player, Encounter.Ending.GuardBehind); sc.Force($"{cap.Tag} leaves his covering squadmate to watch the prisoner (FORCED ending)"); }
+                    return Captors.DebugSteps(cap.Player, "squad ending test", OrderKind.Stay, OrderKind.DropWeapons);
+                });
+            };
+            list.Add(p.Done());
+
+            // Squad dialogue: one voice per encounter.
+            p = new ScenarioPreset
+            {
+                Name = "Squad dialogue",
+                Tests = "A squad of three takes a prisoner: only the captor gives orders; the covering squadmate speaks only for his role; one line at a time with a short gap (the prisoner included); an urgent warning (a hostile bot) cuts in at once.",
+                Watch = "'says Demand / Stay / Disarm ...' from the captor only; '<guard>: says Covering ...' once; Verbose: 'captor voice <line>: waits (<who> is speaking)' and '<line>: not his to say (<captor> speaks for the encounter)'. No two 'says' lines of the encounter within ~1 s of each other, except UnderFire / Threat / Resist. With the hostile bot: 'says UnderFire' or 'says Threat' at once.",
+                Prereq = "Forced start: surrendered, forced custody, plan forced (Stay, Drop your weapons, Hands on head). Speech on, Log voice on (Verbose for the waits). Hostile bot: real (spawned 40 m out).",
+                Natural = false
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(25f)); p.Params.Add(Sep(8f));
+            p.Params.Add(ParamDef.Choice("threat", "Urgent warning", new[] { "None", "Hostile bot after 15 s (real)" }));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                Squad(sc, "BEAR", 3, -h, 0f, "Prisoner");
+                Add(sc, "Prisoner", "Scav", "B", h, 0f, "PMC-1");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Participant cap = sc.Find("PMC-1"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                sc.Step($"{cap.Tag}: plan", () =>
+                {
+                    if (!cap.Active || !pr.Active) return (cap.Dead || pr.Dead) ? "a participant died" : "";
+                    Judgement.Force(cap.Player, JudgeForce.Mercy);
+                    return Captors.DebugSteps(cap.Player, "dialogue test", OrderKind.Stay, OrderKind.DropWeapons, OrderKind.HandsOnHead);
+                });
+                if (sc.Values.S("threat").StartsWith("Hostile")) sc.After(15f, "a hostile bot comes for the captor", () => ScenarioEvents.Run(sc, ScenarioEvent.ThirdParty, cap));
+            };
+            list.Add(p.Done());
+
+            // Deliberate versus accidental prisoner targeting by a squadmate.
+            p = new ScenarioPreset
+            {
+                Name = "Squadmate and the prisoner",
+                Tests = "A squadmate far from the capture (outside the old notice radius) walks up while his squad holds a man: he must hold fire (told by his squad, no sight needed). With the forced deliberate decision he may kill him, and the log says it was a decision, not a leak.",
+                Watch = "'Restraint: <far squadmate> holds fire at ... (squad): <captor>'s prisoner' at custody (he was 40 m away: 0.22 gave him no decision). Never 'PRISONER HIT WITHOUT A DECISION' or 'RESTRAINT LEAK'. Deliberate: '<squadmate>: DECIDES TO KILL ... against his squad (FORCED ...)', then 'Restraint: ... shot ... as decided (refused: ...)' and 'killed with his hands up ...'.",
+                Prereq = "Forced start: surrendered, forced custody of PMC-1 (plan: Stay). PMC-3 starts Distance behind and is sent towards the prisoner by his own squad AI (not forced). Deliberate: the decision only is forced at 12 s; his own AI targets and fires.",
+                Natural = false
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(30f)); p.Params.Add(Sep(8f));
+            p.Params.Add(ParamDef.Number("far", "Far squadmate behind (m)", 20f, 80f, 5f, 45f));
+            p.Params.Add(ParamDef.Choice("kill", "Squadmate decision", new[] { "His squad's (hold fire)", "Deliberate kill (FORCED decision)" }));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                Add(sc, "PMC-1", "BEAR", "A", -h, 0f, "Prisoner");
+                Add(sc, "PMC-2", "BEAR", "A", -h - 1f, 3f, "Prisoner");
+                Add(sc, "PMC-3", "BEAR", "A", -h - sc.Values.F("far"), 0f, "Prisoner");
+                Add(sc, "Prisoner", "Scav", "B", h, 0f, "PMC-1");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Participant cap = sc.Find("PMC-1"), far = sc.Find("PMC-3"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                sc.Step($"{cap.Tag}: plan", () =>
+                {
+                    if (!cap.Active || !pr.Active) return (cap.Dead || pr.Dead) ? "a participant died" : "";
+                    Judgement.Force(cap.Player, JudgeForce.Mercy);
+                    return Captors.DebugSteps(cap.Player, "squad targeting test", OrderKind.Stay);
+                });
+                if (sc.Values.S("kill").StartsWith("Deliberate"))
+                    sc.After(12f, "the far squadmate decides to kill the prisoner (FORCED decision only)", () =>
+                    {
+                        SurrenderState s = ScenarioOps.StateOf(pr);
+                        string r = s == null ? "no prisoner" : far.Owner2 == null ? "no squadmate" : Restraint.ForceSquadKill(s, far.Owner2);
+                        sc.Note(r == null ? TL.Forced : TL.ExecFail, r ?? $"{far.Tag} decides to kill {pr.Tag} (FORCED; his own AI does the rest)");
+                    });
+            };
+            list.Add(p.Done());
+
+            // Kneeling turns.
+            p = new ScenarioPreset
+            {
+                Name = "Kneeling turns",
+                Tests = "A kneeling prisoner told to turn (repeatedly, from either side, on whatever ground you place him on) gets up, turns with the game's stepping turn, and kneels again only once his body has stopped turning; his root is held on his knees while he kneels: no foot left behind, no twisted ankle, no slide.",
+                Watch = "'turn around from his knees: gets up, turns N deg', 'stepped round N deg ... the rest by a pivot', 'turned round in N s', 'kneel: waits (still turning / his body is still turning ...)' (Verbose), 'kneels again facing away', 'kneel: on his knees'. Never 'kneel: moved while down' right after a re-kneel; 'kneel: his body turned N deg off the way his knees point ...; held on his knees' means something turned him and was stopped (should be rare and small). Look at his feet: they turn with him.",
+                Prereq = "Forced start: surrendered to a bot captor (custody), kneeling. The turn orders are given on a timer from the captor's real order path; the captor walks round him between them (Side change) so the turn direction alternates. Place him on stairs, a slope, rubble (crosshair placement) for uneven ground.",
+                Natural = false
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(10f));
+            p.Params.Add(ParamDef.Number("turns", "Turn orders", 1f, 5f, 1f, 3f));
+            p.Params.Add(ParamDef.Number("gap", "Between orders (s)", 3f, 20f, 1f, 9f));
+            p.Params.Add(ParamDef.Choice("cut", "Interrupt", new[] { "None", "Get down again mid-rise", "Stand up mid-turn" }));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                Squad(sc, "BEAR", 1, -3.5f, 0f, "Prisoner");
+                Add(sc, "Prisoner", "Scav", "B", 3.5f, 0f, "PMC");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Participant cap = sc.Find("PMC"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                sc.Step($"{cap.Tag}: holds him for the test", () => cap.Active ? Captors.DebugSteps(cap.Player, "kneeling turn test (the scenario gives the orders)", OrderKind.Kneel) : (cap.Dead ? "died" : ""));
+                int n = sc.Values.I("turns");
+                float gap = sc.Values.F("gap"), at = 8f;
+                string cut = sc.Values.S("cut");
+                for (int i = 0; i < n; i++)
+                {
+                    sc.After(at, $"turn order {i + 1}", () => ScenarioEvents.Run(sc, ScenarioEvent.CaptorOrderTurn, pr));
+                    if (i == 0 && cut != "None")
+                        sc.After(at + (cut.StartsWith("Get") ? 0.8f : 2.2f), $"interrupt: {cut}", () =>
+                        {
+                            SurrenderState s = ScenarioOps.StateOf(pr);
+                            if (s == null || cap.Player == null) return;
+                            OrderKind k = cut.StartsWith("Get") ? OrderKind.Kneel : OrderKind.Stand;
+                            sc.Note(TL.Real, $"{k} order mid-transition: {(Orders.Give(s, k, cap.Player, false, out string why, debug: true) ? "given" : $"refused ({why})")}");
+                        });
+                    at += gap;
+                }
+            };
+            list.Add(p.Done());
+
+            // Equipment demands.
+            p = new ScenarioPreset
+            {
+                Name = "Captor demands gear",
+                Tests = "A captor without body armour, a rig or a backpack weighs his prisoner's (the game must be able to put it in his empty slot; class and durability; carrying space), tells him to drop a suitable one, picks it up into that slot (contents kept), weighs again, and never asks twice or for something unsuitable.",
+                Watch = "'gear he lacks, from ...: body armour: none of his own; the man wears a <item> (class N, N % durability): want ..., roll ... -> tells him to drop it' (or '... won't do (<why>)'), 'ordered DropItem', 'order 'drop your body armour': ... did it', 'weighs what else ... dropped ... <item>: (the armour he lacks and told him to drop ...)', 'stands to pick up the <item> N m from it', 'took ...'s <item> into his ArmorVest slot', then the next slot weighed, or 'done with ...'. Never the same slot asked twice.",
+                Prereq = "Forced start: surrendered, forced custody, mercy forced. The captor's missing gear is removed at spawn (real transaction). The prisoner keeps his generated kit (relaunch or change the seed if he wears nothing suitable).",
+                Natural = false
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(25f)); p.Params.Add(Sep(7f));
+            p.Params.Add(ParamDef.Choice("lack", "Captor lacks", ScenarioOps.CaptorGearPresets, 4));
+            p.Params.Add(Pers("cpe", "Captor personality"));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                Participant cap = Squad(sc, "BEAR", 1, -h, 0f, "Prisoner");
+                From(cap, sc.Values, null, null, null, null, "cpe");
+                cap.Kit = sc.Values.S("lack");
+                Add(sc, "Prisoner", "BEAR", "B", h, 0f, "PMC");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Conditions(sc);
+                Participant cap = sc.Find("PMC"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                sc.Step($"{cap.Tag}: plan", () =>
+                {
+                    if (!cap.Active || !pr.Active) return (cap.Dead || pr.Dead) ? "a participant died" : "";
+                    Judgement.Force(cap.Player, JudgeForce.Mercy);
+                    Compliance.Force(pr.Player, ComplianceChoice.DropsAll);
+                    sc.Force($"{cap.Tag}'s answers forced to mercy; {pr.Tag} drops every weapon he is told to");
+                    return Captors.DebugSteps(cap.Player, "gear demand test", OrderKind.Stay, OrderKind.DropWeapons);
+                });
+            };
+            list.Add(p.Done());
+
+            // Loot at the prisoner's feet in a confined space.
+            p = new ScenarioPreset
+            {
+                Name = "Pick-up at the prisoner's feet",
+                Tests = "The gun lands at the prisoner's feet; the captor picks a spot beside it (in reach, clear of the prisoner's body and the walls), walks there smoothly without stopping and restarting, picks it up with the game's own pick-up, and never walks into the prisoner. In a corridor or a small room with no clean spot he asks the man to step back once, or leaves it for after the release.",
+                Watch = "'goes to take ...', 'stands to pick up the <item> N m from it, N m from <prisoner>', one walk (no repeated 'goes to take' for the same item, no 'stops going for ...: something else needs his attention' without a real threat), 'took ... (pick-up animation ...)'. Confined: 'no clean spot by ...'s <item> (<why>); tells him to step back off it', '<prisoner>: stepped back off his gear', then the fetch; or '... takes it after letting him go'. Prisoner moved into the spot: 'picks another spot by ...'. Watch the captor: no jitter, no capsule pushing into the prisoner.",
+                Prereq = "Forced start: surrendered (the gun in his hands drops at his feet), forced custody, plan forced (Stay), the captor wants the gun (FORCED appetite: always the case for the dropped weapon). Place it in a corridor, doorway or small room with crosshair placement and a small separation.",
+                Natural = false
+            };
+            p.Params.Add(Place()); p.Params.Add(Dist(8f)); p.Params.Add(Sep(4f, 2f, 10f));
+            p.Params.Add(ParamDef.Choice("pose", "Prisoner", new[] { "Standing", "Kneeling" }));
+            Common(p, true);
+            p.Plan = sc =>
+            {
+                float h = sc.Values.F("sep") / 2f;
+                Squad(sc, "BEAR", 1, -h, 0f, "Prisoner");
+                Add(sc, "Prisoner", "Scav", "B", h, 0f, "PMC");
+                return null;
+            };
+            p.Setup = sc =>
+            {
+                Participant cap = sc.Find("PMC"), pr = sc.Find("Prisoner");
+                PrisonerTo(sc, pr, cap, custody: true, "forced start");
+                sc.Step($"{cap.Tag}: plan", () =>
+                {
+                    if (!cap.Active || !pr.Active) return (cap.Dead || pr.Dead) ? "a participant died" : "";
+                    Judgement.Force(cap.Player, JudgeForce.Mercy);
+                    CaptorLoot.ForceWant(cap.Player, true);
+                    return Captors.DebugSteps(cap.Player, "pick-up test", sc.Values.Is("pose", "Kneeling") ? OrderKind.Kneel : OrderKind.Stay);
+                });
+            };
             list.Add(p.Done());
 
             return list;

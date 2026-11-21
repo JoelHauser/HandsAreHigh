@@ -18,6 +18,8 @@ namespace HandsAreHigh
         internal static readonly string[] HealthPresets = { "Full", "Wounded", "Badly wounded", "Bleeding", "Leg destroyed" };
         internal static readonly string[] AmmoPresets = { "As generated", "No spare ammo", "Empty gun" };
         internal static readonly string[] KitPresets = { "As generated", "Keeps sidearm", "Keeps slung primary", "Knife only", "Disarmed" };
+        // 0.23.0: a captor missing gear (GearNeeds tests): removed by the same transaction.
+        internal static readonly string[] CaptorGearPresets = { "As generated", "No body armour", "No rig", "No backpack", "No armour, rig or backpack" };
         internal static readonly string[] NervePresets = { "Rolled", "0.0", "0.25", "0.5", "0.75", "1.0" };
         internal static readonly string[] Personalities = { "SAIN's own", "Coward", "Timmy", "Rat", "Normal", "Chad", "GigaChad", "Wreckless" };
 
@@ -139,6 +141,10 @@ namespace HandsAreHigh
                 case "Disarmed":
                     remove.Add(EquipmentSlot.SecondPrimaryWeapon); remove.Add(EquipmentSlot.Holster); remove.Add(EquipmentSlot.Scabbard);
                     break;
+                case "No body armour": remove.Add(EquipmentSlot.ArmorVest); break;
+                case "No rig": remove.Add(EquipmentSlot.TacticalVest); break;
+                case "No backpack": remove.Add(EquipmentSlot.Backpack); break;
+                case "No armour, rig or backpack": remove.Add(EquipmentSlot.ArmorVest); remove.Add(EquipmentSlot.TacticalVest); remove.Add(EquipmentSlot.Backpack); break;
                 default: return $"unknown kit preset {preset}";
             }
             var done = new List<string>(3);

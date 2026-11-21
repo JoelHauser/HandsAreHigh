@@ -226,7 +226,12 @@ namespace HandsAreHigh
                 if (m == null || m == captor || m.IsDead || m.BotState != EBotState.Active) continue;
                 Player mp = m.GetPlayer;
                 if (mp == null || mp == s.Bot || !Perception.Alive(mp) || SurrenderRegistry.HoldsBot(mp)) continue;
-                if ((mp.Position - at).sqrMagnitude > r * r) continue;
+                // 0.23.0: custody is the whole squad's business (they talk): a squadmate outside the
+                // notice radius used to get no decision at all, so his own AI (and SAIN's, which
+                // shares the group's enemies) treated the man as any enemy once he came into view:
+                // the "squadmate suddenly kills the prisoner". A spare decision (no custody) still
+                // reaches only those near enough to see it.
+                if (!custody && (mp.Position - at).sqrMagnitude > r * r) continue;
                 SquadDecision(s, m, captor, decision, custody);
             }
         }
@@ -244,18 +249,49 @@ namespace HandsAreHigh
             }
             if (Distrusts(h, s.Bot))
             {
-                Set(s, m, RestraintKind.Reject, $"goes against {captorName}'s {decision}: he saw {s.Name} attack before", squad: true);
+                SquadKill(s, m, $"goes against {captorName}'s {decision}: he saw {s.Name} attack before");
+                return;
+            }
+            // 0.23.0: his disposition about this man is rolled ONCE. 0.22 rolled it again at every
+            // re-decision (the man ran and came back, a hand-over, the scan renewing an expired squad
+            // entry), so a squadmate who had held fire for a minute could "decide" to shoot a
+            // compliant prisoner out of the blue. A decision that holds now carries over to the new
+            // situation (Respect / LetGo) without a roll.
+            if (TryGet(s.Bot, mp, out RestraintEntry had) && had.DecidedAt > 0f && had.Holds && had.Squad)
+            {
+                Set(s, m, holds, $"{captorName}'s {decision} (as he decided before)", squad: true, watch: had.WatchUntil > Time.time ? had.WatchUntil - Time.time : 0f);
                 return;
             }
             float roll = Dice.Value;
-            if (roll < Settings.SquadRejectChance.Value * (2f - Mercy(mp, h)))
+            float rejectChance = Settings.SquadRejectChance.Value * (2f - Mercy(mp, h));
+            if (roll < rejectChance)
             {
-                Set(s, m, RestraintKind.Reject, $"goes against {captorName}'s {decision} (personality {Personality(mp, h)}, roll {roll:0.000})", squad: true);
+                SquadKill(s, m, $"goes against {captorName}'s {decision} (personality {Personality(mp, h)}, chance {rejectChance:0.000}, roll {roll:0.000})");
                 return;
             }
             bool near = (mp.Position - s.Bot.Position).sqrMagnitude < 25f * 25f;
             float watch = custody && near ? Settings.WatchSeconds.Value * Dice.Range(0.6f, 1.2f) : 0f;
             Set(s, m, holds, $"{captorName}'s {decision}{(watch > 0f ? ", watches him" : "")}", squad: true, watch: watch);
+        }
+
+        // 0.23.0: a squadmate's refusal is a deliberate decision to kill the man, and is logged as
+        // one (once per squadmate and man; the squad's other decisions stand; his own combat AI does
+        // the rest with its own targeting).
+        private static void SquadKill(SurrenderState s, BotOwner m, string why)
+        {
+            RestraintEntry e = Set(s, m, RestraintKind.Reject, why, squad: true);
+            if (e == null || e.Final) return;
+            HandsAreHighPlugin.Log.LogInfo($"{Name(m.GetPlayer)}: DECIDES TO KILL {s.Name} against his squad ({why}){(s.Phase == Phase.HandsUp ? "; the man has his hands up" : "")}");
+            e.Final = true;   // decided: never re-rolled into a ceasefire by a later squad decision
+        }
+
+        // Debug scenario: a squadmate's deliberate decision to kill the man, FORCED (the decision only;
+        // his own combat AI does the rest, watched like any kill decision's outcome by the hit log).
+        internal static string ForceSquadKill(SurrenderState s, BotOwner m)
+        {
+            if (s?.Bot == null || m == null || m.IsDead) return "no such squadmate";
+            SquadKill(s, m, "FORCED by a debug scenario (the decision only; his own AI targets and fires)");
+            return null;
         }
 
         // ---- the prisoner's conduct ---------------------------------------------------------
@@ -302,6 +338,30 @@ namespace HandsAreHigh
             Player shooter = null;
             try { shooter = Perception.PlayerOf(info.Player?.iPlayer); } catch { }
             if (shooter == null || shooter == s.Bot) return;
+            if (!TryGet(s.Bot, shooter, out _) && shooter.IsAI)
+            {
+                // 0.23.0: hit by a bot that never decided about him. Say why (no decision is the
+                // missing-awareness case), and if he is of the custody squad, the squad rule applies
+                // from this moment (he was never informed: a bug, not a decision).
+                BotOwner so = shooter.AIData?.BotOwner;
+                bool squad = s.Custody != null && so != null && so.BotsGroup != null && so.BotsGroup == s.Custody.Group;
+                EnemyInfo seenInfo = so != null ? Perception.InfoAbout(so, s.Bot) : null;
+                Player goal = Perception.PlayerOf(so?.Memory?.GoalEnemy?.Person);
+                string layer = "?";
+                try { if (so != null) layer = DrakiaXYZ.BigBrain.Brains.BrainManager.GetActiveLayerName(so) ?? "?"; } catch { }
+                string key = shooter.ProfileId + "|" + s.Bot.ProfileId;
+                if (HitNoted.Count > 64) HitNoted.Clear();
+                if (HitNoted.Add(key))
+                {
+                    string line = $"{Name(shooter)} hit {s.Name} ({s.Phase}{(s.Custody != null ? $", in {s.Custody.Name}'s custody" : "")}): " +
+                        $"{(squad ? "he is of the captor's squad and was never told" : "not of the captor's squad: an outsider's own fight")}; his target {(goal != null ? Name(goal) : "none")}, " +
+                        $"his EnemyInfo on him {(seenInfo == null ? "none" : seenInfo.IsVisible ? "visible" : "not visible")}, layer {layer}, {Vector3.Distance(shooter.Position, s.Bot.Position):0} m";
+                    if (squad) HandsAreHighPlugin.Log.LogWarning("PRISONER HIT WITHOUT A DECISION: " + line);
+                    else if (Settings.LogRestraint.Value) HandsAreHighPlugin.Log.LogInfo("Restraint: no decision about him: " + line);
+                }
+                if (squad) SquadDecision(s, so, s.Custody.Owner, "prisoner", custody: true);
+                return;
+            }
             if (TryGet(s.Bot, shooter, out RestraintEntry e))
             {
                 // A round fired before he decided (already in the air, or the end of a burst the
@@ -357,6 +417,13 @@ namespace HandsAreHigh
                 BotOwner o = p.AIData?.BotOwner;
                 if (o == null || o.IsDead || o.BotState != EBotState.Active || SurrenderRegistry.HoldsBot(p)) continue;
                 EnemyInfo info = Perception.InfoAbout(o, s.Bot);
+                // 0.23.0: his squad holds this man: he knows it whether or not he sees him (and gets
+                // the decision before an EnemyInfo on him even exists: SAIN shares the group's enemies).
+                if (s.Custody != null && o.BotsGroup != null && o.BotsGroup == s.Custody.Group && !TryGet(s.Bot, p, out _))
+                {
+                    SquadDecision(s, o, s.Custody.Owner, "prisoner", custody: true);
+                    continue;
+                }
                 if (info == null) continue;
 
                 if (TryGet(s.Bot, p, out RestraintEntry e) && e.Final) { e.Until = now + Settings.RestraintMemory.Value; continue; }
@@ -698,6 +765,7 @@ namespace HandsAreHigh
             HeldFireBy.Clear();
             Detached.Clear();
             ShotAt.Clear();
+            HitNoted.Clear();
             Any = false;
             EntryCount = 0;
             _cursor = 0;
@@ -713,6 +781,7 @@ namespace HandsAreHigh
         // When each AI last pressed his trigger and it went through (TriggerPatch, only while
         // anyone holds fire): tells a round fired before a decision from an attack after it.
         private static readonly Dictionary<Player, float> ShotAt = new Dictionary<Player, float>();
+        private static readonly HashSet<string> HitNoted = new HashSet<string>();   // 0.23.0: one diagnosis per shooter and man
         internal static void NoteShot(Player shooter) { if (ShotAt.Count > 256) ShotAt.Clear(); ShotAt[shooter] = Time.time; }
         internal static float LastShot(Player shooter) => shooter != null && ShotAt.TryGetValue(shooter, out float t) ? t : -1f;
 

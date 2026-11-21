@@ -95,6 +95,8 @@ namespace HandsAreHigh
         internal float Want;            // the appetite roll's chance (rolled once)
         internal bool Wanted;
         internal bool Demanded;         // 0.18.0: a weapon he made him drop
+        internal bool Needed;           // 0.23.0: gear he told him to drop because he lacks it (GearNeeds)
+        internal bool StepAsked;        // 0.23.0: he asked the man to step off it once
         internal int Tries;             // fetches started
         // 0.19.0: tracking and what he knows (see the header).
         internal LootItem Loose;
@@ -136,6 +138,12 @@ namespace HandsAreHigh
         internal float NextGlanceBack, GlanceBackUntil;
         // 0.20.0: he started it with his squadmate covering him (Overwatch); a loss he can tell is judged once.
         internal bool CoverRelied, CoverJudged;
+        // 0.23.0: where he stands to pick it up (StandPoint: beside it, clear of the prisoner and the
+        // walls), chosen once, checked again twice a second only against the prisoner moving into it.
+        internal bool HasStand, Close;
+        internal Vector3 Stand, StandFor;
+        internal int Reselects;
+        internal float NextStandCheck;
     }
 
     internal sealed class LootPlan
@@ -280,7 +288,8 @@ namespace HandsAreHigh
             foreach (LootCandidate c in items)
             {
                 if (c.Decision != decision) continue;
-                if (next == null || (c.Demanded && !next.Demanded) || (c.Demanded == next.Demanded && c.Value > next.Value)) next = c;
+                int rc = c.Demanded ? 2 : c.Needed ? 1 : 0, rn = next == null ? -1 : next.Demanded ? 2 : next.Needed ? 1 : 0;
+                if (next == null || rc > rn || (rc == rn && c.Value > next.Value)) next = c;
             }
             return next;
         }
@@ -336,6 +345,15 @@ namespace HandsAreHigh
                         c.Want = 1f;
                         c.Wanted = true;
                         c.Why = $"the weapon he made him drop ({c.Value:0} roubles, into his {c.Fit})";
+                        Weigh(cs, s, c, now);
+                    }
+                    else if (GearNeeds.IsNeeded(cs, it))
+                    {
+                        // 0.23.0: gear he told him to drop because he has none (GearNeeds): wanted.
+                        c.Needed = true;
+                        c.Want = 1f;
+                        c.Wanted = true;
+                        c.Why = $"the {c.Fit.Replace(" slot", "")} he lacks and told him to drop ({c.Value:0} roubles)";
                         Weigh(cs, s, c, now);
                     }
                     else if (n >= Settings.LootMaxItems.Value) { c.Decision = "leave"; c.Why = "has taken enough"; }
@@ -497,9 +515,9 @@ namespace HandsAreHigh
             LootItem loose = LooseOf(c);
             if (loose == null) { c.Decision = "leave"; c.Why += "; gone since"; return; }
             float risk = Risk(cs, s, c.Seen ? c.KnownAt : loose.transform.position, out string riskWhy);
-            float accepts = c.Demanded ? Mathf.Max(Settings.LootRisk.Value, Settings.DemandedRisk.Value) : Settings.LootRisk.Value;
+            float accepts = c.Demanded || c.Needed ? Mathf.Max(Settings.LootRisk.Value, Settings.DemandedRisk.Value) : Settings.LootRisk.Value;
             string before = c.Decision;
-            c.Decision = risk <= accepts ? "take" : Settings.LootAfterRelease.Value || c.Demanded ? "later" : "leave";
+            c.Decision = risk <= accepts ? "take" : Settings.LootAfterRelease.Value || c.Demanded || c.Needed ? "later" : "leave";
             string verdict = c.Decision == "take" ? "takes it now" : c.Decision == "later" ? "too risky now: later" : "too risky: leaves it";
             int cut = c.Why.IndexOf("; risk ");
             if (cut >= 0) c.Why = c.Why.Substring(0, cut);
@@ -670,7 +688,24 @@ namespace HandsAreHigh
             if (loose == null) { c.Decision = "leave"; c.Why += "; gone before he went"; return false; }
             // 0.19.0: to where he believes it is (he saw it there), not where it really is.
             Vector3 at = c.Seen ? c.KnownAt : loose.transform.position;
-            if (!Perception.PathTo(o.GetPlayer.Position, at, out _, out string pw))
+            // 0.23.0: the man he asked to step off it is still stepping: wait for him (this check).
+            if (!afterRelease && s?.Order == Order.StepBack) return false;
+            // 0.23.0: a spot beside it to stand on (not the item itself: at a man's feet that walked
+            // the captor into his body).
+            bool hasStand = false;
+            Vector3 stand = at;
+            if (Settings.LootStandBeside.Value)
+            {
+                Player man = s?.Bot != null && !s.Dead && Perception.Alive(s.Bot) ? s.Bot : null;
+                if (!Perception.TakeHeavy()) return false;   // a few NavMesh samples and up to 3 path solves: a frame with budget
+                if (!StandPoint(o.GetPlayer, at, man, out stand, out string standWhy))
+                {
+                    NoStand(o, s, c, at, man, standWhy, afterRelease);
+                    return false;
+                }
+                hasStand = true;
+            }
+            if (!Perception.PathTo(o.GetPlayer.Position, hasStand ? stand : at, out _, out string pw))
             {
                 c.Decision = "leave";
                 c.Why += $"; no way to it ({pw})";
@@ -684,6 +719,15 @@ namespace HandsAreHigh
                 Stage = LootStage.Walk, Since = now, StageSince = now, ProgressFrom = o.GetPlayer.Position, ProgressSince = now
             };
             if (!afterRelease && Captors.TryGet(job.Bot, out CaptorState jcs)) job.CoverRelied = Overwatch.Covered(jcs);
+            if (hasStand)
+            {
+                job.HasStand = true;
+                job.Stand = stand;
+                job.StandFor = s?.Bot != null ? s.Bot.Position : Vector3.zero;
+                if (Settings.LogEncounter.Value || Settings.LogLoot.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{job.Name}: stands to pick up the {c.Name} {Perception.Flat(stand, at):0.00} m from it" +
+                        $"{(s?.Bot != null && !s.Dead ? $", {Perception.Flat(stand, s.Bot.Position):0.00} m from {s.Name}" : "")} ({Perception.Flat(job.Bot.Position, stand):0.0} m walk)");
+            }
             Jobs[job.Bot] = job;
             Claimed.Add(c.Item);
             c.Decision = "fetching";
@@ -692,6 +736,130 @@ namespace HandsAreHigh
             if (Settings.LogLoot.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{job.Name}: goes to take {s.Name}'s {c.Name}{(c.Demanded ? " (the weapon he made him drop)" : "")}{(c.Distant ? $" (distant: {c.PathLen:0} m walk)" : "")} ({Vector3.Distance(job.Bot.Position, job.At):0.0} m{(afterRelease ? (s.Dead ? ", after the kill" : ", after letting him go") : $", {Vector3.Distance(job.At, job.PrisonerFrom):0.0} m from him")}{(c.Tries > 1 ? $", try {c.Tries}" : "")})");
             return true;
+        }
+
+        // ---- 0.23.0: where to stand for the pick-up ------------------------------------------------
+        //
+        // 0.22 walked the path to the item itself (shortened by 0.7 m along it). An item at the
+        // prisoner's feet put the end of that path inside his capsule: the captor walked into his
+        // body, the two capsules pushed, the mover re-pathed and the stop-and-settle test (distance
+        // to the item, his speed) flipped between walking and settling: the jitter and the walking
+        // into him. Now he picks ONE spot beside the item:
+        //   in reach      StandMin..StandMax (0.5-0.85 m) from it on the flat: the look from his eyes
+        //                 is then over 60 deg down (PickUpState lowers the body) and the reach lands;
+        //   clear of him  at least StandClear (0.8 m: two capsules of ~0.35 m and a margin) from the
+        //                 prisoner's feet, so neither body overlaps the other or the pick-up animation;
+        //   clear of walls his capsule fits (Physics.CheckCapsule against the player collision mask,
+        //                 hip to head), on the NavMesh within 0.35 m, on the item's floor;
+        //   sees it       a clear line from his eyes there to the item;
+        //   reachable     a complete path that ends on the spot and isn't a long way round (<= 3
+        //                 path solves per choice).
+        // Candidates: his own side of the item first, then round it (10 directions x 2 distances,
+        // cheapest checks first). Chosen once per fetch; checked again twice a second only for the
+        // prisoner moving into it (Restand, twice at most). No spot: the man is asked once to step
+        // back off it (if he is standing right on it), else it waits for after the release (or is
+        // left). Never collision changes, teleports or moving the item.
+        private const float StandMin = 0.5f, StandMax = 0.85f, StandClear = 0.8f;
+        private static readonly float[] StandAngles = { 0f, 35f, -35f, 70f, -70f, 105f, -105f, 140f, -140f, 180f };
+        private static readonly float[] StandRadii = { 0.65f, 0.8f };
+        private static readonly float[] StepTurns = { 0f, 45f, -45f, 90f, -90f };
+
+        internal static bool StandPoint(Player me, Vector3 item, Player man, out Vector3 stand, out string why)
+        {
+            stand = item;
+            why = "no candidate";
+            Vector3 toMe = me.Position - item; toMe.y = 0f;
+            if (toMe.sqrMagnitude < 0.01f) { toMe = man != null ? item - man.Position : me.Transform.forward; toMe.y = 0f; }
+            if (toMe.sqrMagnitude < 1e-4f) toMe = Vector3.forward;
+            toMe.Normalize();
+            int mask = LayersMaskController.PlayerStaticCollisionsMask;
+            int solves = 0;
+            for (int ai = 0; ai < StandAngles.Length; ai++)
+                for (int ri = 0; ri < StandRadii.Length; ri++)
+                {
+                    Vector3 c = item + Quaternion.AngleAxis(StandAngles[ai], Vector3.up) * toMe * StandRadii[ri];
+                    if (!UnityEngine.AI.NavMesh.SamplePosition(c, out UnityEngine.AI.NavMeshHit hit, 0.35f, UnityEngine.AI.NavMesh.AllAreas)) { why = "off the NavMesh"; continue; }
+                    Vector3 p = hit.position;
+                    if (Mathf.Abs(p.y - item.y) > 0.5f) { why = "another level"; continue; }
+                    float r = Perception.Flat(p, item);
+                    if (r < StandMin || r > StandMax) { why = "out of reach"; continue; }
+                    if (man != null && Perception.Flat(p, man.Position) < StandClear) { why = "too close to the prisoner's body"; continue; }
+                    if (Physics.CheckCapsule(p + Vector3.up * 0.45f, p + Vector3.up * 1.55f, 0.3f, mask, QueryTriggerInteraction.Ignore)) { why = "no room to stand (a wall or a prop)"; continue; }
+                    if (!Perception.LineClear(p + Vector3.up * 1.5f, item + Vector3.up * 0.12f)) { why = "can't see it from there"; continue; }
+                    if (solves >= 3) { why = $"no reachable spot among the nearest ({why})"; return false; }
+                    solves++;
+                    if (!Perception.PathTo(me.Position, p, out Vector3[] corners, out string pw)) { why = pw; continue; }
+                    Vector3 end = corners[corners.Length - 1];
+                    if (Perception.Flat(end, p) > 0.3f) { why = "the path doesn't end on it"; continue; }
+                    if (Captors.PathLength(corners) > 2f * Perception.Flat(me.Position, p) + 3f) { why = "the way round is too long"; continue; }
+                    stand = p;
+                    return true;
+                }
+            return false;
+        }
+
+        // The prisoner moved into the chosen spot (or the item moved): one new choice.
+        private static bool Restand(LootJob j, float now, string what)
+        {
+            if (!Perception.TakeHeavy()) { j.NextStandCheck = now + 0.1f; return true; }   // next frame with budget
+            Player man = !j.AfterRelease && j.Prisoner?.Bot != null && !j.Prisoner.Dead ? j.Prisoner.Bot : null;
+            if (!StandPoint(j.Bot, j.At, man, out Vector3 p, out string why))
+            {
+                if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo($"{j.Name}: {what}; no clean spot by the {j.C.Name} any more ({why})");
+                return false;
+            }
+            j.Reselects++;
+            if (Perception.Flat(p, j.Stand) > 0.25f) { j.Stand = p; j.PathIssued = false; }
+            if (man != null) j.StandFor = man.Position;
+            if (Settings.LogLoot.Value) HandsAreHighPlugin.Log.LogInfo($"{j.Name}: {what}: picks another spot by the {j.C.Name} ({Perception.Flat(p, j.At):0.00} m from it, choice {j.Reselects + 1})");
+            return true;
+        }
+
+        // No spot beside it: ask the man to step back off it (once, only if he stands right on it and
+        // can walk), else wait for after the release (or leave it).
+        private static void NoStand(BotOwner o, SurrenderState s, LootCandidate c, Vector3 at, Player man, string why, bool afterRelease)
+        {
+            string name = Restraint.Name(o.GetPlayer);
+            if (!afterRelease && man != null && s.Phase == Phase.HandsUp && !c.StepAsked && s.Kneel == KneelPhase.Standing && s.Order != Order.Kneel &&
+                Perception.Flat(man.Position, at) < StandClear + 0.2f && Captors.TryGet(o.GetPlayer, out CaptorState cs) && cs.Prisoner == s &&
+                StepBackSpot(s, at, o.GetPlayer, out Vector3 to))
+            {
+                c.StepAsked = true;
+                s.StepBackTo = to;
+                bool given = Orders.Give(s, OrderKind.StepBack, o.GetPlayer, human: false, out string not);
+                if (Settings.LogLoot.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{name}: no clean spot by {s.Name}'s {c.Name} ({why}); " +
+                        (given ? $"tells him to step back off it ({Perception.Flat(man.Position, to):0.0} m)" : $"couldn't tell him to step back ({not})"));
+                if (given) return;   // still "take": fetched once he has moved (Start waits for the step)
+            }
+            c.Decision = afterRelease ? "leave" : Settings.LootAfterRelease.Value ? "after release" : "leave";
+            c.Why += $"; no clean spot to pick it up from ({why})";
+            if (Settings.LogLoot.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{name}: no clean spot by {s?.Name}'s {c.Name} ({why}): {(c.Decision == "after release" ? "takes it after letting him go" : "leaves it")}");
+        }
+
+        // A short step back for the man, away from the item (and from his captor's side), on the
+        // NavMesh, his capsule fits, a short complete path.
+        private static bool StepBackSpot(SurrenderState s, Vector3 item, Player captor, out Vector3 to)
+        {
+            to = s.Bot.Position;
+            Vector3 away = s.Bot.Position - item; away.y = 0f;
+            if (away.sqrMagnitude < 0.01f) { away = s.Bot.Position - captor.Position; away.y = 0f; }
+            if (away.sqrMagnitude < 1e-4f) return false;
+            away.Normalize();
+            int mask = LayersMaskController.PlayerStaticCollisionsMask;
+            foreach (float a in StepTurns)
+            {
+                Vector3 c = s.Bot.Position + Quaternion.AngleAxis(a, Vector3.up) * away * 1.3f;
+                if (!UnityEngine.AI.NavMesh.SamplePosition(c, out UnityEngine.AI.NavMeshHit hit, 0.4f, UnityEngine.AI.NavMesh.AllAreas)) continue;
+                Vector3 p = hit.position;
+                if (Mathf.Abs(p.y - s.Bot.Position.y) > 0.4f || Perception.Flat(p, item) < StandClear + 0.3f) continue;
+                if (Physics.CheckCapsule(p + Vector3.up * 0.45f, p + Vector3.up * 1.55f, 0.3f, mask, QueryTriggerInteraction.Ignore)) continue;
+                if (!Perception.PathTo(s.Bot.Position, p, out Vector3[] corners, out _) || Captors.PathLength(corners) > 3f) continue;
+                to = p;
+                return true;
+            }
+            return false;
         }
 
         private static void TickJob(LootJob j, float now, ThreatLevel t)
@@ -704,7 +872,10 @@ namespace HandsAreHigh
             }
             string stop = null;
             if (!Perception.Alive(j.Bot) || j.Owner == null || j.Owner.IsDead) stop = "he is down";
-            else if (t != ThreatLevel.None) stop = "something else needs his attention";
+            // 0.23.0: a near pick-up is committed: only fire or an enemy in sight stops it (Alert, an
+            // enemy seen a few seconds ago, stops a distant walk only). 0.22 stopped on any threat
+            // level and restarted later: the walk-stop-walk the 0.22.0 raid showed as jitter.
+            else if (t >= ThreatLevel.Fire || (t == ThreatLevel.Alert && j.Distant && j.Stage == LootStage.Walk)) stop = "something else needs his attention";
             else if (!j.AfterRelease && (j.Prisoner == null || j.Prisoner.Dead || j.Prisoner.Phase != Phase.HandsUp)) stop = "the prisoner stopped complying";
             // 0.19.0: only when he sees it (a man walking off while the captor looks the other way
             // is the prisoner's opening; Captors.Check notices resistance by sight in its own time).
@@ -731,14 +902,35 @@ namespace HandsAreHigh
                     if ((real - j.At).sqrMagnitude > 1f && Notices(j.Bot, j.Prisoner, real))
                     {
                         if (++j.Repaths > 3) stop = "it keeps moving";
-                        else { j.At = real; j.C.KnownAt = real; j.PathIssued = false; }
+                        else
+                        {
+                            j.At = real; j.C.KnownAt = real; j.PathIssued = false;
+                            if (j.HasStand && !Restand(j, now, "it moved")) stop = "no clean spot by it any more";
+                        }
+                    }
+                }
+                // 0.23.0: the prisoner stepped into his spot (or moved off his line to it): one new spot,
+                // twice at most, checked twice a second (not every frame: no re-path jitter).
+                if (stop == null && j.HasStand && !j.AfterRelease && now >= j.NextStandCheck && j.Prisoner?.Bot != null && !j.Prisoner.Dead)
+                {
+                    j.NextStandCheck = now + 0.5f;
+                    Vector3 man = j.Prisoner.Bot.Position;
+                    if (Perception.Flat(man, j.Stand) < StandClear - 0.05f && Perception.Flat(man, j.StandFor) > 0.3f)
+                    {
+                        if (j.Reselects >= 2) stop = "the prisoner keeps getting in the way";
+                        else if (!Restand(j, now, "the prisoner moved into his spot")) stop = "no clean spot by it any more";
                     }
                 }
                 Vector3 d = j.At - j.Bot.Position; d.y = 0f;
                 float dist = d.magnitude;
                 // 0.19.0: he walks to ~0.7 m (in reach for a look over 60 deg down: the game's crouch
                 // to the floor); a path that ends short of that settles once he has come to a stop.
-                if (stop == null && (dist <= 0.95f || (dist <= 1.45f && j.Bot.Velocity.sqrMagnitude < 0.2f * 0.2f && now - j.StageSince > 1f)))
+                // 0.23.0: with a stand spot, arriving is reaching that spot (and the item is in reach from it).
+                bool slow = j.Bot.Velocity.sqrMagnitude < 0.2f * 0.2f && now - j.StageSince > 0.8f;
+                bool there = j.HasStand
+                    ? Perception.Flat(j.Bot.Position, j.Stand) <= 0.25f || (Perception.Flat(j.Bot.Position, j.Stand) <= 0.6f && dist <= StandMax + 0.2f && slow)
+                    : dist <= 0.95f || (dist <= 1.45f && slow && now - j.StageSince > 1f);
+                if (stop == null && there)
                 {
                     if (li == null || (li.transform.position - j.At).sqrMagnitude > 1.6f * 1.6f) stop = "it isn't where he saw it";
                     else { j.Stage = LootStage.Settle; j.StageSince = now; }

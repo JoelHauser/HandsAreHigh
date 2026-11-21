@@ -494,7 +494,7 @@ namespace HandsAreHigh
             sc.Events.Clear();
             int staged = ScenarioStaging.Release(sc, "cleanup");
             foreach (Participant p in sc.People)
-                if ((object)p.Player != null) { Compliance.Force(p.Player, ComplianceChoice.Auto); Judgement.Force(p.Player, JudgeForce.Auto); }
+                if ((object)p.Player != null) { Compliance.Force(p.Player, ComplianceChoice.Auto); Judgement.Force(p.Player, JudgeForce.Auto); Encounter.ForceEnding(p.Player, Encounter.Ending.None); CaptorLoot.ForceWant(p.Player, false); }
             Presence.TestNeutral = Presence.TestDiag = false;   // 0.18.0: Head straight check
             int lifted = ScenarioShield.Remove(sc);
             var report = new StringBuilder();

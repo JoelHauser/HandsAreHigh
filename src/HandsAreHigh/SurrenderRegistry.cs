@@ -202,6 +202,14 @@ namespace HandsAreHigh
                 return;
             }
 
+            // 0.23.0: no recapture loop: not to the bot (or squad) that just let him go or walked away.
+            if ((source == SurrenderSource.Natural || source == SurrenderSource.Demand || source == SurrenderSource.Recapture) && Encounter.RecentlyFreedFrom(bot, captor, out string freed))
+            {
+                if (Settings.LogEncounter.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{Scenarios.Label(bot)}: no surrender to {Restraint.Name(captor)} ({reason}): {freed}");
+                return;
+            }
+
             if (States.TryGetValue(bot, out SurrenderState existing))
             {
                 // Mid-draw: a hands change on top of the pending draw is the busy-hands glitch.

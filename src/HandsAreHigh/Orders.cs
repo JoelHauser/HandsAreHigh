@@ -92,6 +92,23 @@ namespace HandsAreHigh
                 case OrderKind.ArmourOff:
                     QueueDrop(s, Arsenal.ItemsFor(s.Bot, Arsenal.ArmourOrderSlots, true), "armour off", human);
                     break;
+                case OrderKind.DropItem:
+                {
+                    // 0.23.0: one named item he wears (a bot captor's demand, GearNeeds): only if he
+                    // still wears it there; the drop is the same queued throw as every other order.
+                    var one = new List<KeyValuePair<EquipmentSlot, Item>>(1);
+                    if (s.DemandItem != null && Arsenal.StillWorn(s.Bot, s.DemandSlot, s.DemandItem))
+                        one.Add(new KeyValuePair<EquipmentSlot, Item>(s.DemandSlot, s.DemandItem));
+                    QueueDrop(s, one, $"drop your {GearNeeds.SlotWord(s.DemandSlot)}", human);
+                    break;
+                }
+                case OrderKind.StepBack:
+                    // 0.23.0: off the gear at his feet, to the spot his captor picked (StepBackTo).
+                    if (Kneel.Active(s) || s.Order == Order.Kneel) break;
+                    s.Order = Order.StepBack;
+                    s.StepBackUntil = Time.time + 5f;
+                    Answer(s, VoiceEvent.Acknowledge);
+                    break;
                 case OrderKind.Follow:
                     s.Order = Order.Follow;
                     Facing.Clear(s);   // he walks after you, facing where he goes

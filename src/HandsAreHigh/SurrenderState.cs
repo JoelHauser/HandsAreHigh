@@ -19,7 +19,9 @@ namespace HandsAreHigh
 
     // A standing order from the captor. Separate from the phase: a bot following you is
     // still in HandsUp and still watching for an opening.
-    internal enum Order { None, Follow, Kneel }
+    // 0.23.0 StepBack: a captor asked him to step off the gear at his feet (one short walk,
+    // hands up, facing his captor; CaptorLoot.StandPoint).
+    internal enum Order { None, Follow, Kneel, StepBack }
 
     internal sealed class SurrenderState
     {
@@ -101,6 +103,24 @@ namespace HandsAreHigh
         internal bool CaptorInView = true;
         // 0.15.0: who gave the last order (logged; never a look target by itself). Captor is custody.
         internal Player OrderIssuer;
+
+        // 0.23.0: the encounter's speech floor (Encounter.FloorFree / TookFloor): who spoke last
+        // among the prisoner, his captor and the covering squadmate, and until when it is his.
+        internal Player FloorBy;
+        internal float FloorUntil;
+        // 0.23.0: being left (SurrenderLogic.Abandonment), from what he can see only.
+        internal float LeftEvidence;          // seconds' worth of "he is leaving" cues
+        internal float LeftDecideAt = -1f;    // he believes it at this time (his assessment)
+        internal string LeftWhy;              // the cue he took it from
+        internal float LeftSince = -1f;       // custody (or the last cue reset) ended at
+        internal bool LeftCoveredLogged, LeftCancelLogged;
+        internal string CoverLogWho;          // Reactions.Covered: the squad cover last logged (no repeats)
+        internal float LeftLastCheck = -1f;
+        // 0.23.0: the captor's equipment demand (GearNeeds): the one item asked for, and where to step.
+        internal EquipmentSlot DemandSlot;
+        internal Item DemandItem;
+        internal Vector3 StepBackTo;
+        internal float StepBackUntil;
         // 0.15.0: resistance decided but not yet visible to the bots around him.
         internal string ArmedPending;
         internal float ArmedPendingSince;
@@ -320,6 +340,10 @@ namespace HandsAreHigh
         internal bool KneelHelmet;
         internal float KneelHelmetAt;
         internal Vector3 KneelAnchor, KneelAnchorFwd;           // where the ground was checked
+        // 0.23.0: the root held on the knees' direction (Kneel.HoldRoot) and the settle check before
+        // a kneel is committed (Kneel.StillTurning).
+        internal float KneelDrift, KneelYawPrev, KneelYawAt = -1f, KneelTurnWaitSince = -1f;
+        internal bool KneelDriftLogged;
         internal readonly float[] KneelGround = new float[6];   // knee L/R, foot L/R, front-foot step L/R: ground height vs his feet
         internal float KneelClock, KneelDtMin, KneelDtMax;      // transition timeline (log)
         internal int KneelFrames;

@@ -26,9 +26,12 @@ namespace HandsAreHigh
             if (SquadCovers(s, captor, bot, watchAngle, out string who, out string idle))
             {
                 kind = null; strength = 0f; clear = false;
-                if (Settings.VerboseLogs.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his captor isn't covering him, but {who} is");
+                // 0.23.0: once per change of who covers him (the 0.22.0 log had this line 4x a second).
+                if (Settings.VerboseLogs.Value && s.CoverLogWho != who) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his captor isn't covering him, but {who} is");
+                s.CoverLogWho = who;
                 return true;
             }
+            s.CoverLogWho = null;
             // 0.20.0: another of them in plain sight but not on him right now (reloading, looking
             // out, fighting someone else): still an armed man there, so the opening is a little
             // smaller than with nobody about, and he can see it change.
@@ -124,7 +127,7 @@ namespace HandsAreHigh
         // change, firing elsewhere, where he looks, a line), never whether one was given a role or
         // what he is paying attention to. idle: one he sees who isn't on him right now. "Behind
         // him, assumed" only for a man he has seen (SeenSquad): an unseen squadmate is unknown to him.
-        private static bool SquadCovers(SurrenderState s, Player captor, Player bot, float watchAngle, out string who, out string idle)
+        internal static bool SquadCovers(SurrenderState s, Player captor, Player bot, float watchAngle, out string who, out string idle)
         {
             who = null; idle = null;
             var map = Restraint.EntriesFor(bot);

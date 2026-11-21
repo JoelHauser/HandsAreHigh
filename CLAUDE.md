@@ -6,6 +6,119 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.23.0 (2026-11-21): encounters end on their own; prisoners notice being left; one voice per
+encounter and no silent squad kills; kneeling turns without twisted feet; captors demand gear they
+lack; pick-ups from a spot beside the item. From Joel's pasted 7-part spec and the 0.22.0 raid log
+(LogOutput 2026-11-21 04:58, 5 scenarios). Release packed (dist/HandsAreHigh-0.23.0.zip) and
+installed in H:\SPT4.1.X (0.22.0 DLL backed up in that session's scratchpad, backup-0.22.0). Committed and pushed to main 2026-11-21 (no tag/release). NEVER RUN IN GAME.**
+
+Root causes (evidence: the 04:58 log, code, the 0.16.9 decompile in an earlier scratchpad):
+- Captors hanging around: Captors.Check waited for HoldUntil (25-70 s) before the Leave step of
+  every plan except "disarm and release", and every plan ended in a Leave order. Log #7: plan done
+  ~38 s in, "lets him go within 61 s", stood over a kneeling man until Joel intervened.
+- No way to walk off: custody could only end by an order, fire, a kill or lost sight; a captor
+  who just left made the prisoner run (DecideOnLeave: run / hide / draw, all flights).
+- Squadmates shooting a prisoner (no case in this log; found in code): (1) Restraint.InformSquad
+  told only squadmates within SquadNoticeRadius at custody; one further away got no decision, so
+  his AI (and SAIN, which shares the group's enemies) fought the man on sight; the scan only
+  decided for squadmates who could see him. (2) SquadDecision re-rolled SquadRejectChance at
+  every re-decision (situation change, hand-over, expired entry): a squadmate who had held fire
+  could later "decide" to shoot a compliant man, logged only as a restraint line. (3) A hit by a
+  bot with no decision was not logged at all (OnPrisonerHit returned).
+- Squad dialogue: no shared turn-taking; each bot only checked his own speaker and his own
+  prisoner. (Log spam fixed too: "his captor isn't covering him, but X is" 4x a second, and
+  "loses sight of his captor" on every Presence reset.)
+- Twisted foot on a kneeling turn: Kneel.TryBegin committed the kneel's frame (KneelAnchorFwd,
+  the feet's orientation) as soon as Facing was within 10 deg, while the game's stepping-turn clip
+  and the pivot were still turning the root; nothing held the root while kneeling. Legs solved in
+  the old direction, hips still turning; CheckMoved re-anchored at >10 deg (log: "kneel: moved
+  while down" right after the re-kneel). The rise pivot allowed 70 deg over planted feet.
+- Loot jitter / walking into the prisoner: the fetch path went to the item itself (shortened
+  0.7 m along the path); an item at the man's feet put the path end in his capsule; the
+  settle test was distance-to-item + speed; any threat level (even Alert, an enemy seen 5 s ago)
+  stopped a 2 m pick-up and it restarted later.
+
+What changed:
+- Encounter.cs (new): once nothing is left to do (plan steps given, no gear to take now, no
+  demand under way; a postponed demanded item keeps him 20 s at most), the captor lingers
+  (Lingers min/max x caution; x0.35 with an enemy about) and decides ONCE (logged with inputs):
+  lethal intent first (Judgement.AtRelease, unchanged), then Leave order vs walk away (Walk away
+  chance x boldness, x1.8 enemy about, x1.5 squad moving on, x1.3 kneeling/turned away, x0.4 a
+  weapon still on him), and with an effective covering squadmate maybe GuardBehind (Captors.HandTo:
+  custody to the guard, leader's decision inherited, no new lethal roll, plan Stay+Leave, 8-20 s).
+  Walk away = End(released) with no order, no deferred fetch, prisoner left Accepted. Every
+  ending: "back to his own AI (...)" and a "4 s after the hand-back: layer <name>" line.
+  No recapture: Encounter.Remember/Recently: that captor's group takes nobody of that man (Captors.
+  Impractical) and he doesn't surrender to them (SurrenderRegistry.Surrender) for 60 s.
+- Prisoner (SurrenderLogic.Abandonment): custody over, bot captor alive, Accepted: evidence from
+  cues he can see/hear (walking off back turned 1.6/s, walking off 1, standing off + gun away 0.6,
+  turned away 0.35, heard walking off behind 0.9, out of sight 1/s; covered again -3/s); at 1.2
+  he takes it in (Assess min/max x AssessFactor: nerve, personality, kneeling), cancelled if the
+  captor covers him again; a squadmate he sees covering him (Reactions.SquadCovers, now internal)
+  keeps him in place. Decision once: walk off (HandBack -> Released -> his own AI), get his own gun
+  (<=12 m, captor out of sight or >20 m, reachable) or draw a kept gun (same distance rule).
+  Bounded 45 s. No openings weighed meanwhile. Replaces DecideOnLeave for this case only.
+- Restraint: custody informs the whole squad (no radius); the scan gives a custody squadmate his
+  decision without sight; a holding squad decision is carried over without a roll; a squad
+  refusal is SquadKill: "DECIDES TO KILL ... against his squad (...)", Final; a hit by a bot with
+  no decision: "PRISONER HIT WITHOUT A DECISION" (warning, custody squad: then the squad rule
+  applies) or an info line for an outsider, once per shooter and man.
+- Speech floor (Encounter.MaySay / FloorFree / TookFloor; CaptorVoice, Voice): orders only from
+  the custody holder; a covering squadmate only Covering/Threat/UnderFire/Resist/TakeOver; a
+  non-urgent line waits while another of the encounter speaks or within his clip + 1.2 s.
+- Kneel: TryBegin waits "still turning" (TurnDriver.DriveMode, or yaw moving >1.2 deg between
+  0.2 s checks; bounded 2.5 s); HoldRoot keeps the root yaw on KneelAnchorFwd (ApplyRotation)
+  while going down, down and rising before the pivot (logs once if >2 deg was corrected); MaxPivot
+  70 -> 40.
+- GearNeeds.cs (new): captor with no ArmorVest / TacticalVest / Backpack; the prisoner's item in
+  that slot must land in that very slot by the captor's own FindSlotToPickUp (decompile:
+  InventoryEquipment.FindSlotToPickUp -> Slot.FindLocationForItem/CheckConditions), armour class
+  >= 2 and >= 30% durability (worst ArmorComponent.Repairable), rig >= 6 cells or armoured,
+  backpack >= 12 cells; want 0.8 x greed; one demand per slot per encounter (OrderKind.DropItem,
+  captor only); the dropped item is a Needed loot candidate (wanted, demanded risk); after the
+  transfer the slots are read again. The pick-up's QuickFindAppropriatePlace(PickUp) includes
+  TryEquip (decompile: PickUp = 0x33, TryEquip = 0x20) so it equips into the empty slot.
+- CaptorLoot.StandPoint: one spot beside the item (0.5-0.85 m, >= 0.8 m from the prisoner,
+  capsule clear of PlayerStaticCollisionsMask, NavMesh, line to the item, <= 3 path solves, own
+  side first); walked to exactly, arrival = the spot; re-chosen only if the prisoner steps into it
+  (checked 2x/s, twice at most). No spot: the man is told once to step back 1.3 m
+  (OrderKind.StepBack / Order.StepBack, a walk with hands up, 5 s max), else after the release.
+  Near pick-ups are stopped only by Fire/Contact (Alert stops a distant walk only). The look
+  target no longer flips at 3 m (Close latch).
+- Settings section 25 "Encounter endings" (14 keys). Scenarios: "Encounter ending: captor walks
+  away", "Encounter ending: squad leaves a guard", "Squad dialogue", "Squadmate and the prisoner",
+  "Kneeling turns", "Captor demands gear", "Pick-up at the prisoner's feet"; captor kit presets
+  No body armour / No rig / No backpack / all three.
+
+Tests done (offline): Debug + Release builds 0 warnings; pack.ps1 config-name check; Settings.Bind
+on a copy of Joel's cfg through the built DLL, twice: 411 entries, exactly the 14 new keys added,
+no existing value changed; tools/standsim/standsim.py 20/20 (spot found for every gun position at
+the feet, >= 0.80 m from him, look-down 63-67 deg; corridors to 1.1 m wide; captor behind);
+firesim 12/12 and releasesim unchanged. NOT done: anything in a raid. Not verified in game: ORBIT
+taking a captor back after a walk-away, SAIN's look/target right after the hand-back, whether
+HoldRoot fights a clip's root motion visibly, the StepBack walk.
+
+### In-game test plan (0.23.0)
+Log decisions, Log loot, Log encounter endings, Log restraint, Log voice on (Verbose for floor waits).
+1. "Encounter ending: captor walks away", Standing / Kneeling / Kneeling turned away, ending his
+   own: `done with ... lingers`, `how his hold on ... ends: ... -> walks off|tells him to go`,
+   `4 s after the hand-back: layer <SAIN/ORBIT layer>, moving`. Prisoner: `notices ... takes it in
+   for N s`, `left by ...: -> walk off|get his gun`, `back to his own AI`, `after release +15/+30 s`,
+   no STILL NEAR. Repeat with Walks away (FORCED) and gun removed.
+2. "Encounter ending: squad leaves a guard" (3): `hands ... over to <guard> (stays behind ...)`,
+   prisoner `... still covers him: stays put`, then the guard's own ending and the prisoner leaving.
+3. "Squad dialogue": orders from PMC-1 only, one `says` at a time; hostile bot: UnderFire at once.
+4. "Squadmate and the prisoner": `Restraint: <PMC-3> holds fire ... (squad)` at custody although
+   45 m away; never PRISONER HIT WITHOUT A DECISION / RESTRAINT LEAK. Deliberate: `DECIDES TO KILL
+   ... against his squad (FORCED ...)` then `shot ... as decided`.
+5. "Kneeling turns" x3, each interrupt option, on flat ground, stairs and rubble: feet turn with
+   him, no `kneel: moved while down` after a re-kneel; `kneel: waits (still turning)` (Verbose).
+6. "Captor demands gear", each Captor lacks: `gear he lacks ... -> tells him to drop it` or
+   `won't do (...)`, `took ... into his ArmorVest/TacticalVest/Backpack slot`, never asked twice.
+7. "Pick-up at the prisoner's feet": open ground, a corridor, a small room, standing and kneeling:
+   `stands to pick up the ... N m from it, N m from <prisoner>`, one smooth walk, no capsule push;
+   confined: `tells him to step back off it` / `takes it after letting him go`.
+
 **0.22.0 (2026-11-20): turns without shoulder lag, captors answer the real shooter (not the
 prisoner), a clearer hands-up pose, seamless hands-up <-> hands-behind-head. From Joel's pasted
 3-part spec + a 4th part (transitions) and the 0.21.0 raid log (LogOutput 22:49) and screenshot.

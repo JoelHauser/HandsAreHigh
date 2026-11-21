@@ -236,6 +236,18 @@ namespace HandsAreHigh
                     else Hold(Kneel.HoldPose(s));
                     break;
                 case Order.Follow when captorAlive: Follow(s, captor); break;
+                // 0.23.0: off the gear at his feet, to the spot his captor picked (one short walk,
+                // hands up, eyes on his captor; at most StepBackUntil).
+                case Order.StepBack:
+                    if (Time.time > s.StepBackUntil || Arrived(s.StepBackTo, 0.3f) || !MoveTo(s, s.StepBackTo, sprint: false))
+                    {
+                        StopMoving();
+                        s.Order = Order.None;
+                        if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: stepped back off his gear ({Perception.Flat(Me.Position, s.StepBackTo):0.0} m from the spot)");
+                        Hold(Settings.Stance.Value);
+                    }
+                    else BotOwner.SetTargetMoveSpeed(0.5f);
+                    break;
                 default: Hold(Settings.Stance.Value); break;
             }
             // He faces the captor he sees; otherwise where he last knew him to be. Not while any
@@ -409,6 +421,16 @@ namespace HandsAreHigh
                 // shooter) stands a little longer, so it can be seen; the offer timer still ends it.
                 float hiddenLimit = s.Accepted ? Settings.LeaveSeconds.Value : 2.5f * Settings.LeaveSeconds.Value;
                 if (now - s.CaptorHiddenSince > hiddenLimit) gone = $"captor out of sight {hiddenLimit:0} s";
+            }
+            // 0.23.0: left by a bot captor (custody over, the captor alive): his own assessment of
+            // what he can see (Abandonment), never the captor's decision; it replaces the 0.22
+            // "captor gone" flight (run / hide / draw) for this case. While he weighs it his captor
+            // isn't guarding him, so no "opening" decisions either.
+            if (captorAlive && captor.IsAI && s.Custody == null && s.Accepted && Settings.PrisonerNoticesAbandon.Value)
+            {
+                s.LeaveAt = -1f;
+                Abandonment(s, captor, seen, inView, dist, now);
+                return;
             }
             // An unanswered surrender does not hold him forever: nobody acknowledged it (no human
             // came close or aimed at him, no bot took custody) by OfferUntil, so he seeks safety.
@@ -602,6 +624,141 @@ namespace HandsAreHigh
                 float soon = Time.time + s.NoticeDelay();
                 s.DecideAt = s.DecideAt < 0f ? soon : Mathf.Min(s.DecideAt, soon);
             }
+        }
+
+        // ---- 0.23.0: left by his captor ------------------------------------------------------------
+        //
+        // Only what he can see or hear: his captor walking off (more so with his back turned), his
+        // gun away from him, standing off further than he ever was, or gone out of sight; heard
+        // walking off behind him when he faces away. Each check adds "being left" evidence (and his
+        // captor covering him again takes it away fast). Once there is enough, he takes it in for a
+        // personality-dependent moment (Encounter.AssessFactor: nerve, personality, kneeling), then
+        // decides once: walk off (his own AI), get his own gun if it is still there, near and safe,
+        // or draw one he kept if his captor is well away. A squadmate he can see covering him keeps
+        // him in place (evidence reset). Bounded: 45 s after custody ended he decides anyway.
+        private const float LeftThreshold = 1.2f, LeftBound = 45f;
+
+        private void Abandonment(SurrenderState s, Player captor, bool seen, bool inView, float dist, float now)
+        {
+            if (s.LeftSince < 0f) { s.LeftSince = now; s.LeftEvidence = 0f; s.LeftDecideAt = -1f; s.LeftLastCheck = now; }
+            float dt = Mathf.Clamp(now - s.LeftLastCheck, 0f, 0.5f);
+            s.LeftLastCheck = now;
+
+            // Someone else of them holding him at gunpoint: he stays put (and is not left).
+            if (Reactions.SquadCovers(s, captor, Me, Settings.WatchAngle.Value, out string who, out _))
+            {
+                if (!s.LeftCoveredLogged && Settings.LogEncounter.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his captor isn't on him, but {who} still covers him: stays put");
+                s.LeftCoveredLogged = true;
+                s.LeftEvidence = 0f;
+                if (s.LeftDecideAt >= 0f) Cancel(s, $"{who} covers him");
+                return;
+            }
+            s.LeftCoveredLogged = false;
+
+            string cue = null;
+            float w;
+            Vector3 toMe = Me.Position - captor.Position; toMe.y = 0f;
+            Vector3 v = captor.Velocity; v.y = 0f;
+            bool goingAway = v.sqrMagnitude > 0.4f * 0.4f && toMe.sqrMagnitude > 0.01f && Vector3.Dot(v, toMe) < 0f;
+            if (seen && inView)
+            {
+                Vector3 look = captor.LookDirection; look.y = 0f;
+                float lookAway = toMe.sqrMagnitude > 0.01f && look.sqrMagnitude > 1e-4f ? Vector3.Angle(look, toMe) : 0f;
+                string gunOff = Overwatch.Visibly(captor, Me, Settings.WatchAngle.Value);
+                bool further = dist > s.ClosestDist + 3f;
+                if (goingAway && lookAway > 90f) { cue = "walks off with his back to him"; w = 1.6f; }
+                else if (goingAway) { cue = "walks away from him"; w = 1f; }
+                else if (further && gunOff != null) { cue = $"stands off further than before, {gunOff}"; w = 0.6f; }
+                else if (gunOff != null && lookAway > 100f) { cue = "has turned away from him"; w = 0.35f; }
+                else w = -3f;   // he's on him: not left
+            }
+            else if (seen)
+            {
+                // Behind him (he faces away or kneels turned away): what he hears.
+                if (goingAway) { cue = "hears him walk off behind him"; w = 0.9f; }
+                else if (dist > s.ClosestDist + 4f) { cue = "his steps behind him have gone off"; w = 0.5f; }
+                else w = 0f;   // still there behind him: assumed on him
+            }
+            else
+            {
+                float hidden = s.CaptorHiddenSince >= 0f ? now - s.CaptorHiddenSince : 0f;
+                cue = "his captor is out of sight";
+                w = hidden > 2f ? 1f : 0.3f;
+            }
+            s.LeftEvidence = Mathf.Clamp(s.LeftEvidence + w * dt, 0f, 10f);
+            if (cue != null) s.LeftWhy = cue;
+
+            bool bound = now - s.LeftSince > LeftBound;
+            if (s.LeftDecideAt < 0f)
+            {
+                if (s.LeftEvidence < LeftThreshold && !bound) return;
+                float assess = bound ? 0.5f : Settings.Between(Settings.AbandonAssessMin, Settings.AbandonAssessMax) * Encounter.AssessFactor(s);
+                s.LeftDecideAt = now + assess;
+                s.LeftCancelLogged = false;
+                if (Settings.LogEncounter.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: notices {Restraint.Name(captor)} {(bound ? $"hasn't guarded him for {LeftBound:0} s" : s.LeftWhy)} ({dist:0} m); " +
+                        $"takes it in for {assess:0.0} s (nerve {s.Nerve:0.00}{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}{(s.Kneel == KneelPhase.Down ? ", on his knees" : "")})");
+                return;
+            }
+            if (s.LeftEvidence <= 0f && !bound) { Cancel(s, $"{Restraint.Name(captor)} has his gun on him again"); return; }
+            if (now < s.LeftDecideAt) return;
+            s.LeftDecideAt = -1f;
+            LeftDecide(s, captor, seen, dist);
+        }
+
+        private static void Cancel(SurrenderState s, string why)
+        {
+            s.LeftDecideAt = -1f;
+            if (!s.LeftCancelLogged && Settings.LogEncounter.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: thought he was left, but {why}: keeps his hands up");
+            s.LeftCancelLogged = true;
+        }
+
+        private void LeftDecide(SurrenderState s, Player captor, bool seen, float dist)
+        {
+            Gestures.Cancel(s, "left by his captor");
+            float now = Time.time;
+            var log = new StringBuilder($"{s.Name}: left by {Restraint.Name(captor)} ({s.LeftWhy}, {dist:0} m), lowers his hands (nerve {s.Nerve:0.00}): ");
+            var options = new List<Choice>(3);
+            Add(options, log, "walk off", Mathf.Lerp(0.8f, 1.3f, Mathf.InverseLerp(0.6f, 1.6f, s.Flee)));
+            bool far = !seen || dist > 20f;
+            // His own gun: still where he believes it is, close, reachable, his captor well away from it.
+            float toGun = s.DroppedWeapon != null ? Perception.Flat(Me.Position, s.DropPosition) : 999f;
+            if (s.DroppedWeapon == null) log.Append("his gun: he didn't drop one; ");
+            else if (s.GunGone) log.Append("his gun: he saw it's gone; ");
+            else if (toGun > 12f) log.Append($"his gun: {toGun:0} m away; ");
+            else if (!far) log.Append($"his gun: {Restraint.Name(captor)} still too close ({dist:0} m); ");
+            else if (!Perception.Reachable(Me.Position, s.DropPosition)) log.Append("his gun: can't get to it; ");
+            else Add(options, log, "get his gun", 0.9f * s.Fight * (0.5f + s.Nerve));
+            EquipmentSlot? kept = Arsenal.GunOnBody(Me);
+            if (kept == null) log.Append("draw: no gun on him; ");
+            else if (!far) log.Append("draw: his captor too close; ");
+            else Add(options, log, "draw " + Arsenal.SlotName(kept), 0.5f * s.Fight * s.Nerve);
+            Choice chosen = Pick(options, log);
+            if (Settings.LogEncounter.Value || Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo(log.ToString());
+
+            if (chosen.Name == "get his gun")
+            {
+                s.MarkFlight();
+                s.FleeLockUntil = now;   // he wasn't chased off: his own gun isn't off limits
+                Kneel.Urge(s, KneelRise.Compliant);
+                s.LowerArms(Settings.LowerSeconds.Value);
+                s.GraceUntil = now + Settings.Grace.Value;
+                s.Order = Order.None;
+                s.TargetWeapon = s.DroppedWeapon;
+                s.TargetPoint = s.DropPosition;
+                s.RecoverTries++;
+                s.SetPhase(Phase.Recovering, "left by his captor: goes back for his own gun");
+                return;
+            }
+            if (chosen.Name != null && chosen.Name.StartsWith("draw") && Arsenal.Draw(s, BotOwner, false))
+            {
+                Kneel.Urge(s, KneelRise.Compliant);
+                Rearm(s, $"left by his captor: draws the {Arsenal.SlotName(kept)} he kept");
+                return;
+            }
+            s.MarkFlight();
+            HandBack(s, $"left by {Restraint.Name(captor)}: walks off");
         }
 
         // The captor is gone (walked off, out of sight, dead). What he does depends on what he
