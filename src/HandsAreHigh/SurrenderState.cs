@@ -239,6 +239,13 @@ namespace HandsAreHigh
         // 0.26.0: re-armed with the gun at his feet after being left (SurrenderLogic.TryGunAtFeet):
         // no battle cry, no turn to his ex-captor while the draw plays; his own AI decides what next.
         internal bool CalmRearm;
+        // 0.28.0: the bot he gave up to wasn't interested (Captors.TryIgnore): no custody, no orders,
+        // no approach; he notices it (SurrenderLogic.Abandonment), gets his gun back if he safely can
+        // and is handed back under a truce with that bot and his squad (Truce.Begin).
+        internal Player IgnoredBy;
+        internal float IgnoredAt = -1f;
+        internal bool IgnoredWaitLogged;
+        internal bool Ignored => (object)IgnoredBy != null && IgnoredBy == Captor;
         // 0.25.0: the hand-off timeline (Time.time; -1 = didn't happen). Logged by ReleaseWatch once
         // his own AI is seen driving him, so "where does the delay come from" is a log fact.
         internal float TLeftCue = -1f, TLeftNoticed = -1f, TEscape = -1f, THandsDown = -1f, TOnFeet = -1f,
@@ -519,6 +526,9 @@ namespace HandsAreHigh
             HandBackWhy = null;
             LeftHeldAt = -1f;
             QuickHandBack = HandBackMoving = CalmRearm = false;
+            IgnoredBy = null;
+            IgnoredAt = -1f;
+            IgnoredWaitLogged = false;
             TLeftCue = TLeftNoticed = TEscape = THandsDown = TOnFeet = TFirstMove = TLayerOff = -1f;
             EscapeKind = null;
             OfferUntil =Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * Nerve);

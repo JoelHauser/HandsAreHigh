@@ -38,7 +38,7 @@ namespace HandsAreHigh
     //
     // 0.25.0: the interact key (EGameKey.Interact -> ToggleInputKeyCombination BeginInteracting /
     // EndInteracting, InputManager.Init; verified in the 0.16.9 decompile) opens and confirms the
-    // order menu when "Interact key opens the order menu" is on. Its commands are removed while the
+    // order menu when "Interact key opens the menu" is on. Its commands are removed while the
     // menu owns input AND while you look at a man the menu could open on (ClaimInteract, renewed
     // every frame by OrderMenu: the game may dispatch this frame's input before our Update runs, so
     // the press that opens the menu must already be ours), and a press made then is latched like a

@@ -94,6 +94,7 @@ namespace HandsAreHigh
             if (Settings.HandsOnHeadKey.Value.IsDown()) DebugCommand("hands", me);
             if (Settings.TurnKey.Value.IsDown()) DebugCommand("turn around", me);
             if (Settings.KillKey.Value.IsDown()) DebugCommand("captor decides to kill", me);
+            if (Settings.IgnoreKey.Value.IsDown()) DebugCommand("captor ignores him", me);   // 0.28.0
         }
 
         // Every debug key acts on exactly one bot: the one under the crosshair, resolved once
@@ -168,6 +169,7 @@ namespace HandsAreHigh
                     case "kneel urgent rise": outcome = Kneel.DebugUrgent(s, me); break;
                     case "hands": outcome = Kneel.DebugOrder(s, OrderMenu.Resolve(s, OrderKind.HandsOnHead), me); break;
                     case "turn around": outcome = Kneel.DebugOrder(s, OrderKind.TurnAround, me); break;
+                    case "captor ignores him": outcome = Captors.ForceIgnore(s) is string no ? no : $"{Restraint.Name(s.Captor)} ignores his surrender (watch the log)"; break;
                     default: outcome = SurrenderRegistry.DebugLeave(s); break;
                 }
             }

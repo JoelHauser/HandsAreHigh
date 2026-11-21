@@ -7,8 +7,8 @@ actually been seen in a raid is tracked in [../CURRENT_STATUS.md](../CURRENT_STA
 ## Setup
 
 - F12 > Hands Are High. Section 14 Debug: "Debug keys" on for debug keys and debug menu authority.
-  Logs (most default on): Log decisions, Log kneeling, Log escapes, Log encounter endings, Log restraint,
-  Log loot/gear decisions, Log incoming fire, Log squad cover; Verbose only when a line says it needs it.
+  Logs (7. Debugging, advanced, most default on): Log: decisions, kneeling, escapes, encounter endings,
+  hold-fire decisions, gear decisions, incoming fire, squad cover; Verbose only when a line says it needs it.
 - Section 17: "Scenario tools" on + a "Scenario menu key" to launch presets (debug sandbox; scenario
   bots are NOT raid evidence: SurrenderStats separates Natural/Demand from Scenario/DebugKey).
 - Log: `H:\SPT4.1.X\BepInEx\LogOutput.log` (overwritten each launch; no timestamps on lines). Our

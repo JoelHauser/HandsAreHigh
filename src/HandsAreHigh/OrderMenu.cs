@@ -159,7 +159,7 @@ namespace HandsAreHigh
             if (menuKey && _hover != null) Open(_hover);
         }
 
-        // 0.25.0: debug keys on and "Debug: order prisoners held by bots": the menu also opens on a
+        // 0.25.0: debug keys on and "Order prisoners held by bots": the menu also opens on a
         // bot's prisoner (debug scenarios). Explicit and debug-only; the order takes him over
         // (Orders.Give ends the bot's custody first: one captor, one controller).
         private static bool DebugAuthority => Settings.DebugKeys.Value && Settings.DebugOrderBotPrisoners.Value;
@@ -302,9 +302,9 @@ namespace HandsAreHigh
 
         private void HandleInput(Player me)
         {
-            if (Settings.NumberKeys.Value)
+            if (Settings.NumberKeysChoice.Value != NumberKeysMode.Off)
             {
-                bool pad = Settings.NumpadKeys.Value;
+                bool pad = Settings.NumberKeysChoice.Value == NumberKeysMode.Numpad;
                 for (int d = 0; d < 10; d++)
                 {
                     if (!Input.GetKeyDown(Alpha[d]) && !(pad && Input.GetKeyDown(Keypad[d]))) continue;
@@ -828,7 +828,7 @@ namespace HandsAreHigh
             // 0.17.0: the key hint, short (a passing message replaces it).
             private static string FooterHint(int count)
             {
-                string pick = Settings.NumberKeys.Value ? "1-9 give  0 close  " : "";
+                string pick = Settings.NumberKeysChoice.Value != NumberKeysMode.Off ? "1-9 give  0 close  " : "";
                 string sel = Settings.WheelSelect.Value ? "wheel" : $"{KeyText(Settings.PrevKey.Value.MainKey)}{KeyText(Settings.NextKey.Value.MainKey)}";
                 return $"{pick}{sel} + {KeyText(Settings.MenuKey.Value.MainKey)}";
             }

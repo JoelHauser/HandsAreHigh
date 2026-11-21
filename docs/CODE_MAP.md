@@ -1,4 +1,4 @@
-# Code map (src/HandsAreHigh, 0.26.0)
+# Code map (src/HandsAreHigh, 0.28.0)
 
 Files and the symbols to search for first. Verified against the tree on 2026-11-21; prefer
 `grep -n "SymbolName"` over line numbers. Many files open with a header comment that explains the
@@ -34,8 +34,10 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 - `SurrenderRegistry.cs`: `Surrender`, `Tick`, `HoldsBot`, `TryGet`, `HistoryOf` (`BotHistory`: nerve,
   reaction, cooldowns per bot per raid), `RequestDrop/StartDrop/AbandonRequest/CutReload`, `Witness`,
   `Discharge`, `Release`, `Unhook`, `Clear`, `EnsureRaid`.
-- `Settings*.cs` (partial class `Settings`): one file per section group; `Settings.V19.cs` holds
-  `Migrate` + `CurrentConfigVersion`. Sections 01-27; names must avoid `= \ " ' [ ]`.
+- `Settings*.cs` (partial class `Settings`, 0.28.0): `Settings.cs` (helpers `Text`/`Range`/`IntRange` with
+  the advanced flag and display order, `Bind`, `Migrate` + `CurrentConfigVersion`), one file per F12
+  section `Settings.1General.cs` .. `Settings.7Debugging.cs`, `Settings.Layout.cs` (`Moves`: old ->
+  new keys, `MigrateLayout`, the three merged settings). Names must avoid `= \ " ' [ ]`.
 - `Dice.cs` (seedable rolls), `Perf.cs` (profiler sections), `FastAccess.cs` (compiled SAIN readers).
 
 **Natural surrender and decisions**
@@ -52,7 +54,12 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 **Captors, custody, encounters, hostility**
 - `Captors.cs`: `OnSurrender`/`Decide`/`Impractical`/`Accept`, `Tick`/`Check` (plan steps), `Threat`,
   `HandTo`, `Interrupt`, `End`/`EndCustody`, `MaybeTakeOver`, `ForceAccept`, `WantsControl`,
-  `CaptorLayer`/`CaptorLogic`.
+  `CaptorLayer`/`CaptorLogic`. 0.28.0 ignored surrenders: `TryIgnore` (chance x personality/situation),
+  `Ignore`, `ForceIgnore` (debug key); the prisoner side is `SurrenderState.IgnoredBy`/`Ignored`,
+  `SurrenderLogic.Abandonment` (ignored cue, `ObserverCovers`), `LeftDecide` -> `IgnoredRecover`.
+- `Truce.cs` (0.28.0): (holder, other) hold-fire pairs after an ignored surrender, both ways, started
+  at the hand-back (`Truce.Begin`), ended by a hit between them, a re-hold or the time; read by the same
+  patches as restraint (GoalEnemy, ShootData, trigger, SAIN filter) via `Truce.Active`/`Blocks`.
 - `Encounter.cs`: endings (`WrapUp`, `WalkAway`), no-recapture memory (`Remember`, `Recently`,
   `EndedBy`), speech floor (`MaySay`, `FloorFree`, `TookFloor`), `AssessFactor`.
 - `Judgement.cs`: lethal intent and kill decisions (`Intend`, `AtRelease`, `OnBolt`, `AfterDemand`,
@@ -104,7 +111,7 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
   `ScenarioSpawner.cs` (spawning), `ScenarioStaging.cs` (`StagingLayer`, hold until all ready),
   `ScenarioOps.cs` (kit/items), `ScenarioEvents.cs`, `ScenarioShield.cs` (truce/observer pairs),
   `SpawnQuiet.cs` (no mag check at spawn). Diagnostics: `ReleaseWatch`, `SurrenderStats`, `Perf`,
-  "Log pose diagnostics" (Kneel.PoseDiag / Presence), overlay `SurrenderLayer.BuildDebugText`.
+  "Log: pose diagnostics" (Kneel.PoseDiag / Presence), overlay `SurrenderLayer.BuildDebugText`.
 
 **Optional integrations**
 - `SainAdapter.cs` (`ReleaseLayer`, personality, suppression), `SainTargetFilter.cs`, `FastAccess.cs`,

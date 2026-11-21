@@ -4,12 +4,13 @@ Update this file at every task boundary (replace, don't append a transcript). Us
 exactly: **implemented** / **build passed** / **simulation passed** / **verified in raid** (log or
 Joel's eyes). Release history lives in `docs/history/`.
 
-Last updated: 2026-11-21 (0.27.0: fingers laced behind the head).
+Last updated: 2026-11-21 (0.28.0: ignored surrenders, F12 menu in seven sections).
 
 ## State of the code
 
 | Version | Where | Level |
 |---|---|---|
+| 0.28.0 | UNCOMMITTED on main; packed (`dist/HandsAreHigh-0.28.0.zip`) and installed in H:\SPT4.1.X (hash-verified); 0.27.0 DLL + cfg in that session's scratchpad (`backup-0.27.0`); Joel's cfg not yet migrated (the mod does it at the next launch) | build passed (Debug + Release, 0 warnings), cfg check passed (bind.ps1 + carry.py on a copy of Joel's cfg: 428/428 values carried; merged settings on a synthetic copy); not run in game |
 | 0.27.0 | main @ b84c866 (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.27.0.zip`) and installed in H:\SPT4.1.X; 0.26.0 DLL + cfg in that session's scratchpad (`backup-0.26.0`) | build passed (Debug + Release, 0 warnings), simulation passed (tools/fingersim/lace.py); Joel: "looks better" in game (2026-11-21) |
 | 0.26.0 | main @ 0d1d50e (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.26.0.zip`) and installed in H:\SPT4.1.X; 0.25.0 DLL + cfg backed up in that session's scratchpad (`backup-0.25.0`) | build passed (Debug + Release, 0 warnings), simulation passed (overlap.py, releasesim, abandonsim), ORBIT members checked by reflection on the installed DLL; Joel: "looks better" in game (2026-11-21) |
 | 0.25.0 | main @ f2a4d51 (pushed, no tag/release) | ran in one raid: LogOutput 2026-11-21 03:31 (3 player-vs-Scav scenarios) + Joel's screenshot (top glove inside the other sleeve) |
@@ -18,10 +19,10 @@ No GitHub release exists for any version. Joel decides commits/pushes.
 
 ## Objective in progress
 
-Joel's 12th spec (0.26.0, notes in docs/history/releases-0.26.md): hands behind the head without
-clipping (fingers overlap in the middle, palms on their own sides), released men not walked back by a
-stale ORBIT objective (dropped at the hand-back), the gun his captor left at his feet picked up first.
-All implemented; waiting for a raid.
+Joel's 13th spec (0.28.0, notes + old->new key table in docs/history/releases-0.28.md): a bot may
+ignore a surrender (no custody, holds fire, back to his raid); the man notices, takes his gun back if
+safe or walks off, and both are under a truce at the hand-back. F12 menu: 7 sections, advanced
+settings hidden, 3 merged pairs, saved values migrated. All implemented; waiting for a raid.
 
 ## What the 0.25.0 raid log showed (verified in raid, log level)
 
@@ -48,6 +49,10 @@ All implemented; waiting for a raid.
 
 ## Needs in-raid verification (nothing below has been seen in game)
 
+0.28.0 (test plan in docs/history/releases-0.28.md):
+- First launch: `Config layout: 428 saved value(s) moved`; Joel's 10 changed values still set in F12.
+- Ignored surrender: `IGNORES the surrender`, prisoner `pays him no attention` -> gun back calmly or
+  walk-off, `Truce:` start/end lines, no shots between them, `Truce: ENDED` only on a hit.
 0.27.0 (notes in docs/history/releases-0.27.md):
 - Laced fingers behind the head (rear/side/front, standing and kneeling, either hand high): fingers
   alternating and across each other, no finger visibly through another, thumbs clear, clean transitions.

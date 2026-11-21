@@ -464,7 +464,9 @@ namespace HandsAreHigh
             // what he can see (Abandonment), never the captor's decision; it replaces the 0.22
             // "captor gone" flight (run / hide / draw) for this case. While he weighs it his captor
             // isn't guarding him, so no "opening" decisions either.
-            if (captorAlive && captor.IsAI && s.Custody == null && s.Accepted && Settings.PrisonerNoticesAbandon.Value)
+            // 0.28.0: a bot that wasn't interested in him (Captors.TryIgnore) is read the same way,
+            // whatever "Notices being left" says: nobody will come for him.
+            if (captorAlive && captor.IsAI && s.Custody == null && ((s.Accepted && Settings.PrisonerNoticesAbandon.Value) || s.Ignored))
             {
                 s.LeaveAt = -1f;
                 Abandonment(s, captor, seen, inView, dist, now);
@@ -680,6 +682,8 @@ namespace HandsAreHigh
         // him (CaptorLoot.GatheringNear: he is coming back), a squadmate covering him, a player aiming
         // his way. Bounded: 20 s after custody ended he decides anyway (was 45).
         private const float LeftThreshold = 1.0f, LeftBound = 20f;
+        // 0.28.0: an ignored man decides within this however the cues went (nobody is coming).
+        private const float IgnoredBound = 8f, IgnoredSquadLimit = 30f;
 
         private void Abandonment(SurrenderState s, Player captor, bool seen, bool inView, float dist, float now)
         {
@@ -688,7 +692,22 @@ namespace HandsAreHigh
             s.LeftLastCheck = now;
 
             // Someone else of them holding him at gunpoint: he stays put (and is not left).
-            if (Reactions.SquadCovers(s, captor, Me, Settings.WatchAngle.Value, out string who, out _) || PlayerCovers(out who))
+            // 0.28.0: so does any other bot who spared him and has him at gunpoint (ObserverCovers):
+            // one bot losing interest doesn't free him from everyone.
+            bool bySquad = Reactions.SquadCovers(s, captor, Me, Settings.WatchAngle.Value, out string who, out _);
+            bool covered = bySquad || PlayerCovers(out who) || ObserverCovers(s, captor, out who);
+            // 0.28.0: the squadmates of a bot that ignored him went along with it; one whose gun
+            // happens to point his way holds him a while, not for ever (a player or another bot
+            // with him at gunpoint still does).
+            if (covered && bySquad && s.Ignored && now - s.IgnoredAt > IgnoredSquadLimit)
+            {
+                if (!s.IgnoredWaitLogged && Settings.LogEncounter.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {who} still has a gun his way, but nobody has come for him in {now - s.IgnoredAt:0} s: stops waiting");
+                s.IgnoredWaitLogged = true;
+                covered = false;
+                s.LeftSince = Mathf.Min(s.LeftSince, now - IgnoredBound);   // decide now
+            }
+            else if (covered)
             {
                 if (!s.LeftCoveredLogged && Settings.LogEncounter.Value)
                     HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his captor isn't on him, but {who} still covers him: stays put");
@@ -742,6 +761,20 @@ namespace HandsAreHigh
                 cue = "his captor is out of sight";
                 w = hidden > 1f ? 1.8f : 0.4f;
             }
+            // 0.28.0: ignored: no orders, no approach, no one coming for him. It sinks in fast once
+            // the bot is plainly busy with something else; slowly while he still faces him (a gun that
+            // happens to point his way, but nobody giving orders); not while he walks up to him.
+            if (s.Ignored)
+            {
+                bool closing = seen && captor.Velocity.sqrMagnitude > 0.4f * 0.4f && toMe.sqrMagnitude > 0.01f && Vector3.Dot(captor.Velocity, toMe) > 0f && dist < s.ClosestDist + 0.5f;
+                float iw;
+                string icue;
+                if (closing) { iw = -1f; icue = null; }
+                else if (seen && inView && Overwatch.Visibly(captor, Me, Settings.WatchAngle.Value) == null) { iw = 0.5f; icue = "keeps looking his way but gives no orders"; }
+                else { iw = 2.2f; icue = "pays him no attention"; }
+                if (iw > w) { w = iw; cue = icue; }
+                else if (iw < 0f) { w = Mathf.Min(w, iw); cue = null; }
+            }
             s.LeftEvidence = Mathf.Clamp(s.LeftEvidence + w * dt, 0f, 10f);
             if (cue != null)
             {
@@ -750,7 +783,7 @@ namespace HandsAreHigh
             }
             else if (s.LeftEvidence <= 0f) s.TLeftCue = -1f;
 
-            bool bound = now - s.LeftSince > LeftBound;
+            bool bound = now - s.LeftSince > (s.Ignored ? IgnoredBound : LeftBound);
             if (s.LeftDecideAt < 0f)
             {
                 if (s.LeftEvidence < LeftThreshold && !bound) return;
@@ -760,7 +793,7 @@ namespace HandsAreHigh
                 s.TLeftNoticed = now;
                 if (s.TLeftCue < 0f) s.TLeftCue = now;
                 if (Settings.LogEncounter.Value)
-                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: notices {Restraint.Name(captor)} {(bound ? $"hasn't guarded him for {LeftBound:0} s" : s.LeftWhy)} ({dist:0} m, " +
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: notices {Restraint.Name(captor)} {(bound ? $"hasn't guarded him for {(s.Ignored ? IgnoredBound : LeftBound):0} s" : s.LeftWhy)}{(s.Ignored ? " (ignored his surrender)" : "")} ({dist:0} m, " +
                         $"cues for {now - s.TLeftCue:0.0} s); reacts in {assess:0.0} s (nerve {s.Nerve:0.00}{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}{(s.Kneel == KneelPhase.Down ? ", on his knees" : "")})");
                 return;
             }
@@ -790,6 +823,28 @@ namespace HandsAreHigh
             return false;
         }
 
+        // 0.28.0: another bot (not his captor) who decided to hold fire at him has him at gunpoint:
+        // close, a clear line, gun on him. He is still covered.
+        private bool ObserverCovers(SurrenderState s, Player captor, out string who)
+        {
+            who = null;
+            var map = Restraint.EntriesFor(Me);
+            if (map == null) return false;
+            Vector3 eye = Perception.Eye(Me);
+            foreach (RestraintEntry e in map.Values)
+            {
+                Player o = e.Observer;
+                if (!e.Holds || o == captor || !Perception.Alive(o) || e.Squad) continue;   // squadmates: SquadCovers
+                if (s.Ignored && o.AIData?.BotOwner?.BotsGroup != null && o.AIData.BotOwner.BotsGroup == captor?.AIData?.BotOwner?.BotsGroup) continue;
+                if ((o.Position - Me.Position).sqrMagnitude > 25f * 25f) continue;
+                if (!Presence.InView(s, Perception.Eye(o)) || !Perception.LineClear(eye, Perception.Eye(o))) continue;
+                if (Overwatch.Visibly(o, Me, Settings.WatchAngle.Value) != null) continue;
+                who = Restraint.Name(o);
+                return true;
+            }
+            return false;
+        }
+
         private static void Cancel(SurrenderState s, string why)
         {
             s.LeftDecideAt = -1f;
@@ -803,7 +858,18 @@ namespace HandsAreHigh
             float now = Time.time;
             // 0.26.0: the gun his captor left lying at his feet comes before any walk-off or roll.
             if (TryGunAtFeet(s, captor, $"left by {Restraint.Name(captor)}")) return;
-            var log = new StringBuilder($"{s.Name}: left by {Restraint.Name(captor)} ({s.LeftWhy}, {dist:0} m), lowers his hands (nerve {s.Nerve:0.00}): ");
+            // 0.28.0: ignored: nobody is coming for him, so he takes his own gun back if it is still
+            // there, reachable and nobody has him covered (a walk, not a scramble), or draws one he
+            // kept; otherwise he walks off to safety. No roll against walking off.
+            if (s.Ignored && IgnoredRecover(s, captor)) return;
+            var log = new StringBuilder($"{s.Name}: {(s.Ignored ? "ignored" : "left")} by {Restraint.Name(captor)} ({s.LeftWhy}, {dist:0} m), lowers his hands (nerve {s.Nerve:0.00}): ");
+            if (s.Ignored)
+            {
+                if (Settings.LogEncounter.Value || Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo(log.Append("no safe way to his gun: walks off to safety").ToString());
+                s.CalmFlight = true;
+                s.BeginRetreat($"ignored by {Restraint.Name(captor)}: walks off to safety", emergency: false);
+                return;
+            }
             var options = new List<Choice>(3);
             Add(options, log, "walk off", Mathf.Lerp(0.8f, 1.3f, Mathf.InverseLerp(0.6f, 1.6f, s.Flee)));
             bool far = !seen || dist > 20f;
@@ -907,6 +973,64 @@ namespace HandsAreHigh
             s.CalmRearm = true;
             s.SetPhase(Phase.Recovering, $"{context}: picks up {what} first ({d:0.0} m)");
             return true;
+        }
+
+        // 0.28.0: after an ignored surrender. His own dropped gun within "Ignored: fetch his gun
+        // within" (walking distance), still where it fell (Arsenal.Locate), reachable, not under fire,
+        // nobody covering him (Endangered): he walks to it and picks it up through the normal path
+        // (Recovering -> PickingUp -> draw), calmly (CalmRearm: no battle cry, no turn on anyone).
+        // Else a usable gun he kept is drawn calmly. False: nothing safe; the caller walks him off.
+        private bool IgnoredRecover(SurrenderState s, Player captor)
+        {
+            Item gun = s.DroppedWeapon;
+            float max = Settings.IgnoredRecoverRange.Value;
+            string no = null;
+            Vector3 at = s.DropPosition;
+            if (gun == null) no = "he didn't drop one";
+            else if (!Settings.RecoverOwnWeapon.Value) no = "recovering his own gun is off";
+            else if (s.GunGone) no = "he saw it's gone";
+            else if (s.Skip.Contains(gun)) no = "failed to get it before";
+            else if (Perception.Flat(Me.Position, s.DropPosition) > max) no = $"{Perception.Flat(Me.Position, s.DropPosition):0} m away";
+            else if (!Arsenal.Locate(gun, s.DropPosition, 3f, out at)) { s.GunGone = true; no = "it isn't there any more (taken)"; }
+            else if (FireBreak.Blocks(Me)) no = "under fire";
+            else if (s.HandsPending || s.DrawPending || s.DropPending) no = "a hands change of ours is still open";
+            else if (Endangered(s, captor, at, out string danger)) no = danger;
+            else if (!Perception.PathTo(Me.Position, at, out Vector3[] path, out string noPath)) no = $"can't reach it ({noPath})";
+            else if (Captors.PathLength(path) > max * 1.5f) no = $"{Captors.PathLength(path):0} m to walk";
+            float now = Time.time;
+            if (no == null)
+            {
+                s.TEscape = now; s.EscapeKind = "fetches his gun (ignored)";
+                s.MarkFlight();
+                s.FleeLockUntil = now;   // nobody chased him off it
+                Kneel.Urge(s, KneelRise.Compliant);
+                s.LowerArms(Settings.LowerSeconds.Value);
+                s.GraceUntil = now + Settings.Grace.Value;
+                s.Order = Order.None;
+                s.DropQueue.Clear();
+                s.TargetWeapon = gun;
+                s.TargetPoint = at;
+                s.Scrambling = false;
+                s.RecoverTries++;
+                s.CalmRearm = true;
+                s.SetPhase(Phase.Recovering, $"ignored by {Restraint.Name(captor)}: lowers his hands and goes back for his {gun.ShortName.Localized()} ({Perception.Flat(Me.Position, at):0.0} m)");
+                return true;
+            }
+            Escape.LogRefusal(s, gun != null ? $"his {gun.ShortName.Localized()} (ignored)" : "his gun (ignored)", no);
+            EquipmentSlot? kept = Arsenal.UsableGun(Me, out string keptWhy);
+            if (kept != null && !FireBreak.Blocks(Me) && !Endangered(s, captor, Me.Position, out string keptDanger))
+            {
+                s.CalmRearm = true;
+                if (Arsenal.Draw(s, BotOwner, false))
+                {
+                    s.TEscape = now; s.EscapeKind = "draws (ignored)";
+                    Kneel.Urge(s, KneelRise.Compliant);
+                    Rearm(s, $"ignored by {Restraint.Name(captor)}: lowers his hands and draws the {Arsenal.SlotName(kept)} he kept");
+                    return true;
+                }
+                s.CalmRearm = false;
+            }
+            return false;
         }
 
         // Picking it up now would expose him: someone has him covered, or his ex-captor (in sight)
@@ -1750,7 +1874,7 @@ namespace HandsAreHigh
         private bool PickRetreat(SurrenderState s)
         {
             if (!s.HeldSet) { s.HeldAt = Me.Position; s.HeldSet = true; s.FleeSince = s.LegSince = Time.time; s.FleeFrom = Me.Position; }
-            float radius = Mathf.Max(Settings.CaptivityRadius.Value, Settings.SafeDistance.Value);
+            float radius = Settings.FleeDistance.Value;
             // Only what he perceives: the captor where he sees him now (and how he is moving), else
             // where he last saw him (standing still, as far as he knows).
             bool sees = Perception.Alive(s.Captor) && Perception.Sees(Me, s.Captor, Vector3.Distance(Me.Position, s.Captor.Position));
@@ -1780,7 +1904,7 @@ namespace HandsAreHigh
         // 12 m out of sight was enough: the released men of the 0.23.0 raid stopped 5-15 m away).
         private void LegDone(SurrenderState s, string why)
         {
-            float radius = Mathf.Max(Settings.CaptivityRadius.Value, Settings.SafeDistance.Value);
+            float radius = Settings.FleeDistance.Value;
             float sep = Perception.Flat(Me.Position, s.HeldAt);
             Vector3 threat = ThreatPos(s, s.Captor);
             float fromThreat = Perception.Flat(Me.Position, threat);
@@ -1884,7 +2008,7 @@ namespace HandsAreHigh
             // runs out (no escape, linger, recapture loop). Weapons he carries stay options (above).
             float lockUntil = Mathf.Max(s.FleeLockUntil, s.HeldSet && s.FleeSince > 0f ? s.FleeSince + Settings.EscapeMemory.Value : 0f);
             bool committed = s.HeldSet && Time.time < lockUntil;
-            float area = Mathf.Max(Settings.CaptivityRadius.Value, Settings.KeepAwayRadius.Value);
+            float area = Mathf.Max(Settings.FleeDistance.Value, Settings.KeepAwayRadius.Value);
             bool ownInArea = committed && s.DroppedWeapon != null && Perception.Flat(s.DropPosition, s.HeldAt) < area;
             // 0.21.0: two tries at a gun after getting away, then his own AI (no endless fetching).
             bool fetch = s.RecoverTries < 2;

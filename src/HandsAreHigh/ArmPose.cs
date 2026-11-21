@@ -121,7 +121,7 @@ namespace HandsAreHigh
         // `palmFaces`; the wrist bends at most WristMax from the forearm. Measured from the live
         // finger bones (no assumption about the palm bone's axes). A third of the roll about the
         // forearm on each twist bone, the rest (and all of the bend) at the wrist, so the wrist
-        // doesn't candy-wrap. Blended from the current palm by ww. "Kneel brace palm flip"
+        // doesn't candy-wrap. Blended from the current palm by ww. "Kneel test: brace palm flip"
         // (14. Debug) mirrors the thumb if this rig's palm turns out to be on the other side.
         internal static void SetWrist(Transform palm, Transform middle, Transform thumb, Transform ta, Transform tb,
                                       Vector3 foreDir, Vector3 fingers, Vector3 thumbDir, Vector3 palmFaces, float ww)
@@ -241,7 +241,7 @@ namespace HandsAreHigh
 
         // 0.22.0: the hands-up arms' frame. right: the shoulder line (TorsoFrame: it turns, twists and
         // tilts sideways with his chest, so the arms stay on his shoulders through a turn or a look);
-        // up: blended from the torso's ribcage-to-head towards gravity by "Forearms stay upright".
+        // up: blended from the torso's ribcage-to-head towards gravity by "Arms: stay upright".
         // The torso's up leans forward with EFT's idle stance and more on his knees, and every degree
         // of it tipped the forearms forward and dropped the hands (offline, tools/armsim/armsim3.py:
         // at 20-30 deg of lean the 0.21.0 pose had the forearms 33-43 deg off vertical and the palms

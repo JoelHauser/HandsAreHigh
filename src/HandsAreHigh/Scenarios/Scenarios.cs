@@ -104,7 +104,7 @@ namespace HandsAreHigh
             int already = 0;
             foreach (Scenario r in Running) foreach (Participant p in r.People) if (p.Existing == null && !p.Removed && !p.Dead) already++;
             if (already + spawning > Settings.ScenarioMaxBots.Value)
-                return $"{spawning} bot(s) would make {already + spawning}, over 'Scenario bots at most' ({Settings.ScenarioMaxBots.Value})";
+                return $"{spawning} bot(s) would make {already + spawning}, over 'Scenario: bots at most' ({Settings.ScenarioMaxBots.Value})";
 
             // Every spot validated before anything spawns.
             var taken = new List<Vector3>();
@@ -207,7 +207,7 @@ namespace HandsAreHigh
         {
             int live = 0;
             foreach (Scenario r in Running) foreach (Participant p in r.People) if (p.Existing == null && !p.Removed && !p.Dead) live++;
-            if (live >= Settings.ScenarioMaxBots.Value) return "refused: 'Scenario bots at most' reached";
+            if (live >= Settings.ScenarioMaxBots.Value) return "refused: 'Scenario: bots at most' reached";
             Vector3 from = target.Player.Position;
             Vector3 away = from - sc.Observer.Position; away.y = 0f;
             away = away.sqrMagnitude < 1f ? sc.Forward : away.normalized;

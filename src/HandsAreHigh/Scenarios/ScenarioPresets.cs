@@ -774,7 +774,7 @@ namespace HandsAreHigh
             {
                 Name = "Captor closes in and kneels prisoner",
                 Tests = "A bot captor walks up to a disarmed prisoner and orders him onto his knees; the prisoner weighs resisting as he comes; kneeling facing and look limits.",
-                Watch = "'close in on', 'closes in on', 'stops closing in', 'puts ... on his knees' / 'can't kneel there', 'turned to face where the order came from', 'sees ... on his knees', 'opening (... range x, posture x)', 'is behind him, out of view', 'loses sight of his captor'. Pose: Log pose diagnostics on, walk round the kneeling man.",
+                Watch = "'close in on', 'closes in on', 'stops closing in', 'puts ... on his knees' / 'can't kneel there', 'turned to face where the order came from', 'sees ... on his knees', 'opening (... range x, posture x)', 'is behind him, out of view', 'loses sight of his captor'. Pose: Log: pose diagnostics on, walk round the kneeling man.",
                 Prereq = "Forced custody. Captor plan forces the choice (or leaves it to the real rolls). Ground: place it on flat open ground, then on stairs or in clutter for the unsuitable case.",
                 Natural = false
             };
@@ -907,7 +907,7 @@ namespace HandsAreHigh
             {
                 Name = "Turn around and hands on head",
                 Tests = "Turn around (his back to where the issuer stood, kept while the issuer walks round him; from his knees: up, turn, down) and Hands on head standing and kneeling (posture unchanged, head within its hands-on-head limits).",
-                Watch = "'turns his back to', 'turned round in ... s', 'turn around from his knees: gets up', 'kneels again facing away', 'hands on his head (... posture unchanged)', 'is behind him, out of view', 'loses sight of his captor'. Walk round him: he must not turn back. Log pose diagnostics on for the head.",
+                Watch = "'turns his back to', 'turned round in ... s', 'turn around from his knees: gets up', 'kneels again facing away', 'hands on his head (... posture unchanged)', 'is behind him, out of view', 'loses sight of his captor'. Walk round him: he must not turn back. Log: pose diagnostics on for the head.",
                 Prereq = "Forced surrender (to you or to a bot captor with custody). The orders are given on a timer through the real order path (yours from wherever you stand: the test path, labelled).",
                 Natural = false
             };
@@ -1487,7 +1487,7 @@ namespace HandsAreHigh
                 Name = "Squad dialogue",
                 Tests = "A squad of three takes a prisoner: only the captor gives orders; the covering squadmate speaks only for his role; one line at a time with a short gap (the prisoner included); an urgent warning (a hostile bot) cuts in at once.",
                 Watch = "'says Demand / Stay / Disarm ...' from the captor only; '<guard>: says Covering ...' once; Verbose: 'captor voice <line>: waits (<who> is speaking)' and '<line>: not his to say (<captor> speaks for the encounter)'. No two 'says' lines of the encounter within ~1 s of each other, except UnderFire / Threat / Resist. With the hostile bot: 'says UnderFire' or 'says Threat' at once.",
-                Prereq = "Forced start: surrendered, forced custody, plan forced (Stay, Drop your weapons, Hands on head). Speech on, Log voice on (Verbose for the waits). Hostile bot: real (spawned 40 m out).",
+                Prereq = "Forced start: surrendered, forced custody, plan forced (Stay, Drop your weapons, Hands on head). Speech on, Log: voice on (Verbose for the waits). Hostile bot: real (spawned 40 m out).",
                 Natural = false
             };
             p.Params.Add(Place()); p.Params.Add(Dist(25f)); p.Params.Add(Sep(8f));

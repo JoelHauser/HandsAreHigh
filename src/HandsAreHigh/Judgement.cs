@@ -16,7 +16,7 @@ namespace HandsAreHigh
     //              A slung gun, if he sees the man; a holstered pistol only close; a knife never;
     //              a gun he saw on him before and that didn't land. One roll per answer.
     //   repeat     noticed: he demands it again (Captor repeats a demand at most, a warning line)
-    //   refusal    still kept after the repeats: open fire (Refusal turns lethal) or warn and be
+    //   refusal    still kept after the repeats: open fire (Judgement: refusal turns lethal) or warn and be
     //              done with him (let go early, nothing near him)
     //   release    his plan is over: carry out the intent; only something new since the intent
     //              (a weapon kept back, he learned the man shot them) adds a chance, once
@@ -196,7 +196,7 @@ namespace HandsAreHigh
             return NaturalSurrender.ClassOf(p) == NaturalSurrender.RoleClass.Scav ? "Scav" : null;
         }
 
-        private static bool Rivals(Player a, Player b, out string why)
+        internal static bool Rivals(Player a, Player b, out string why)
         {
             string fa = Faction(a), fb = Faction(b);
             why = $"{fa} vs {fb}";

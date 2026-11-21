@@ -17,7 +17,7 @@ namespace HandsAreHigh
     {
         public const string PluginGuid = "com.joelhauser.handsarehigh";
         public const string PluginName = "Hands Are High";
-        public const string PluginVersion = "0.27.0";
+        public const string PluginVersion = "0.28.0";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").

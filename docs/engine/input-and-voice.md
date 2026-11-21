@@ -28,7 +28,7 @@ Code: `InputGuard.cs`, `OrderMenu.cs`, `Runtime.cs`, `Voice.cs`, `CaptorVoice.cs
 - BepInEx `KeyboardShortcut.IsDown` refuses any other held key (W while walking): the menu reads
   `Input.GetKeyDown` + its own modifiers instead. [code]
 - Joel's keys (no numpad): order menu `/` open/confirm, `.` next, `=` previous, digits 1-9; F with
-  "Interact key opens the order menu". Debug keys only with "Debug keys" on (section 14). EFT's
+  "Interact key opens the menu" (section 5). Debug keys only with "Debug keys" on (section 7). EFT's
   Ctrl+H is the headlight; U is unbound in EFT and every installed mod cfg (checked 2026-11-20).
 
 ## Bot speech

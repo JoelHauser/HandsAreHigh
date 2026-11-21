@@ -678,6 +678,9 @@ namespace HandsAreHigh
                 // hold-fire decisions about him for a while: his ex-captor (and anyone who spared
                 // him) doesn't turn on him the moment our layer lets go, only once he takes a weapon
                 // in his hands (Restraint.TickDetached). A draw (Rearmed) or death ends them now.
+                // 0.28.0: ignored by the bot he gave up to: he and that bot (and its squad) leave
+                // each other be for a while, armed or not (Truce), before the decisions below go.
+                if (alive && s.Ignored) { try { Truce.Begin(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("truce", e); } }
                 if (alive && s.Phase == Phase.Released) Restraint.Detach(s, s.HandBackWhy ?? "free");
                 else Restraint.ForgetPrisoner(p);
                 States.Remove(p);

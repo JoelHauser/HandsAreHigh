@@ -192,6 +192,8 @@ namespace HandsAreHigh
             // 0.16.0: what this man did to him (his own memory of being hit) weighs on it.
             float known = Judgement.MercyFactor(o, s, out string knownWhy);
             if (known < 1f) { mercy *= known; log.Append($"knows: {knownWhy} (mercy x{known:0.00}); "); }
+            // 0.28.0: not interested in him at all: no custody, no fight, back to his own raid.
+            if (!allied && TryIgnore(s, o, notPractical, known, log)) return;
             if (notPractical == null)
             {
                 // Squadmates close by to back him make taking a prisoner a little more attractive.
@@ -224,6 +226,99 @@ namespace HandsAreHigh
             }
             HandsAreHighPlugin.Log.LogInfo(log.Append(" -> refuses the surrender").ToString());
             Restraint.Set(s, o, RestraintKind.Reject, $"refuses ({notPractical}, mercy x{mercy:0.00})", squad: false);
+        }
+
+        // ---- 0.28.0: not interested --------------------------------------------------------
+        //
+        // The bot he gave up to may simply not care: no custody, no orders, no walk over for his gear,
+        // and no fight either. He holds fire at him (his squad near him follows), drops him as a
+        // target and goes on with his own AI. The man reads it from what he sees (Abandonment), gets
+        // his gun back if he safely can, and both sides are handed a truce (Truce.Begin), so neither
+        // turns on the other only because the surrender ended or the gun came back.
+        // Chance = base x influence-blended factor (personality, his situation, who the man is),
+        // capped at 0.9. Never: a player ally (allies hold fire anyway), a man he saw attack, a man
+        // his squad decided to kill, or with the setting off.
+        private static bool TryIgnore(SurrenderState s, BotOwner o, string notPractical, float known, StringBuilder log)
+        {
+            if (!Settings.IgnoreSurrender.Value || Settings.IgnoreChance.Value <= 0f) return false;
+            Player captor = o.GetPlayer;
+            if (known < 1f) { log.Append("ignore: no, he has a score to settle; "); return false; }
+            if (Restraint.SquadDecidedToKill(o, s.Bot)) return false;
+            BotHistory h = SurrenderRegistry.HistoryOf(captor);
+            float f = 1f;
+            var why = new StringBuilder();
+            string personality = SurrenderRegistry.PersonalityOf(captor, h);
+            float pf;
+            switch (personality)
+            {
+                case "Wreckless": pf = 1.3f; break;      // after the next fight, not a prisoner
+                case "GigaChad": pf = 1.2f; break;
+                case "Chad": pf = 1.1f; break;
+                case "Coward": pf = 1.4f; break;         // doesn't want to get involved
+                case "Timmy": pf = 1.2f; break;
+                case "SnappingTurtle": pf = 0.8f; break; // careful: wants him under control
+                case "Rat": pf = 0.6f; break;            // wants his gear
+                case "": case null:
+                    NaturalSurrender.RoleClass rc = NaturalSurrender.ClassOf(captor);
+                    pf = rc == NaturalSurrender.RoleClass.Scav ? 1.2f : rc == NaturalSurrender.RoleClass.Boss ? 0.7f : 0.9f;
+                    personality = rc.ToString();
+                    break;
+                default: pf = 1f; break;
+            }
+            f *= pf; why.Append($"{personality} x{pf:0.0}");
+            // His situation: something else to deal with, or no practical way to hold him.
+            if (Restraint.OtherThreat(o, s.Bot, out string threat)) { f *= 1.6f; why.Append($", busy with {threat} x1.6"); }
+            else if (notPractical != null) { f *= 1.3f; why.Append($", {notPractical} x1.3"); }
+            float d = Vector3.Distance(captor.Position, s.Bot.Position);
+            if (d > Settings.AcceptRange.Value) { f *= 1.4f; why.Append($", {d:0} m away x1.4"); }
+            else if (d < 8f) { f *= 0.7f; why.Append($", right by him ({d:0} m) x0.7"); }
+            // Who the man is: a rival is worth more attention; a man with little on him, less.
+            if (Judgement.Rivals(captor, s.Bot, out string rivals)) { f *= 0.7f; why.Append($", rivals ({rivals}) x0.7"); }
+            BotHistory mh = SurrenderRegistry.HistoryOf(s.Bot);
+            if (Time.time - mh.KitAt > Settings.KitRecheck.Value) Arsenal.AssessKit(s.Bot, mh);
+            float kit = mh.KitValue;
+            if (kit > 0f && Settings.KitValueFull.Value > 0f)
+            {
+                float k = Mathf.Lerp(1.3f, 0.6f, Mathf.Clamp01(kit / Settings.KitValueFull.Value));
+                f *= k; why.Append($", kit {kit / 1000f:0}k x{k:0.00}");
+            }
+            float influence = Mathf.Clamp01(Settings.IgnoreInfluence.Value);
+            float chance = Mathf.Clamp(Settings.IgnoreChance.Value * Mathf.Lerp(1f, f, influence), 0f, 0.9f);
+            float roll = Dice.Value;
+            log.Append($"ignore chance {chance:0.00} ({why}; influence {influence:0.0}), roll {roll:0.00}; ");
+            if (roll >= chance) return false;
+            Ignore(s, o, "not interested in him");
+            HandsAreHighPlugin.Log.LogInfo(log.Append("-> IGNORES the surrender: no custody, holds fire, back to his own business").ToString());
+            return true;
+        }
+
+        private static void Ignore(SurrenderState s, BotOwner o, string why)
+        {
+            Player captor = o.GetPlayer;
+            s.IgnoredBy = captor;
+            s.IgnoredAt = Time.time;
+            Pending.Remove(s);
+            // Holds fire (target dropped, finger lifted); his squad close by goes along with it.
+            Restraint.Set(s, o, RestraintKind.Respect, why, squad: false);
+            Restraint.InformSquad(s, o, "decision to ignore him", custody: false);
+            // He (and his squad) won't come back to take the same man prisoner a minute later, and
+            // the man won't give himself up to them again in that time.
+            Encounter.Remember(o, s, "ignored his surrender");
+            SurrenderStats.Ignored(s);
+        }
+
+        // Debug: the bot he surrendered to ignores him now (the roll skipped; everything after is real).
+        internal static string ForceIgnore(SurrenderState s)
+        {
+            Player c = s?.Captor;
+            BotOwner o = c != null && c.IsAI ? c.AIData?.BotOwner : null;
+            if (s == null || s.Dead || s.Phase != Phase.HandsUp) return "isn't holding his hands up";
+            if (o == null || o.IsDead) return "didn't surrender to a living bot";
+            if (IsPlayerAlly(o)) return "his captor is a player ally";
+            if (s.Custody != null) End(s.Custody, "debug: ignores him instead", released: true);
+            Ignore(s, o, "debug: FORCED, not interested in him");
+            HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(c)}: IGNORES {s.Name}'s surrender (forced by the debug key)");
+            return null;
         }
 
         // Null when taking custody is practical for him; otherwise why not.
@@ -780,7 +875,7 @@ namespace HandsAreHigh
         // ---- closing in (0.15.0) -------------------------------------------------------------
         //
         // Once per custody, after the prisoner has his hands up and has dropped the gun in his
-        // hands, the captor may walk closer (Captors close in on a disarmed prisoner) to a fixed
+        // hands, the captor may walk closer (Close in chance) to a fixed
         // spot at the close-in distance on his own side of the prisoner (never within 1.3 m of
         // the dropped gun, a clear line to the prisoner from it, a complete short path). Only with
         // no threat (Approach stops it on any Alert, Fire or Contact), at a walk, gun and eyes on
@@ -999,7 +1094,7 @@ namespace HandsAreHigh
                     if (e == null || Perception.Same(e.Person, prisoner)) continue;
                     if (e.Person?.HealthController == null || !e.Person.HealthController.IsAlive) continue;
                     Player ep = Perception.PlayerOf(e.Person);
-                    if (ep != null && (Restraint.HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep))) continue;
+                    if (ep != null && (Restraint.HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep) || Truce.Blocks(self, ep))) continue;
                     if (e.IsVisible)
                     {
                         why = ep != null ? Restraint.Name(ep) : "an enemy";

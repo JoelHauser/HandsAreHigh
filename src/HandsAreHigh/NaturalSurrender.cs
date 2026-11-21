@@ -361,7 +361,7 @@ namespace HandsAreHigh
         // A bot he's fighting can only be the one he gives up to if bot captors are on, that bot
         // isn't held himself, is active, and his own group really counts him as an enemy
         // (BotsGroup.IsEnemy: verified relationship, not faction). A player ally's bot only
-        // with "Your allies can make bots surrender".
+        // with "Your allies make bots surrender".
         private static string BotFoeBlocked(Player bot, Player foe)
         {
             if (!Settings.BotCaptors.Value) return "his target is a bot (bot captors off)";
@@ -455,6 +455,7 @@ namespace HandsAreHigh
             {
                 if (e?.Person?.HealthController == null || !e.Person.HealthController.IsAlive) continue;
                 if (ScenarioShield.Active && ScenarioShield.Blocks(owner.GetPlayer, e.Person)) continue;
+                if (Truce.Active && Truce.Blocks(owner.GetPlayer, e.Person)) continue;   // 0.28.0
                 if (e.IsVisible || now - e.PersonalLastSeenTime < memory) n++;
             }
             return Mathf.Max(1, n);

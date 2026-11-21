@@ -91,8 +91,11 @@ dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.
 
 **Config**
 - BepInEx section/key names must not contain `= \ " ' [ ]` (a throw in Awake kills the plugin
-  silently; pack.ps1 checks). Don't rename existing keys (Joel's values live in them). Changed
-  defaults migrate through `Settings.Migrate` (Settings.V19.cs) only where still at the old default.
+  silently; pack.ps1 checks). Seven sections (0.28.0), one file each (`Settings.1General.cs` ..
+  `Settings.7Debugging.cs`), bound in display order: common first, tuning/diagnostics `advanced`
+  (hidden until Show advanced; neither F12 menu can collapse a section). Renaming or moving a key
+  needs a row in `Settings.Layout.cs` `Moves` (Joel's values live in the old keys). Changed defaults
+  migrate through `Settings.Migrate` (Settings.cs) only where still at the old default.
 - Never write Joel's cfg yourself from a read that may have failed.
 
 **Behaviour Joel has set (keep unless he changes it)**

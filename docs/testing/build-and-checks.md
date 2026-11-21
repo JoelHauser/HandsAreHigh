@@ -47,10 +47,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\cfgbind\bind.ps1 `
 ```
 
 Expect: only the new keys added, only intended migrations changed, nothing dropped, a second load
-changes nothing. Existing section/key names must not be renamed casually: Joel's cfg holds values for
-them (renaming = his value silently lost). Changing a default: add a step to
-`Settings.Migrate` (Settings.V19.cs, bump `CurrentConfigVersion`); it moves a value only if it is
-still at the OLD default. `Migrate` runs at the end of `Settings.Bind`, after every section.
+changes nothing. Then `python -I tools\cfgbind\carry.py <copy of Joel's cfg> <work>\joel.cfg`: every
+old key in `Settings.Layout.cs` `Moves` must carry its value to the new key (0 problems).
+Renaming or moving a key: add a `Moves` row (old section, old key, new section, new key); without
+it Joel's value is silently lost. `MigrateLayout` runs before any Bind and renames BepInEx's orphaned
+lines (`ConfigFile.OrphanedEntries`), so Bind loads the old value under the new key. Changing a
+default: add a step to `Settings.Migrate` (Settings.cs, bump `CurrentConfigVersion`); it moves a value
+only if it is still at the OLD default; it runs at the end of `Settings.Bind`.
 
 ## Offline models (Python 3 + UnityPy where a bundle is read; run with `python -I`)
 

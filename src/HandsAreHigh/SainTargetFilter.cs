@@ -108,18 +108,18 @@ namespace HandsAreHigh
         {
             if (enemy == null) return false;
             string id = _enemyIdRead.Get(enemy);
-            return Restraint.HoldsFireAtId(self, id) || ScenarioShield.BlocksId(self, id);
+            return Restraint.HoldsFireAtId(self, id) || ScenarioShield.BlocksId(self, id) || Truce.BlocksId(self, id);
         }
 
         private static void Prefix(object __instance, ref object __state)
         {
             __state = null;
-            if (!Restraint.Any && !ScenarioShield.Active) return;
+            if (!Restraint.Any && !ScenarioShield.Active && !Truce.Active) return;
             long t0 = Perf.Begin();
             try
             {
                 Player self = _ownerRead.Get(__instance)?.GetPlayer;
-                if (!Restraint.Restrains(self) && !ScenarioShield.Shields(self)) return;
+                if (!Restraint.Restrains(self) && !ScenarioShield.Shields(self) && !Truce.Holds(self)) return;
                 Removed r = null;
                 Take(_visibleRead.Get(__instance), self, ref r, true);
                 Take(_knownRead.Get(__instance), self, ref r, false);

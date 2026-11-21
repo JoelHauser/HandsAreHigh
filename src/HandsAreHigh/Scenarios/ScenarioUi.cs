@@ -10,7 +10,7 @@ namespace HandsAreHigh
     // Input: while the menu is open it owns input through InputGuard (the order menu's guard):
     // every hotbar command and the mouse wheel are kept from the game and keys pressed while it
     // was open stay latched until released, so choosing an option can't use a hotbar item.
-    // The navigation keys default to the arrow keys and Enter (section 17); the order menu
+    // The navigation keys default to the arrow keys and Enter (section 7); the order menu
     // doesn't open while this one is open.
     // Drawing: IMGUI on Repaint only; the texts are rebuilt on input and at most 4x a second.
     internal static class ScenarioUi

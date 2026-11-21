@@ -31,7 +31,7 @@ namespace HandsAreHigh
         private static readonly int[] Gates = new int[(int)NaturalGate.Count];
         private static readonly HashSet<int> BotsEvaluated = new HashSet<int>();
         private static int _checks, _eligible, _rolls, _gives, _activated, _failed, _scavRolls, _pmcRolls, _scavGives, _pmcGives;
-        private static int _hitGrace;
+        private static int _hitGrace, _ignored;   // 0.28.0: surrenders a bot wasn't interested in
         private static readonly int[] Started = new int[(int)SurrenderSource.Count];
         private static readonly int[] Accepted = new int[(int)SurrenderSource.Count];
         private static readonly int[] Custody = new int[(int)SurrenderSource.Count];
@@ -60,6 +60,7 @@ namespace HandsAreHigh
         internal static void Activation(bool ok) { if (ok) _activated++; else _failed++; }
 
         internal static void HitGrace() { _hitGrace++; _dirty = true; }
+        internal static void Ignored(SurrenderState s) { _ignored++; _dirty = true; }
 
         internal static void Start(SurrenderState s)
         {
@@ -101,7 +102,7 @@ namespace HandsAreHigh
             System.Array.Clear(Accepted, 0, Accepted.Length);
             System.Array.Clear(Custody, 0, Custody.Length);
             BotsEvaluated.Clear();
-            _checks = _eligible = _rolls = _gives = _activated = _failed = _scavRolls = _pmcRolls = _scavGives = _pmcGives = _hitGrace = 0;
+            _checks = _eligible = _rolls = _gives = _activated = _failed = _scavRolls = _pmcRolls = _scavGives = _pmcGives = _hitGrace = _ignored = 0;
             _dirty = false;
             _nextReport = Time.time + ReportEvery;
         }
@@ -124,6 +125,7 @@ namespace HandsAreHigh
             if (_failed > 0) sb.Append($", ACTIVATION FAILED {_failed}");
             sb.Append($"; hits ignored in the first moments of a surrender {_hitGrace}");
             sb.Append($"; hold-ups broken by incoming fire {FireBreak.Broken}");   // 0.21.0
+            sb.Append($"; surrenders ignored by a bot {_ignored}");                 // 0.28.0
             sb.Append(". Surrenders started / acknowledged (bot custody):");
             for (int i = 0; i < Started.Length; i++)
                 sb.Append($" {(SurrenderSource)i} {Started[i]}/{Accepted[i]} ({Custody[i]}),");

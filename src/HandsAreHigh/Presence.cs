@@ -77,7 +77,7 @@ namespace HandsAreHigh
         internal float ElbowFrom, ElbowTo, ElbowStart, NextElbowAt;
     }
 
-    // One demeanor's presentation. Multipliers are 1 = neutral; Demeanor strength scales them.
+    // One demeanor's presentation. Multipliers are 1 = neutral; Demeanor: strength scales them.
     internal sealed class DemeanorProfile
     {
         internal string Name;
@@ -118,7 +118,7 @@ namespace HandsAreHigh
 
         private static float K => Settings.DemeanorEnabled.Value ? Settings.DemeanorStrength.Value : 0f;
 
-        // A multiplier from the profile, scaled towards 1 by Demeanor strength (0 = all neutral).
+        // A multiplier from the profile, scaled towards 1 by Demeanor: strength (0 = all neutral).
         private static float M(float v) => 1f + (v - 1f) * K;
 
         internal static DemeanorProfile Of(SurrenderState s) => Profiles[(int)s.Look.Demeanor];
@@ -853,7 +853,7 @@ namespace HandsAreHigh
             if (Settings.LogPose.Value || TestDiag) GazeDiag(pl, s, anim, bodyF);
         }
 
-        // 14. Debug "Log pose diagnostics": once a second, standing or kneeling: where the animated
+        // 7. Debugging "Log: pose diagnostics": once a second, standing or kneeling: where the animated
         // head pointed before us, the game's free-look, where we left it (yaw/pitch/ROLL), the chest
         // against the hips, and his captor's bearing. Head roll after us should read ~0.
         private static void GazeDiag(Player pl, SurrenderState s, Quaternion anim, Vector3 bodyF)

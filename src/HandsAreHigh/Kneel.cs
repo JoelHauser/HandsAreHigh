@@ -47,7 +47,7 @@ namespace HandsAreHigh
     public enum KneelRiseChoice { Auto, Compliant, Defensive, Escape }
     public enum KneelBraceChoice { Auto, Always, Never }
     public enum KneelEscapeChoice { Auto, Commit, BackDown, StandUp }
-    // 14. Debug "Kneel pose isolate": the one contributor switched off (All: none off).
+    // 7. Debugging "Kneel test: pose isolate": the one contributor switched off (All: none off).
     public enum KneelPoseIsolate { All, LookAlign, PelvisSquare, TorsoSquare, LegHinge, Head, Hands, BodyOnly }
 
     internal sealed class KneelLeg
@@ -172,7 +172,7 @@ namespace HandsAreHigh
             if (Settings.LogKneel.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {msg}");
         }
 
-        // 14. Debug "Kneel pose isolate": is this contributor switched off? BodyOnly turns off the
+        // 7. Debugging "Kneel test: pose isolate": is this contributor switched off? BodyOnly turns off the
         // head look and the hands-behind-head arms.
         internal static bool Off(KneelPoseIsolate part)
         {
@@ -1558,7 +1558,7 @@ namespace HandsAreHigh
             else low.rotation = Quaternion.AngleAxis(a, axis) * low.rotation;
         }
 
-        // 14. Debug "Log pose diagnostics": once a second per posed bot, every contributor's share.
+        // 7. Debugging "Log: pose diagnostics": once a second per posed bot, every contributor's share.
         private static void PoseDiag(Player p, SurrenderState s, KneelRig rig, Vector3 f)
         {
             float now = Time.time;
@@ -1751,7 +1751,7 @@ namespace HandsAreHigh
         internal static bool OverHands(SurrenderState s, out int top)
         {
             top = -1;
-            if (!Settings.HandsOverHands.Value || s == null || Settings.HandsLaced.Value) return false;
+            if (Settings.HandsBehindHeadStyle.Value != HandsStyle.OneOverTheOther || s == null) return false;
             // Most people put the right hand over the left; chosen once per man.
             if (s.HeadTopHand < 0) s.HeadTopHand = Dice.Value < 0.6f ? 1 : 0;
             top = s.HeadTopHand;
@@ -1777,7 +1777,7 @@ namespace HandsAreHigh
         internal static bool Laced(SurrenderState s, out int high)
         {
             high = -1;
-            if (!Settings.HandsLaced.Value || s == null) return false;
+            if (Settings.HandsBehindHeadStyle.Value != HandsStyle.Laced || s == null) return false;
             if (s.HeadTopHand < 0) s.HeadTopHand = Dice.Value < 0.6f ? 1 : 0;
             high = s.HeadTopHand;
             return true;

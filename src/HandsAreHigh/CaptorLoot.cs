@@ -37,7 +37,7 @@ namespace HandsAreHigh
     //
     // 0.18.0: the weapons he made the man drop (the gun at the surrender, guns and knife on Drop
     // your weapons) are "demanded": always wanted (no appetite roll, no value threshold), fetched
-    // first, with their own risk tolerance (Risk he accepts for those). Items dropped AFTER the first
+    // first, with their own risk tolerance (Gear: risk accepted for weapons). Items dropped AFTER the first
     // weighing (every Drop your weapons answer comes later) are weighed when they land: 0.16-0.17
     // weighed once, so a weapon dropped on his order was never considered (0.17.0 log, #13: the
     // knife). A fetch interrupted by a threat or the man moving is weighed again once the situation
@@ -457,7 +457,7 @@ namespace HandsAreHigh
         // 0.24.0: a dropped knife (or axe, shovel: any KnifeComponent item). The captor used to fetch
         // it like a gun (always wanted, "the weapon he made him drop": 0.23.0 log, #29/#30/#32 walked
         // over and bent down by the man for a 3,560-rouble MPL-50 and a 6Kh5 he had no use for).
-        // Wanted only if it is worth it to him: "Captors pick up a dropped knife" x his appetite
+        // Wanted only if it is worth it to him: "Gear: knife pick-up chance" x his appetite
         // (greed) x use (none of his own 1.4, has one 0.35) x value (0.6 at nothing .. 1.5 at 40k
         // roubles) x a little denial if it lies within the man's reach (1.15). Then the same exposure
         // weighing as any item with a lower tolerance; too risky = left (never "later" or "after the

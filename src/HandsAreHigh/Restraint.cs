@@ -308,10 +308,15 @@ namespace HandsAreHigh
             foreach (RestraintEntry e in map.Values) EntryScratch.Add(e);
             Vector3 eye = Perception.Eye(s.Bot);
             float r = Settings.ObserverRadius.Value;
+            // 0.28.0: a man calmly taking his gun back after the bot he gave up to ignored him: that
+            // bot and his squad already decided he isn't their business (Truce at the hand-back).
+            // Anyone else who sees it reacts as before.
+            BotsGroup ignorers = s.Ignored && s.CalmRearm ? s.IgnoredBy.AIData?.BotOwner?.BotsGroup : null;
             for (int i = 0; i < EntryScratch.Count; i++)
             {
                 RestraintEntry e = EntryScratch[i];
                 if (!Perception.Alive(e.Observer)) continue;
+                if (s.Ignored && s.CalmRearm && !e.Final && (e.Observer == s.IgnoredBy || (ignorers != null && e.Owner?.BotsGroup == ignorers))) continue;
                 // 0.20.0: a squadmate covering this man reacts by his own sight and reaction time
                 // (Overwatch.Watch); one who never sees it takes his squad's word a moment later.
                 if (Overwatch.ReactsHimself(s, e.Observer)) continue;
@@ -390,6 +395,7 @@ namespace HandsAreHigh
         internal static void Tick()
         {
             if (Detached.Count > 0) TickDetached();
+            if (Truce.Active) Truce.Tick();   // 0.28.0
             if (!SurrenderRegistry.Any) return;
             GameWorld world = Singleton<GameWorld>.Instance;
             List<Player> all = world?.AllAlivePlayersList;
@@ -539,7 +545,7 @@ namespace HandsAreHigh
                     if (e == null || !e.IsVisible || Perception.Same(e.Person, prisoner)) continue;
                     if (e.Person?.HealthController == null || !e.Person.HealthController.IsAlive) continue;
                     Player ep = Perception.PlayerOf(e.Person);
-                    if (ep != null && (HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep))) continue;
+                    if (ep != null && (HoldsFire(self, ep) || SurrenderRegistry.HoldsBot(ep) || ScenarioShield.Blocks(self, ep) || Truce.Blocks(self, ep))) continue;
                     what = ep != null ? Name(ep) : "an enemy";
                     return true;
                 }
@@ -880,6 +886,7 @@ namespace HandsAreHigh
             ByPrisoner.Clear();
             HeldFireBy.Clear();
             Detached.Clear();
+            Truce.Clear();   // 0.28.0
             ShotAt.Clear();
             HitNoted.Clear();
             Any = false;
@@ -937,12 +944,12 @@ namespace HandsAreHigh
         [HarmonyPrefix]
         private static bool Prefix(EnemyInfo value, BotOwner ____owner)
         {
-            if ((!Restraint.Any && !ScenarioShield.Active) || value == null) return true;
+            if ((!Restraint.Any && !ScenarioShield.Active && !Truce.Active) || value == null) return true;
             long t0 = Perf.Begin();
             try
             {
                 Player self = ____owner?.GetPlayer;
-                return !Restraint.HoldsFire(self, value.Person) && !ScenarioShield.Blocks(self, value.Person);
+                return !Restraint.HoldsFire(self, value.Person) && !ScenarioShield.Blocks(self, value.Person) && !Truce.Blocks(self, value.Person);
             }
             catch { return true; }
             finally { Perf.End(Perf.Sec.FireGuard, t0); }
@@ -956,12 +963,19 @@ namespace HandsAreHigh
         [HarmonyPrefix]
         private static bool Prefix(BotOwner ____owner, ref bool __result)
         {
-            if (!Restraint.Any && !ScenarioShield.Active) return true;
+            if (!Restraint.Any && !ScenarioShield.Active && !Truce.Active) return true;
             long t0 = Perf.Begin();
             try
             {
                 EnemyInfo goal = ____owner?.Memory?.GoalEnemy;
                 if (goal == null) return true;
+                if (Truce.Blocks(____owner.GetPlayer, goal.Person))
+                {
+                    Truce.LogBlocked(____owner.GetPlayer, Perception.PlayerOf(goal.Person), "ShootData.Shoot");
+                    ____owner.ShootData.EndShoot();
+                    __result = false;
+                    return false;
+                }
                 if (ScenarioShield.Blocks(____owner.GetPlayer, goal.Person))
                 {
                     ScenarioShield.LogBlocked(____owner.GetPlayer, Perception.PlayerOf(goal.Person), "ShootData.Shoot");
@@ -987,7 +1001,7 @@ namespace HandsAreHigh
         [HarmonyPrefix]
         private static void Prefix(Player.FirearmController __instance, ref bool pressed)
         {
-            if (!pressed || (!Restraint.Any && !ScenarioShield.Active && !SurrenderRegistry.Any)) return;
+            if (!pressed || (!Restraint.Any && !ScenarioShield.Active && !SurrenderRegistry.Any && !Truce.Active)) return;
             long t0 = Perf.Begin();
             try
             {
@@ -995,6 +1009,12 @@ namespace HandsAreHigh
                 if (shooter == null || !shooter.IsAI) return;
                 // While anyone is surrendered, every AI press is timed (one dictionary write per
                 // press) so a hit right after a decision can be told from a new attack.
+                if (Truce.Active && Truce.AimedAtPartner(shooter, out Player partner))
+                {
+                    pressed = false;
+                    Truce.LogBlocked(shooter, partner, "trigger");
+                    return;
+                }
                 if (!Restraint.Any && !ScenarioShield.Active) { Restraint.NoteShot(shooter); return; }
                 if (ScenarioShield.Active && ScenarioShield.AimedAtShielded(shooter, out Player shielded))
                 {
