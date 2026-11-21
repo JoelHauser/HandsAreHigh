@@ -658,7 +658,12 @@ namespace HandsAreHigh
                 }
                 Unhook(s);
                 Captors.EndCustody(s, alive ? "back to normal AI" : "dead");
-                Restraint.ForgetPrisoner(p);
+                // 0.22.0: a man handed back unarmed (let go, or freed by incoming fire) keeps the
+                // hold-fire decisions about him for a while: his ex-captor (and anyone who spared
+                // him) doesn't turn on him the moment our layer lets go, only once he takes a weapon
+                // in his hands (Restraint.TickDetached). A draw (Rearmed) or death ends them now.
+                if (alive && s.Phase == Phase.Released) Restraint.Detach(s, s.HandBackWhy ?? "free");
+                else Restraint.ForgetPrisoner(p);
                 States.Remove(p);
             }
         }
@@ -707,7 +712,7 @@ namespace HandsAreHigh
         private static void Release(SurrenderState s, string why)
         {
             HandsAreHighPlugin.Try("release gesture", () => Gestures.Cancel(s, why));
-            HandsAreHighPlugin.Try("release turn", () => TurnDriver.Stop(s));   // 0.17.0: the game's trunk limit back
+            HandsAreHighPlugin.Try("release turn", () => TurnDriver.StopNow(s));   // 0.17.0: the game's trunk limit back (at once: he is leaving us)
             s.PendingVoice = null;
             s.VerifyAt = -1f;
             s.VerifyClip = null;

@@ -166,7 +166,7 @@ namespace HandsAreHigh
 
             try
             {
-                if (!TorsoFrame(player, bones, out Vector3 right, out Vector3 up, out Vector3 fwd)) return;
+                if (!ArmFrame(player, bones, out Vector3 right, out Vector3 up, out Vector3 fwd, out float lean)) return;
 
                 float w = s.Weight * Settings.PoseStrength.Value;
                 Vector3 ribcage = bones.Ribcage.Original.position;
@@ -215,6 +215,7 @@ namespace HandsAreHigh
                         SetWrist(palm, hr.Middle[hi], hr.Thumb[hi], hr.TwistA[hi], hr.TwistB[hi],
                                  palm.position - fore.position, foreDir, -outward, fwd, armW);
                 }
+                if (!s.PoseLogged && s.Weight >= 1f && s.HeadHands <= 0f && w >= 0.999f) LogPose(player, bones, s, lean);
             }
             catch (System.Exception e)
             {
@@ -224,6 +225,53 @@ namespace HandsAreHigh
                     HandsAreHighPlugin.Log.LogError($"Arm pose failed (logged once): {e}");
                 }
             }
+        }
+
+        // 0.22.0: the hands-up arms' frame. right: the shoulder line (TorsoFrame: it turns, twists and
+        // tilts sideways with his chest, so the arms stay on his shoulders through a turn or a look);
+        // up: blended from the torso's ribcage-to-head towards gravity by "Forearms stay upright".
+        // The torso's up leans forward with EFT's idle stance and more on his knees, and every degree
+        // of it tipped the forearms forward and dropped the hands (offline, tools/armsim/armsim3.py:
+        // at 20-30 deg of lean the 0.21.0 pose had the forearms 33-43 deg off vertical and the palms
+        // 4-8 cm below the top of the head: the half-raised look). lean: the torso's forward lean
+        // (deg), for the pose log.
+        internal static bool ArmFrame(Player player, PlayerBones bones, out Vector3 right, out Vector3 up, out Vector3 fwd, out float lean)
+        {
+            lean = 0f;
+            if (!TorsoFrame(player, bones, out right, out up, out fwd)) return false;
+            Vector3 g = Vector3.ProjectOnPlane(Vector3.up, right);
+            if (g.sqrMagnitude < 0.25f) return true;   // lying on his side: the torso frame as it is
+            g.Normalize();
+            lean = Vector3.SignedAngle(g, up, right);
+            float k = Mathf.Clamp01(Settings.ArmUpright.Value);
+            if (k <= 0f) return true;
+            up = Vector3.Slerp(up, g, k).normalized;
+            fwd = Vector3.Cross(right, up);
+            return true;
+        }
+
+        // Once per surrender, when the raise has finished: where the hands actually are (the
+        // offline numbers are for a reference skeleton; this is the bot's own, in his kit).
+        private static void LogPose(Player player, PlayerBones bones, SurrenderState s, float lean)
+        {
+            s.PoseLogged = true;
+            if (!Settings.LogDecisions.Value && !Settings.VerboseLogs.Value) return;
+            Transform head = bones.Head?.Original;
+            if (head == null || bones.RightPalm == null || bones.LeftPalm == null || bones.Forearms == null || bones.Forearms.Length < 2) return;
+            float top = head.position.y + Settings.HandsAboveNeck.Value + 0.10f;   // the skull sphere's top (Kneel.HeadRadius)
+            float hl = bones.LeftPalm.position.y - top, hr = bones.RightPalm.position.y - top;
+            Transform f0 = bones.Forearms[0], f1 = bones.Forearms[1];
+            if (f0 == null || f1 == null) return;
+            // Which forearm is which: the one nearer each palm (the array's order isn't assumed).
+            if ((f0.position - bones.LeftPalm.position).sqrMagnitude > (f1.position - bones.LeftPalm.position).sqrMagnitude) { Transform t = f0; f0 = f1; f1 = t; }
+            float vl = Vector3.Angle(bones.LeftPalm.position - f0.position, Vector3.up);
+            float vr = Vector3.Angle(bones.RightPalm.position - f1.position, Vector3.up);
+            Vector3 hc = head.position; hc.y = 0f;
+            Vector3 pl = bones.LeftPalm.position; pl.y = 0f;
+            Vector3 pr = bones.RightPalm.position; pr.y = 0f;
+            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: hands-up pose: wrists {hl * 100f:+0;-0} / {hr * 100f:+0;-0} cm against the top of his head (left/right), " +
+                $"forearms {vl:0} / {vr:0} deg off vertical, {Vector3.Distance(pl, hc) * 100f:0} / {Vector3.Distance(pr, hc) * 100f:0} cm out from his head; " +
+                $"torso lean {lean:0} deg ({(Kneel.Active(s) ? "kneeling" : "standing")}, upright {Settings.ArmUpright.Value:0.00})");
         }
 
         // right: along the shoulders (both upper arms), signed to match the body's right;

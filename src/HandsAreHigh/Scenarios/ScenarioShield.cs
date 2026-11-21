@@ -208,6 +208,33 @@ namespace HandsAreHigh
             _hitHandler = null;
         }
 
+        // 0.22.0: the observer hit a participant (FireBreak.OnHit: a captor or a prisoner). He is no
+        // longer watching, he is in the fight: the Observer pairs that kept that participant and his
+        // squad from taking him as a target are lifted, so they answer him with their own AI and
+        // perception (nothing tells them where he is; the game's own hit reaction does that). The
+        // 0.21.0 raid: you shot a captor six times and he never fought back (the override held).
+        internal static void ObserverAttacked(Player victim, Player attacker)
+        {
+            if (!Active || victim == null || attacker == null || attacker.IsAI || !victim.IsAI) return;
+            BotsGroup g = victim.AIData?.BotOwner?.BotsGroup;
+            int n = 0;
+            for (int i = Pairs.Count - 1; i >= 0; i--)
+            {
+                Pair p = Pairs[i];
+                if (p.Kind != ShieldKind.Observer || p.Target != attacker) continue;
+                bool squad = p.Shooter == victim || (g != null && p.Shooter?.AIData?.BotOwner?.BotsGroup == g);
+                if (!squad) continue;
+                Lift(p);
+                Pairs.RemoveAt(i);
+                if (ByShooter.TryGetValue(p.Shooter, out List<Pair> list)) { list.Remove(p); if (list.Count == 0) ByShooter.Remove(p.Shooter); }
+                n++;
+            }
+            if (n == 0) return;
+            Active = Pairs.Count > 0;
+            if (!AnyObserver()) UnhookObserver();
+            HandsAreHighPlugin.Log.LogInfo($"Scenario shield: you hit {Restraint.Name(victim)}: the observer override is lifted for him and his squad ({n} pair(s)); they may fight you now");
+        }
+
         internal static int Blocked;    // fire held back since the last report
 
         internal static void LogBlocked(Player shooter, Player target, string where)

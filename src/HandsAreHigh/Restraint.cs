@@ -328,6 +328,7 @@ namespace HandsAreHigh
 
         internal static void Tick()
         {
+            if (Detached.Count > 0) TickDetached();
             if (!SurrenderRegistry.Any) return;
             GameWorld world = Singleton<GameWorld>.Instance;
             List<Player> all = world?.AllAlivePlayersList;
@@ -536,6 +537,7 @@ namespace HandsAreHigh
         // about him is dropped and every flag we set is cleared.
         internal static void ForgetPrisoner(Player prisoner)
         {
+            for (int i = Detached.Count - 1; i >= 0; i--) if (Detached[i].Bot == prisoner) Detached.RemoveAt(i);
             if ((object)prisoner == null || !ByPrisoner.TryGetValue(prisoner, out var map)) return;
             foreach (RestraintEntry e in map.Values)
             {
@@ -550,6 +552,122 @@ namespace HandsAreHigh
             ByPrisoner.Remove(prisoner);
             Any = HeldFireBy.Count > 0;
         }
+
+        // ---- after the hand-back (0.22.0) ------------------------------------------------------
+        //
+        // The 0.21.0 raid, "Incoming fire breaks the hold-up": a near miss broke the hold-up, the
+        // captor went to his own AI, the prisoner (no cover within 15 m) was handed back to his own
+        // AI 0.1 s later, and the hand-back forgot every decision about him (ForgetPrisoner): the
+        // ignore flag came off, the GoalEnemy/Shoot/trigger guards let go, and the nearest known
+        // enemy of the captor's combat AI was the unarmed man 2 m in front of him. He shot him 1.2 s
+        // later. Being an enemy before, and being near, is not a reason to shoot him now.
+        // So a man handed back UNARMED keeps the hold-fire decisions about him (Respect / Ignore /
+        // LetGo; a Reject or a decision to kill is dropped as before) for "Unarmed ex-prisoner spared
+        // for", while his hands stay empty. A weapon in his hands (a gun, a knife, a grenade) ends
+        // them at once, and whoever saw it remembers it (Distrust, as OnArmed). The captor's AI is
+        // left to pick its own target with its own perception: nothing here points it anywhere.
+        private sealed class Detachment
+        {
+            internal Player Bot;
+            internal string Name;
+            internal float Until, Next;
+        }
+
+        private static readonly List<Detachment> Detached = new List<Detachment>(4);
+
+        internal static void Detach(SurrenderState s, string why)
+        {
+            Player p = s?.Bot;
+            if ((object)p == null) return;
+            float secs = Settings.ExPrisonerHoldFire.Value;
+            if (secs <= 0f || !ByPrisoner.TryGetValue(p, out var map) || HoldsWeapon(p, out _)) { ForgetPrisoner(p); return; }
+            // Only decisions to hold fire carry over.
+            EntryScratch.Clear();
+            foreach (RestraintEntry e in map.Values)
+                if (!e.Holds || e.Final || !Perception.Alive(e.Observer)) EntryScratch.Add(e);
+            for (int i = 0; i < EntryScratch.Count; i++)
+            {
+                RestraintEntry e = EntryScratch[i];
+                if (e.Flagged != null) { try { e.Flagged.SetIgnoreState(false); } catch { } e.Flagged = null; }
+                if (HeldFireBy.TryGetValue(e.Observer, out List<Player> list)) { list.Remove(p); if (list.Count == 0) HeldFireBy.Remove(e.Observer); }
+                map.Remove(e.Observer);
+                EntryCount--;
+            }
+            EntryScratch.Clear();
+            Any = HeldFireBy.Count > 0;
+            if (map.Count == 0) { ByPrisoner.Remove(p); return; }
+            float now = Time.time;
+            for (int i = Detached.Count - 1; i >= 0; i--) if (Detached[i].Bot == p) Detached.RemoveAt(i);
+            Detached.Add(new Detachment { Bot = p, Name = s.Name, Until = now + secs, Next = now + 0.25f });
+            if (Settings.LogRestraint.Value || Settings.LogFireBreak.Value)
+            {
+                var names = new System.Text.StringBuilder();
+                foreach (Player o in map.Keys) names.Append(names.Length > 0 ? ", " : "").Append(Name(o));
+                HandsAreHighPlugin.Log.LogInfo($"Restraint: {s.Name} handed back with empty hands ({why}): {names} keep holding fire at him for up to {secs:0} s, unless he takes a weapon in his hands");
+            }
+        }
+
+        private static void TickDetached()
+        {
+            float now = Time.time;
+            for (int i = Detached.Count - 1; i >= 0; i--)
+            {
+                Detachment d = Detached[i];
+                if (now < d.Next) continue;
+                d.Next = now + 0.25f;
+                Player p = d.Bot;
+                if (!Perception.Alive(p)) { Detached.RemoveAt(i); ForgetPrisoner(p); continue; }
+                // Ours again (gave up, caught): the registry's decisions take over from these.
+                if (SurrenderRegistry.HoldsBot(p)) { Detached.RemoveAt(i); continue; }
+                if (HoldsWeapon(p, out string what))
+                {
+                    Detached.RemoveAt(i);
+                    string saw = Witnesses(p);
+                    ForgetPrisoner(p);
+                    HandsAreHighPlugin.Log.LogInfo($"Restraint: {d.Name} takes a {what} in his hands after his release: nobody holds fire at him any more{(saw.Length > 0 ? $" (seen by {saw})" : "")}");
+                    continue;
+                }
+                if (now >= d.Until)
+                {
+                    Detached.RemoveAt(i);
+                    ForgetPrisoner(p);
+                    if (Settings.LogRestraint.Value)
+                        HandsAreHighPlugin.Log.LogInfo($"Restraint: {d.Name}: {Settings.ExPrisonerHoldFire.Value:0} s since his release with empty hands; the decisions about him end (the bots around him judge him as anyone else now)");
+                }
+            }
+        }
+
+        // Who saw him take it (in range, a clear line): they remember him as a man who went for a
+        // weapon after giving up (Distrusts: a later surrender of his is refused by them).
+        private static string Witnesses(Player p)
+        {
+            if (!ByPrisoner.TryGetValue(p, out var map)) return "";
+            var sb = new System.Text.StringBuilder();
+            float r = Settings.ObserverRadius.Value;
+            Vector3 eye = Perception.Eye(p);
+            foreach (RestraintEntry e in map.Values)
+            {
+                if (!Perception.Alive(e.Observer)) continue;
+                if ((e.Observer.Position - p.Position).sqrMagnitude > r * r || !Perception.LineClear(Perception.Eye(e.Observer), eye)) continue;
+                Distrust(SurrenderRegistry.HistoryOf(e.Observer), p);
+                sb.Append(sb.Length > 0 ? ", " : "").Append(Name(e.Observer));
+            }
+            return sb.ToString();
+        }
+
+        // A weapon in his hands (0.16.9: Player.FirearmController, Player.BaseKnifeController,
+        // Player.BaseGrenadeHandsController are the hands controllers that can hurt someone).
+        internal static bool HoldsWeapon(Player p, out string what)
+        {
+            what = null;
+            object hc = p?.HandsController;
+            if (hc is Player.FirearmController) what = "gun";
+            else if (hc is Player.BaseKnifeController) what = "knife";
+            else if (hc is Player.BaseGrenadeHandsController) what = "grenade";
+            return what != null;
+        }
+
+        internal static int DetachedCount => Detached.Count;
 
         // Every 30 s: observers that died or despawned are dropped from every map.
         internal static void PruneObservers()
@@ -578,6 +696,7 @@ namespace HandsAreHigh
                     if (e.Flagged != null) { try { e.Flagged.SetIgnoreState(false); } catch { } e.Flagged = null; }
             ByPrisoner.Clear();
             HeldFireBy.Clear();
+            Detached.Clear();
             ShotAt.Clear();
             Any = false;
             EntryCount = 0;

@@ -638,7 +638,28 @@ namespace HandsAreHigh
             float maxUp = Mathf.Lerp(Settings.HeadMaxUp.Value, Settings.HandsOnHeadUp.Value, hands);
             float maxDown = Mathf.Lerp(Settings.HeadMaxDown.Value, Settings.HandsOnHeadDown.Value, hands);
             now = Time.time;
-            if (onCaptor && Planted(s))
+            // 0.22.0, the shoulders lagging behind a turn: while his body was turned away (Turn
+            // around, turning to kneel) this look stayed on his captor, measured from the turning
+            // root, so the head and the torso's share of it (ApplyUpper, before the arms are posed
+            // in the shoulders' frame) wound back towards where he had been facing, up to the torso
+            // limit, until he "lost" him at ~125 deg and it sprang round. A man turning his back
+            // looks where he is turning: a small lead into the turn, relative to his body (so it
+            // turns with him, no lag), and his captor is let go of at the start of the turn.
+            bool turningAway = TurnDriver.Turning(s, out float tOff, out string tFor) && tFor != "facing his captor";
+            if (turningAway)
+            {
+                yaw = Mathf.Sign(tOff) * Mathf.Min(Mathf.Abs(tOff) * 0.3f, 15f);
+                pitch *= 0.5f;
+                if (s.Turning && !p.Lost)
+                {
+                    p.Lost = true;
+                    p.LostSide = -Mathf.Sign(tOff);   // he comes round past this shoulder
+                    p.NextBehindAt = now + Dice.Range(1.5f, 4f);
+                    p.BehindUntil = 0f;
+                    if (Settings.LogAttention.Value) Log(s, "turns his back: stops watching his captor, looks the way he turns");
+                }
+            }
+            else if (onCaptor && Planted(s))
             {
                 // His captor behind him (out of view: the layer's CaptorInView, or the last place
                 // he had him now beyond his reach): he loses him. No stare from a neck at its

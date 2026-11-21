@@ -24,7 +24,9 @@ namespace HandsAreHigh
     //   - It ends with a new Turn around, a follow order, an escape, release or a new surrender.
     internal static class Facing
     {
-        private const float Settled = 2f;      // deg: turned
+        // deg: turned. 0.22.0: above TurnDriver.Dead (3), where the driver stops turning: at 2 a turn
+        // that came to rest 2-3 deg short never finished ("couldn't finish turning (2 deg off after 8 s)").
+        private const float Settled = TurnDriver.Dead + 0.5f;
         private const float TurnLimit = 8f;    // s: then he stays as he is (logged); step turns take longer than a pivot
         private const float EaseIn = 0.25f;    // s
         private const float EaseOutDeg = 35f;

@@ -25,7 +25,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> HitGrace;
         private static ConfigEntry<int> ConfigVersion;
 
-        private const int CurrentConfigVersion = 19;
+        private const int CurrentConfigVersion = 22;
 
         private static void BindV19(ConfigFile c)
         {
@@ -54,18 +54,31 @@ namespace HandsAreHigh
         // Defaults changed in 0.19.0 (natural surrender was effectively unreachable in ordinary
         // fights; see NaturalSurrender and tools/natsim). A value still at its OLD default moves to
         // the new one, once; anything the user set themselves is left alone.
+        // 0.22.0: per version, so a file already at 19 still gets the later steps.
         private static void Migrate()
         {
-            if (ConfigVersion.Value >= CurrentConfigVersion) return;
+            int from = ConfigVersion.Value;
+            if (from >= CurrentConfigVersion) return;
             var moved = new List<string>();
-            Move(EvalInterval, 5f, moved);
-            Move(PromptCheckDelay, 0.5f, moved);
-            Move(InjuryThreshold, 0.35f, moved);
-            Move(VitalThreshold, 0.4f, moved);
-            Move(PmcThreshold, 0.55f, moved);
+            if (from < 19)
+            {
+                Move(EvalInterval, 5f, moved);
+                Move(PromptCheckDelay, 0.5f, moved);
+                Move(InjuryThreshold, 0.35f, moved);
+                Move(VitalThreshold, 0.4f, moved);
+                Move(PmcThreshold, 0.55f, moved);
+            }
+            if (from < 22)
+            {
+                // The hands-up pose (ArmPose.ArmFrame, tools/armsim/armsim3.py): hands above the head.
+                Move(UpperArmRaise, 12f, moved);
+                Move(UpperArmForward, 25f, moved);
+                Move(ForearmForward, 12f, moved);
+                Move(ForearmInward, 8f, moved);
+            }
             ConfigVersion.Value = CurrentConfigVersion;
             if (moved.Count > 0)
-                HandsAreHighPlugin.Log.LogInfo($"Config updated to the 0.19.0 defaults (values you had changed were kept): {string.Join("; ", moved)}");
+                HandsAreHighPlugin.Log.LogInfo($"Config updated to the new defaults (values you had changed were kept): {string.Join("; ", moved)}");
         }
 
         private static void Move(ConfigEntry<float> e, float oldDefault, List<string> moved)

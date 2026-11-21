@@ -61,18 +61,26 @@ namespace HandsAreHigh
             if (s.Dead || s.Bot == null) return;
             bool want = s.HandsOnHead && s.Phase == Phase.HandsUp && HandsFree(s);
             float secs = Mathf.Max(0.05f, Settings.HandsOnHeadSeconds.Value);
-            float next = Mathf.MoveTowards(s.HeadHands, want ? 1f : 0f, dt / secs);
+            // 0.22.0: out of the hold-up (fire, an escape, a draw) the hands leave his head promptly.
+            if (s.Phase != Phase.HandsUp) secs = Mathf.Min(secs, 0.35f);
+            float next = Profile(s, want ? 1f : 0f, secs, dt);
             KneelStyle st = s.KneelStyle;
             // About to kneel (turning to face, looking for room) or going down: the descent's own
             // window brings the hands up as he settles (if they weren't on his head already), the
             // timing each descent style was tuned with; they don't go up first while he stands.
+            // (Eased here: the window is linear in the kneel's time; the weight is used as it is.)
             bool aboutToKneel = want && s.Kneel == KneelPhase.Standing && s.Order == Order.Kneel && s.KneelFallback == null && Settings.KneelEnabled.Value;
             if (aboutToKneel) next = s.HeadHands;
             else if (st != null && s.Kneel == KneelPhase.GoingDown && want)
-                next = Mathf.Max(s.HeadHands, Mathf.InverseLerp(st.HandsA, st.HandsB, s.KneelT));
+                next = Mathf.Max(s.HeadHands, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(st.HandsA, st.HandsB, s.KneelT)));
             else if (st != null && s.Kneel == KneelPhase.GettingUp && !s.HandsOnHead)
-                next = Mathf.Min(next, Mathf.InverseLerp(st.HandsA, st.HandsB, s.KneelT));
-            s.HeadHands = Mathf.Clamp01(next);
+                next = Mathf.Min(next, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(st.HandsA, st.HandsB, s.KneelT)));
+            next = Mathf.Clamp01(next);
+            // Whatever moved it this frame, its speed is carried on (a window handing over to the
+            // profile, or the profile reversing, continues at the speed the hands already have).
+            s.HeadHandsVel = dt > 1e-4f ? (next - s.HeadHands) / dt : 0f;
+            if (next <= 0f || next >= 1f) s.HeadHandsVel = 0f;
+            s.HeadHands = next;
             if (s.HeadHands >= 1f && !s.HeadHandsLogged)
             {
                 s.HeadHandsLogged = true;
@@ -81,11 +89,31 @@ namespace HandsAreHigh
             }
         }
 
-        // The weight the arms are posed with (0 none .. 1 fully on his head).
+        // 0.22.0: up to the head or back down as one eased move whose speed never jumps. Before, a
+        // constant rate eased by SmoothStep: an order reversed mid-move flipped the hands' speed from
+        // +v to -v in one frame (and SmoothStep's slope made it worst halfway). Now an acceleration-
+        // limited profile: from rest the move takes `secs` (accelerate half, brake half); reversed
+        // halfway, the hands slow, stop and come back along the same path (Kneel.ApplyHands' curve).
+        private static float Profile(SurrenderState s, float target, float secs, float dt)
+        {
+            float x = s.HeadHands, v = s.HeadHandsVel;
+            float d = target - x;
+            if (Mathf.Abs(d) < 1e-4f && Mathf.Abs(v) < 0.05f) { s.HeadHandsVel = 0f; return target; }
+            float acc = 4f / (secs * secs), vmax = 2f / secs;
+            float vWant = Mathf.Sign(d) * Mathf.Min(vmax, Mathf.Sqrt(2f * acc * Mathf.Abs(d)));
+            v = Mathf.MoveTowards(v, vWant, acc * dt);
+            float nx = x + v * dt;
+            if ((target - nx) * d <= 0f) { nx = target; v = 0f; }   // arrived (no overshoot)
+            s.HeadHandsVel = v;
+            return nx;
+        }
+
+        // The weight the arms are posed with (0 none .. 1 fully on his head). Already eased by its
+        // profile (Update).
         internal static float Weight(SurrenderState s)
         {
             if (s == null || s.HeadHands <= 0f || Kneel.Off(KneelPoseIsolate.Hands)) return 0f;
-            return Mathf.SmoothStep(0f, 1f, s.HeadHands) * s.Weight * Settings.HandsBehindHeadStrength.Value;
+            return s.HeadHands * s.Weight * Settings.HandsBehindHeadStrength.Value;
         }
 
         internal static bool Posing(SurrenderState s) => s != null && s.HeadHands > 0f && s.Weight > 0f;

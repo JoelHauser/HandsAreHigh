@@ -73,19 +73,26 @@ namespace HandsAreHigh
         // ---- credibility ------------------------------------------------------------------
 
         // Fire from this shooter breaks this hold-up (null shooter: an unseen source, from a hit).
-        internal static bool Credible(SurrenderState s, Player shooter)
+        internal static bool Credible(SurrenderState s, Player shooter, bool hit = false)
         {
             if (shooter == null) return true;
             if (shooter == s.Bot) return false;
             if (shooter == s.Captor) return false;   // his warning shot, or a decided execution
             if (SurrenderRegistry.TryGet(shooter, out SurrenderState held) && held.Phase == Phase.HandsUp) return false;
             Player captor = CaptorOf(s) ?? s.Captor;
-            return captor == null || !SameSide(shooter, captor);
+            return captor == null || !SameSide(shooter, captor, hit);
         }
 
-        // On the captor's side: his own squad, a bot not hostile to him, or (human captor) one of
-        // your teammates or your own group.
-        private static bool SameSide(Player shooter, Player captor)
+        // On the captor's side: his own squad or an ally of it, or (human captor) one of your
+        // teammates or your own group.
+        // 0.22.0: no longer "any shooter the captor isn't hostile to". BotsGroup.IsEnemy only knows
+        // players already in the group's Enemies (0.16.9 BotsGroup.IsEnemy walks that list) and an
+        // EnemyInfo exists only once he has noticed them, so a shooter he hadn't seen yet (the very
+        // case of being shot from somewhere) read as "his side": the 0.21.0 raid's PMC captor was hit
+        // by you and neither the hit hook nor his own under-fire sense broke the hold-up. Now only a
+        // BOT shooter he isn't hostile to, and only for a near miss (a stray round from a friendly
+        // Scav's fight passing him), is left out; anyone else who shoots at him or hits him counts.
+        private static bool SameSide(Player shooter, Player captor, bool hit)
         {
             try
             {
@@ -95,7 +102,8 @@ namespace HandsAreHigh
                     if (co == null) return false;
                     BotOwner so = shooter.IsAI ? shooter.AIData?.BotOwner : null;
                     if (so != null && so.BotsGroup != null && so.BotsGroup == co.BotsGroup) return true;
-                    return !Suppression.IsHostile(co, shooter);
+                    if (co.BotsGroup != null && co.BotsGroup.IsAlly(shooter)) return true;
+                    return so != null && !hit && !Suppression.IsHostile(co, shooter);
                 }
                 if (shooter.IsAI) return Teammates.IsPlayerTeammate(shooter.AIData?.BotOwner);
                 string a = captor.Profile?.Info?.GroupId, b = shooter.Profile?.Info?.GroupId;
@@ -155,7 +163,10 @@ namespace HandsAreHigh
             if (onCaptor && s.Phase != Phase.HandsUp) return;
             Player shooter = null;
             try { shooter = Perception.PlayerOf(info.Player?.iPlayer); } catch { }
-            if (!Credible(s, shooter)) return;
+            // 0.22.0: a debug scenario's observer who shoots a participant is no longer an observer
+            // to that participant's squad (they may fight him; ScenarioShield).
+            if (shooter != null && ScenarioShield.Active) ScenarioShield.ObserverAttacked(victim, shooter);
+            if (!Credible(s, shooter, hit: true)) return;
             Vector3 from;
             bool known;
             if (shooter != null) { from = shooter.Position; known = true; }

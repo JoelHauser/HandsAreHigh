@@ -6,6 +6,100 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.22.0 (2026-11-20): turns without shoulder lag, captors answer the real shooter (not the
+prisoner), a clearer hands-up pose, seamless hands-up <-> hands-behind-head. From Joel's pasted
+3-part spec + a 4th part (transitions) and the 0.21.0 raid log (LogOutput 22:49) and screenshot.
+Release packed (dist/HandsAreHigh-0.22.0.zip, DLL only) and installed in H:\SPT4.1.X (0.21.0 DLL
+backed up in that session's scratchpad, backup-0.21.0). Committed and pushed to main 2026-11-21 (no
+tag/release). NEVER RUN IN GAME.**
+
+Root causes (evidence: the 22:49 0.21.0 log, the 0.16.9 decompile, offline sims):
+- Shoulders lagging a turn: while he turned his back, Presence kept his attention on the captor
+  behind him, measured from the turning root. The torso's share of that look (ApplyUpper, which runs
+  before the arms are posed in the shoulders' frame) wound the upper spine, shoulders and raised arms
+  back towards the old direction until he "lost" the captor at ~125 deg ("loses sight of his captor
+  (about 128 deg round ...)" on every Turn around), then it sprang round. Also TurnDriver: the step
+  turn handed over to a pivot at 70 deg left (every log turn: "stepped round 108-113 deg ... the rest
+  by a pivot": ~65 deg spun on planted feet), and at that hand-over the look's lead fell from 60 to
+  <= 35 deg in one frame while TrunkRotationLimit went 80 -> 45 in the same frame. Decompile
+  (MovementState.ProcessUpperbodyRotation, isAi): the root is SET to look -/+ limit when the look is
+  past it, so that was a 15 deg root snap plus a 25 deg upper-body swing against the turn. And
+  Facing.Settled (2) < TurnDriver.Dead (3): a turn resting 2-3 deg short never finished ("couldn't
+  finish turning (2 deg off after 8 s)").
+- Captor shooting the freed prisoner (#6 "Incoming fire breaks the hold-up"): the hand-back
+  (Phase.Released -> registry exit) called Restraint.ForgetPrisoner, so the ignore flag and every
+  guard came off; the unarmed man 2 m away was the captor's nearest known enemy, shot 1.2 s later.
+- Captor not reacting to being shot (#7 "PMC captures Scav", Joel hit the captor): FireBreak.SameSide
+  counted any shooter the captor wasn't hostile to as his side. BotsGroup.IsEnemy only knows players
+  already in the group's Enemies (decompile BotsGroup.cs:832) and an EnemyInfo exists only once he has
+  noticed them, so an unseen shooter, the very case of being shot, was "friendly": neither the hit
+  hook nor Captors.FreshFire broke the hold-up. In scenarios the observer override then also kept the
+  captor from ever targeting Joel (6 hits, no answer).
+- Half-raised hands (screenshot): the arm frame's up was ribcage -> head, which leans forward with the
+  idle stance (more kneeling). armsim3: at 20-30 deg lean the 0.21.0 defaults put the forearms 33-43
+  deg off vertical and the wrists below the top of the head.
+- Hands-to-head reversal: MoveTowards + SmoothStep flipped the hands' speed in one frame (posesim:
+  3.3/s per frame).
+
+What changed:
+- TurnDriver: steps continue while > 48 deg is left (look on the target once < 60 away, still > 45);
+  the look lead is rate-limited (220 deg/s, 330 while stepping); the raised trunk limit ratchets down
+  with the look (never below |HandsToBodyAngle| + 1, back to the game's within 0.75 s); StopNow for
+  leaving the registry/teardown (immediate restore). Facing.Settled = Dead + 0.5.
+- Presence.Smooth: while TurnDriver turns him for anything but facing his captor, the look leads into
+  the turn (30% of what is left, max 15 deg, relative to his body: no lag) and a Turn around lets go of
+  the captor at its start (log "turns his back: stops watching his captor, looks the way he turns").
+- ArmPose.ArmFrame: right = shoulder line (as before), up slerped from the torso's towards gravity by
+  new "Forearms stay upright" (0.8). New defaults raise 22 / forward 20 / forearm forward 4 / inward 15
+  (were 12/25/12/8), migrated once (Config version 22) only where still at the old defaults. One log line
+  per surrender once the raise is done: "hands-up pose: wrists +X / +Y cm against the top of his head,
+  forearms N deg off vertical, ... torso lean L deg" (Log decisions or Verbose).
+- HandsPose: an acceleration-limited profile (HeadHandsVel) replaces MoveTowards+SmoothStep; the
+  kneel windows are eased there instead; out of HandsUp the hands leave his head within 0.35 s.
+  Kneel.ApplyHands is unchanged: it already starts every frame from the live hands-up arm (continuous
+  at h = 0, same path back on a reversal); armsim3 re-checked it from the new start.
+- FireBreak.SameSide: same BotsGroup or BotsGroup.IsAlly only; a non-hostile BOT is left out for a
+  near miss only. Credible(s, shooter, hit). Hits always count (unless squad/ally).
+- ScenarioShield.ObserverAttacked: you hitting a captor or prisoner lifts the Observer pairs that
+  shielded you from him and his squad (they fight you with their own AI; nothing points them at you).
+- Restraint.Detach/TickDetached: a man handed back with empty hands keeps the hold-fire decisions
+  (Respect/Ignore/LetGo; Reject and Final dropped) for "Unarmed ex-prisoner spared for" (30 s, section
+  24); a gun, knife or grenade in his hands (Player.FirearmController / BaseKnifeController /
+  BaseGrenadeHandsController, decompile) ends them at once and witnesses Distrust him; dead, caught again
+  or expired ends them. The trigger guard (no firing through him) keeps working in that window.
+
+Tests done (offline): Debug + Release builds 0 warnings; tools/armsim/armsim3.py (pose under 0-30 deg
+lean, helmet; behind-head paths from the new start: >= 2.6 cm clear with a helmet, never past the face,
+0 elbow flips, <= 1.4 cm/frame, reversals, head turned +-40); tools/posesim/posesim.py (turns +-176/177,
+120, 90, 60: no root snap, trunk <= 5.5 deg/frame, 0 torso twist against the turn, settles, limit back to
+45, <= 45 deg pivoted; hands profile: reversal speed change 0.46 vs 3.33/s per frame, escape 0.30 s,
+no overshoot); firesim 12/12 and releasesim unchanged; Settings.Bind on a copy of Joel's cfg through the
+installed DLL, twice (397 entries; exactly the 4 pose keys migrated + 2 new keys). NOT done: anything in
+a raid. posesim's body model (clip ~100 deg/s while |look - root| > 45) is a model of the decompiled
+rules, not the animator itself.
+
+### In-game test plan (0.22.0)
+Log decisions, Log incoming fire, Log attention on.
+1. Pose: any hands-up prisoner, front/side/rear, with and without helmet/backpack/plate carrier: hands
+   clearly above the head, forearms near vertical, elbows bent ~100 deg, no hands in the head, no
+   shoulders into the backpack straps. Log `hands-up pose: wrists ...`: expect wrists ~+2..+6 cm against
+   the top of his head (palms ~5 cm higher), forearms ~15-20 deg off vertical. Kneeling: same look.
+2. Turn around standing, hands up, both directions, 3 times in a row: shoulders and arms turn with the
+   chest, head leads a little into the turn, no 15 deg body snap at the end of the steps; log
+   `stepped round ~130 deg ... the rest by a pivot`, `turns his back: stops watching his captor`,
+   `turned round in ~2 s` (never `couldn't finish turning`). Repeat with Hands on head.
+3. Turn around, then Turn around again half way; Turn around from kneeling (gets up, turns, kneels).
+4. Hands on head <-> Hands up, repeatedly and mid-move, standing and kneeling, during a turn: no
+   snaps, the hands come back along the same path round the ear; helmet: no clipping.
+5. Scenario "Incoming fire breaks the hold-up", near miss on the prisoner: expect `Restraint: <prisoner>
+   handed back with empty hands (...): <captor> keep holding fire at him for up to 30 s` and NO shots
+   by the captor at him; with a knife/gun in his hands later: `takes a gun/knife in his hands after his
+   release: nobody holds fire at him any more`.
+6. Scenario "PMC captures Scav", shoot the captor yourself (observer override on): expect `Scenario
+   shield: you hit <captor>: the observer override is lifted ...` and `INCOMING FIRE: <captor> (the
+   captor) hit by lowlvltest ...: the hold-up breaks`; he should fight you. Same with a real hostile
+   third party ("Captor comes under fire"): from front, side and behind the captor.
+
 **0.21.0 (2026-11-20): incoming fire breaks a hold-up; released bots go back to their own AI; door
 and wall fixes on our paths; trigger guards fixed (the "friendly" scenarios); kneel look clamp.
 From Joel's pasted 7-part spec. Release packed (dist/HandsAreHigh-0.21.0.zip, DLL only) and

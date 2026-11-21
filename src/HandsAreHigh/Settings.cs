@@ -197,6 +197,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> ForearmForward;
         internal static ConfigEntry<float> ForearmInward;
         internal static ConfigEntry<float> ForearmTwist;
+        internal static ConfigEntry<float> ArmUpright;   // 0.22.0
         internal static ConfigEntry<float> RaiseSeconds;
         internal static ConfigEntry<float> LowerSeconds;
         internal static ConfigEntry<float> EmergencyLowerSeconds;
@@ -614,14 +615,18 @@ namespace HandsAreHigh
                 "Off by default. On: your character says a matching line from your own voice when you give an order from the menu (the menu still gives the order once, spoken or not). Never counts as a Stop demand and isn't heard by other bots as a command.");
 
             // 13 Arm pose
-            UpperArmRaise = c.Bind(Pose, "Upper arm raise (deg)", 12f,
+            // 0.22.0 defaults (were 12 / 25 / 12 / 8): hands clearly above the head, forearms near
+            // vertical, ~100 deg at the elbow (tools/armsim/armsim3.py). Migrated once (Settings.V19).
+            UpperArmRaise = c.Bind(Pose, "Upper arm raise (deg)", 22f,
                 Range("Elbow height: 0 = level with the shoulder, positive = above.", -40f, 80f));
-            UpperArmForward = c.Bind(Pose, "Upper arm forward (deg)", 25f,
+            UpperArmForward = c.Bind(Pose, "Upper arm forward (deg)", 20f,
                 Range("0 = straight out to the side, 90 = straight ahead.", -20f, 90f));
-            ForearmForward = c.Bind(Pose, "Forearm forward (deg)", 12f,
+            ForearmForward = c.Bind(Pose, "Forearm forward (deg)", 4f,
                 Range("0 = forearm straight up, positive tips the hands forward.", -30f, 80f));
-            ForearmInward = c.Bind(Pose, "Forearm inward (deg)", 8f,
+            ForearmInward = c.Bind(Pose, "Forearm inward (deg)", 15f,
                 Range("Positive tips the hands in towards the head.", -30f, 45f));
+            ArmUpright = c.Bind(Pose, "Forearms stay upright", 0.8f,
+                Range("How much the raised arms keep to true vertical when his upper body leans (standing stance, kneeling). 0: they lean with his chest (hands drop forward as he leans); 1: fully upright.", 0f, 1f));
             ForearmTwist = c.Bind(Pose, "Forearm twist (deg)", 0f,
                 Range("Turns the forearms about their length, to swing the palms forward.", -180f, 180f));
             RaiseSeconds = c.Bind(Pose, "Raise time (s)", 0.35f, Range("", 0f, 2f));

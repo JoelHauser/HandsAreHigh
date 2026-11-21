@@ -133,6 +133,15 @@ namespace HandsAreHigh
         internal Vector3 DriveLook;
         internal string DriveWhat;
         internal bool NoStepTurn;
+        // 0.22.0: the look's lead over the root (signed deg), eased (never jumps between step and
+        // pivot); the signed degrees still to turn and what the turn is for, this frame (Presence
+        // leads the head into a turn instead of holding it on the old direction); when the raised
+        // trunk limit started coming back down (it ratchets down with the look, no root snap).
+        internal float DriveLead, DriveOff, LimitEaseSince = -1f;
+        internal string DriveFor;
+        // 0.22.0: the hands-to-head move's speed (HandsPose: velocity carried through reversals).
+        internal float HeadHandsVel;
+        internal bool PoseLogged;   // the hands-up pose measured once per surrender (ArmPose)
 
         // 0.16.0: what the last Drop your weapons did (Compliance.cs): what he really dropped,
         // what he kept back on purpose (never anything he doesn't carry), and how many times the

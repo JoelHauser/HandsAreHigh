@@ -17,6 +17,7 @@ namespace HandsAreHigh
         internal static ConfigEntry<float> FireCoverSeconds;
         internal static ConfigEntry<float> ReleaseWatchSeconds;
         internal static ConfigEntry<bool> LogFireBreak;
+        internal static ConfigEntry<float> ExPrisonerHoldFire;   // 0.22.0
 
         private static void BindFireBreak(ConfigFile c)
         {
@@ -34,6 +35,8 @@ namespace HandsAreHigh
                 Range("A move to cover (from fire, or slipping away) ends after this long wherever he is, and his own AI has him from there. Stuck or no reachable cover ends it at once.", 2f, 30f));
             ReleaseWatchSeconds = c.Bind(FireSec, "Log a released bot for (s)", 60f,
                 Range("After a bot is handed back to his own AI, three log lines (+15 s, +30 s, then this) say where he is, how far he moved, which AI layer drives him and his target; STILL NEAR THE CAPTURE SPOT flags one that never left. 0: off.", 0f, 300f));
+            ExPrisonerHoldFire = c.Bind(FireSec, "Unarmed ex-prisoner spared for (s)", 30f,
+                Range("After a man is handed back to his own AI unarmed (let go, or freed by incoming fire), the bots that were holding fire at him keep holding it this long, so his ex-captor deals with whoever is actually shooting instead of the empty-handed man beside him. It ends at once if he takes a weapon in his hands. 0: decisions end at the hand-back (0.21.0).", 0f, 120f));
             LogFireBreak = c.Bind(FireSec, "Log incoming fire", true,
                 "Log what broke a hold-up (who was hit or nearly hit, by whom, from where), each side's reaction, the prisoner's choice under fire with every option weighed, and refused recaptures. No per-frame lines.");
         }
