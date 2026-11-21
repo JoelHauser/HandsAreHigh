@@ -86,8 +86,14 @@ namespace HandsAreHigh
         internal static bool InLineOfFire(Player shooter, Player man, float maxRange)
         {
             if (shooter == null || !Alive(man)) return false;
-            Vector3 eye = Eye(shooter);
-            Vector3 look = shooter.LookDirection;
+            return OnLineOfFire(shooter, man, maxRange, Eye(shooter), shooter.LookDirection);
+        }
+
+        // 0.28.4: the same test along a given line (a round's own muzzle position and direction,
+        // Suppression.ShotPatch): a bot's burst after a press that was clear can sweep onto a man.
+        internal static bool OnLineOfFire(Player shooter, Player man, float maxRange, Vector3 eye, Vector3 look)
+        {
+            if (shooter == null || !Alive(man)) return false;
             if (look.sqrMagnitude < 1e-4f) return false;
             look.Normalize();
             if (!OnLine(eye, look, man, maxRange, out float along)) return false;
@@ -108,7 +114,9 @@ namespace HandsAreHigh
             float up = -off.y;                       // height of the line above his feet
             if (up < -0.1f || up > 1.95f) return false;
             off.y = 0f;
-            return off.magnitude <= 0.55f + 0.01f * along;
+            // 0.28.4: 0.8 m + 1.5 cm/m (was 0.55 + 1 cm/m). The 0.28.3 raid: a captor fighting past
+            // his prisoner put a round 0.9 m from him, then hit him; bots' scatter is wider than that.
+            return off.magnitude <= 0.8f + 0.015f * along;
         }
 
         // Within this a clear line is enough to know where someone is (sight, hearing, peripheral).
@@ -161,7 +169,12 @@ namespace HandsAreHigh
 
         // A spot roughly `distance` away from the threat with a complete path to it,
         // preferring ones the threat can't see. hiddenOnly: only spots out of its sight.
-        internal static bool RetreatPoint(Player bot, Vector3 threat, float distance, bool hiddenOnly, out Vector3 point)
+        // 0.28.2 anyOnly: the caller only asks whether one exists (SurrenderLogic.TakeOpening's "run"
+        // option, whose spot is never used: the flight searches its own). It stops at the first
+        // reachable candidate instead of path-solving every better-scoring one: the 0.28.1 raid had a
+        // 16.8 ms frame from an opening's run + hide searches together (two full searches, up to
+        // PathCandidates path solves each).
+        internal static bool RetreatPoint(Player bot, Vector3 threat, float distance, bool hiddenOnly, out Vector3 point, bool anyOnly = false)
         {
             point = bot.Position;
             Vector3 away = bot.Position - threat;
@@ -190,6 +203,7 @@ namespace HandsAreHigh
                 bestScore = score;
                 point = hit.position;
                 found = true;
+                if (anyOnly) return true;
             }
             return found;
         }

@@ -149,8 +149,6 @@ namespace HandsAreHigh
             return bot != null && ByGuard.Count > 0 && ByGuard.TryGetValue(bot, out g);
         }
 
-        internal static bool IsGuard(Player bot) => bot != null && ByGuard.Count > 0 && ByGuard.ContainsKey(bot);
-
         // Restraint.OnArmed: this observer reacts by his own perception (Watch), not at once.
         internal static bool ReactsHimself(SurrenderState s, Player observer)
         {

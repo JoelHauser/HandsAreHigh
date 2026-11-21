@@ -27,12 +27,29 @@ namespace HandsAreHigh
     {
         // Every shot by anyone: no closure (a lambda here allocated per shot), nothing at all
         // outside a raid or with the mod off.
-        private static void Postfix(Player ____player, Vector3 shotPosition, Vector3 shotDirection)
+        private static void Postfix(Player.FirearmController __instance, Player ____player, Vector3 shotPosition, Vector3 shotDirection)
         {
             if (____player == null || !Settings.Enabled.Value) return;
             long t0 = Perf.Begin();
             try { Suppression.OnShot(____player, shotPosition, shotDirection); }
             catch (System.Exception e) { HandsAreHighPlugin.Report("near miss", e); }
+            // 0.28.4: the burst guard. This round is already fired; the next ones in the burst are
+            // stopped by releasing the trigger when a man this bot holds fire at is on its line.
+            if (Restraint.Any && ____player.IsAI)
+            {
+                try
+                {
+                    if (Restraint.ShotAtRestrained(____player, shotPosition, shotDirection, out Player prisoner))
+                    {
+                        // As the other guards (ShootDataPatch): the AI's own shot ends (its trigger with it).
+                        BotOwner bo = ____player.AIData?.BotOwner;
+                        if (bo?.ShootData != null) bo.ShootData.EndShoot();
+                        else __instance.SetTriggerPressed(false);
+                        Restraint.LogBurstStopped(____player, prisoner);
+                    }
+                }
+                catch (System.Exception e) { HandsAreHighPlugin.Report("burst guard", e); }
+            }
             Perf.End(Perf.Sec.Shot, t0);
         }
     }

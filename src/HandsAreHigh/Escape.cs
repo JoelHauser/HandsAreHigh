@@ -17,8 +17,10 @@ namespace HandsAreHigh
     //            threat where he last SAW it (updated only while he sees his ex-captor: no
     //            tracking of what he can't perceive).
     //   Keep-away  while unarmed (no usable gun in his hands or on him), not under fire, and within
-    //            the memory: if his own AI walks him back within "Keep away radius" of either place
-    //            (getting closer over the last 3 s), the KeepAway layer (priority between SAIN's
+    //            the memory: if his own AI walks him back within "Keep away radius" of his ex-captor
+    //            (where he last saw him), or of the capture spot while the ex-captor is near it,
+    //            getting closer over the last 3 s (0.28.3; before, the spot counted on its own, which
+    //            fought SAIN taking him back to his squad), the KeepAway layer (priority between SAIN's
     //            combat layers and its avoid-threat layer) takes him one leg away (Perception.
     //            FleePoint, the same route rules as an escape), then hands him back. At most "Keep
     //            away legs" per release. Logged with the layer and target that brought him back.
@@ -160,7 +162,16 @@ namespace HandsAreHigh
                 e.ThreatAt = c.Position;
                 e.ThreatVel = FlatVelocity(c);
             }
-            float d = Mathf.Min(Perception.Flat(p.Position, e.HeldAt), Perception.Flat(p.Position, e.ThreatAt));
+            // 0.28.3 (Joel's call after the live 0.28.2 raid): what he keeps away from is his ex-captor,
+            // where he last saw him. The capture spot counts only while that is near it; with the
+            // captor gone elsewhere (Давид: SAIN's Squad Layer took him back to his squad there three
+            // times, his ex-captor 60-77 m away) going back is rejoining his squad, his AI's own call.
+            // A dead ex-captor leaves nothing to keep away from.
+            bool captorAlive = Perception.Alive(c);
+            bool atSpot = CaptorAtSpot(e);
+            float d = !captorAlive ? float.MaxValue
+                    : atSpot ? Mathf.Min(Perception.Flat(p.Position, e.HeldAt), Perception.Flat(p.Position, e.ThreatAt))
+                    : Perception.Flat(p.Position, e.ThreatAt);
             for (int i = e.Dist.Length - 1; i > 0; i--) e.Dist[i] = e.Dist[i - 1];
             e.Dist[0] = d;
             e.Samples++;
@@ -201,7 +212,7 @@ namespace HandsAreHigh
             if (e.Legs >= Settings.KeepAwayLegs.Value) return;
             e.Legs++;
             e.Active = true;
-            e.Why = $"drifting back: {d:0} m from {(Perception.Flat(p.Position, e.HeldAt) <= Perception.Flat(p.Position, e.ThreatAt) ? "where he was held" : "where he last saw his captor")}, {e.Dist[3] - d:0} m closer in 3 s; layer {layer}, target {targetName}, {Arsenal.DescribeArmed(p)}";
+            e.Why = $"drifting back: {d:0} m from {(atSpot && Perception.Flat(p.Position, e.HeldAt) <= Perception.Flat(p.Position, e.ThreatAt) ? "where he was held (his ex-captor still near it)" : "where he last saw his ex-captor")}, {e.Dist[3] - d:0} m closer in 3 s; layer {layer}, target {targetName}, {Arsenal.DescribeArmed(p)}";
             if (Settings.LogEscape.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{e.Name}: keeps away, leg {e.Legs} of at most {Settings.KeepAwayLegs.Value} ({e.Why})");
         }
@@ -210,12 +221,16 @@ namespace HandsAreHigh
         internal static bool KeepAway(Player p) =>
             Entries.Count > 0 && p != null && Entries.TryGetValue(p, out Entry e) && e.Active;
 
+        private static bool CaptorAtSpot(Entry e) =>
+            Perception.Flat(e.ThreatAt, e.HeldAt) <= Settings.KeepAwayRadius.Value;
+
         internal static bool Target(Player p, out Vector3 heldAt, out Vector3 threat, out Vector3 vel, out string name)
         {
             heldAt = threat = vel = Vector3.zero;
             name = null;
             if (p == null || !Entries.TryGetValue(p, out Entry e)) return false;
-            heldAt = e.HeldAt; threat = e.ThreatAt; name = e.Name;
+            // 0.28.3: the capture spot is only a place to avoid while his ex-captor is near it.
+            heldAt = CaptorAtSpot(e) ? e.HeldAt : e.ThreatAt; threat = e.ThreatAt; name = e.Name;
             // His velocity only if seen this very second (Sample keeps ThreatVel from the last sight).
             vel = Perception.Alive(e.Captor) && Perception.Sees(p, e.Captor, Vector3.Distance(p.Position, e.Captor.Position)) ? e.ThreatVel : Vector3.zero;
             return true;
@@ -260,8 +275,8 @@ namespace HandsAreHigh
     internal sealed class KeepAwayLogic : CustomLogic
     {
         private Vector3 _dest;
-        private bool _have, _moving;
-        private float _since, _nextPath, _progressAt;
+        private bool _have, _moving, _sprint;
+        private float _since, _nextPath, _progressAt, _nextSprintCheck;
         private Vector3 _progressFrom;
 
         public KeepAwayLogic(BotOwner botOwner) : base(botOwner) { }
@@ -270,8 +285,9 @@ namespace HandsAreHigh
 
         public override void Start()
         {
-            _have = false; _moving = false;
+            _have = false; _moving = false; _sprint = false;
             _since = Time.time;
+            _nextSprintCheck = 0f;
             BotOwner.ShootData?.EndShoot();
         }
 
@@ -319,9 +335,18 @@ namespace HandsAreHigh
             if (Perception.Flat(me.Position, _dest) < 1.5f) { Escape.EndLeg(me, "got there"); return; }
             if (now - _since > 20f) { Escape.EndLeg(me, "20 s on the way"); return; }
             if ((me.Position - _progressFrom).sqrMagnitude > 1f) { _progressFrom = me.Position; _progressAt = now; }
-            else if (now - _progressAt > 4f) { Escape.EndLeg(me, "stuck"); return; }
+            else if (now - _progressAt > 4f) { Escape.EndLeg(me, StuckWhy(me)); return; }
 
-            bool sprint = vel.sqrMagnitude > 0f || Perception.Flat(me.Position, threat) < 30f && Perception.CanSee(me, threat);
+            // The header's rule: a brisk walk, a sprint only while he sees the threat within 30 m.
+            // Pre-0.29 also sprinted whenever the ex-captor's LAST SEEN velocity was non-zero (stale,
+            // and almost never exactly zero): every keep-away leg was a sprint. Asked every 0.5 s,
+            // not with a sight line every frame.
+            if (now >= _nextSprintCheck)
+            {
+                _nextSprintCheck = now + 0.5f;
+                _sprint = Perception.Flat(me.Position, threat) < 30f && Perception.CanSee(me, threat);
+            }
+            bool sprint = _sprint;
             BotOwner.SetPose(1f);
             BotOwner.SetTargetMoveSpeed(1f);
             if (_moving && DoorBusy()) { BotOwner.Sprint(false); return; }
@@ -340,6 +365,20 @@ namespace HandsAreHigh
             }
             BotOwner.Steering.LookToMovingDirection();
             BotOwner.Sprint(sprint);
+        }
+
+        // 0.28.3: the live 0.28.2 raid had a leg "stuck" with a complete 27 m path and no word on why
+        // (the next leg walked fine). What the game's mover and body were doing, once, at the event.
+        private string StuckWhy(Player me)
+        {
+            string mover = "?", stamina = "?";
+            try { mover = BotOwner.Mover?.CurrentState.ToString() ?? "none"; } catch { }
+            try { stamina = me.Physical?.Stamina != null ? $"{me.Physical.Stamina.NormalValue:0.00}" : "?"; } catch { }
+            float speed = 0f;
+            try { Vector3 v = me.Velocity; v.y = 0f; speed = v.magnitude; } catch { }
+            string door = "?";
+            try { door = BotOwner.DoorOpener != null && BotOwner.DoorOpener.Interacting ? "at a door" : "no door"; } catch { }
+            return $"stuck: under 1 m in 4 s; mover {mover}, {speed:0.0} m/s, stamina {stamina}, {door}, {Perception.Flat(me.Position, _dest):0} m to go";
         }
 
         // As SurrenderLogic.Relink: the mover's last good NavMesh position is where he stands now.

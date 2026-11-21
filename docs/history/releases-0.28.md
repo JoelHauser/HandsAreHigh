@@ -515,3 +515,149 @@ From Joel's pasted spec: a bot may ignore a surrender instead of becoming a capt
 | 10. Orders | Numpad keys too | 5. Commands and dialogue | Number keys (combined) |
 | 07. Retreat and recapture | Leaves the captivity area (m) | 4. Prisoner escape and recovery | Flee distance from captivity (m) (combined) |
 | 26. Release and escape | Escape ends this far from the threat (m) | 4. Prisoner escape and recovery | Flee distance from captivity (m) (combined) |
+
+## 0.28.1 (2026-11-21): release-quality pass
+
+Review of the per-frame paths, lifecycle/cleanup and hand-back, by inspection (no Profile run exists).
+Found no large cost: every all-player patch and layer `IsActive` already exits on a count; heavy
+searches go through `Perception.TakeHeavy`; statics are cleared on raid change and teardown.
+
+- Keep-away legs (Escape.KeepAwayLogic) sprinted almost always: the rule also fired on the ex-captor's
+  last-seen velocity being non-zero (stale, and practically never exactly zero). Now the documented
+  rule only (sprint while he sees the threat within 30 m, else a brisk walk), evaluated every 0.5 s
+  instead of a sight line every frame.
+- Removed `Overwatch.IsGuard` (no callers).
+- MOD-PAGE.md: the Forge description (release facts still to confirm are in its header comment).
+- README: the opening draws in Joel's order (slung gun, sidearm, knife only without a gun); keys
+  live in section 5.
+
+Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.1.zip`; installed in H:/SPT4.1.X (hash-verified);
+not run in game.
+
+## 0.28.2 (2026-11-21): from the first 0.28.1 raid with Profile on (LogOutput 10:40)
+
+The raid: config layout migrated (428 values), 3 NATURAL surrenders (first ever in a log; 2 Scav,
+1 PMC; one to a bot captor, Chauleqix, lethal intent rolled), 0 mod errors.
+
+Profile (70 reports, ~19 ms frames): our gameplay cost 0.05-0.07% of frame time with nobody held,
+0.4-0.9% with one prisoner. The p99.9 ~70-80 ms frame every 10 s is there with the mod idle (0.5 ms/s
+of ours), alongside one gen-0 GC per report: not ours. Single-frame spikes: raid start 20 ms
+(Registry: EnsureRaid prewarm, once); the first surrender 23 ms + first pose frame 11 ms (first use;
+the second prisoner's worst was 5 ms); every surrender frame 10-22 ms (Natural/Captors: drop, captor
+decision, kit value, path check in one frame); layer decision frames 5-9 ms (opening, regroup).
+Some spikes include sections that normally cost ~1 us (Menu 2 ms), i.e. a GC landed in them.
+
+- Bug: a scramble pick-up the game put straight into his hands ("holding TOZ-106") was followed by a
+  draw request, refused (hands busy), so AfterPickUp gave up on the gun he held and Decide handed
+  him back as `couldn't draw his slung gun`, as an unarmed release (Restraint.Detach). Now: the
+  picked-up gun already in hand -> Rearm; Decide rearms on a usable gun already in hand.
+- Diagnostics: 7 `RESTRAINT LEAK (blocked at trigger)` lines from Cogy, who held fire at reokos
+  while fighting a Scav: the trigger guard blocks any press with the prisoner on the line of fire,
+  so these were probably shots at the Scav with reokos in the way (no prisoner hit was logged). The
+  line now names the shooter's target; with a target other than the prisoner it is an info line.
+- Profiler: spike lines say when a GC collection ran that frame; detail sections Kit
+  (Arsenal.AssessKit) and Start (SurrenderRegistry.Surrender), shown but not added to totals, to
+  find out what the surrender frame costs before changing it.
+
+Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.2.zip`; installed in H:/SPT4.1.X (hash-verified).
+
+## 0.28.3 (2026-11-21): from the live 0.28.2 raid (LogOutput 11:00, 7 natural surrenders, 0 mod warnings)
+
+- A Scav (Санька) gave up to Fantia, who never saw it, slipped into cover during an opening, and
+  was shot by Fantia while hiding. Behaviour as designed (no decision to spare him existed), but the
+  hit diagnosis called Fantia "an outsider's own fight": now it says he is the man he gave up to,
+  who never answered the surrender.
+- The opening's "run" option ran a full RetreatPoint search (up to 12 path solves) only to learn
+  whether a way out exists, in the same frame as the "hide" search: a 16.8 ms frame. It now stops at
+  the first reachable spot (`anyOnly`); the hide search and the flight's own route search are as before.
+- Confirmed in raid: the new trigger-guard line ("falloutfreak10's shot at Fantia held back at
+  trigger: Санька ... is in the line of fire"): the 0.28.1 "leaks" were this case.
+
+- Opening hides used the FIRE move's time limit ("Fire: move to cover at most", 8 s) for a spot up to
+  26 m away: both opening hides in the raid (Санька, Давид, hurt legs) ended "8 s on the way to
+  cover", stopped short in the open. Now the limit is the time he needs (distance x 1.4 / speed by
+  legs/urgency + 3 s, between the fire limit and 25 s); Stalled still ends a hide with no progress.
+  The timeout line says how long and how far short.
+- Keep-away "stuck" lines now give the mover state, speed, stamina, door and distance left: 3 of
+  Давид's 6 legs ended stuck (badly hurt, hurt legs) with no reason logged.
+- Observed (changed below): SAIN's Squad Layer walks an unarmed released Scav back to his squad at the
+  capture spot (Давид CIRCLED BACK twice; 6 keep-away legs across two releases; his ex-captor was
+  60-77 m away). Keep-away keys on the capture spot, not on where the ex-captor is; whether it
+  should yield when the captor is far is a design question for Joel.
+- Давид surrendered twice to Fantia, who never noticed either: allowed (30 s cooldown long over,
+  nobody ever held him).
+
+- Fantia was handed back from an opening hide "armed: a gun in his hands" (his slung AKS) with no
+  draw of ours asked: something else (game weapon selector or SAIN; not verified) drew while our
+  layer held him. Outcome self-corrects (Restraint.TickDetached ends the hold-fire on an armed man),
+  but the source is unknown: a one-time warning `... is in his hands with no draw of ours (phase,
+  arms, active layer)` now logs it when it happens.
+
+- Keep-away (Joel's call): keys on the ex-captor where he last saw him; the capture spot counts only
+  while that is within "Keep away radius" of it; a dead ex-captor: nothing to keep away from. The
+  leg's flight then avoids the ex-captor only. SAIN taking an unarmed man back to his squad at the
+  capture spot, with the captor gone, is left to SAIN.
+
+Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.3.zip`; installed in
+H:/SPT4.1.X (hash-verified; 0.28.2 DLL + cfg in that session scratchpad `backup-0.28.2`); not run.
+
+## 0.28.4 (2026-11-21): from the live 0.28.3 raid (9 natural surrenders, 2 to bot custody)
+
+- The 0.28.3 hide-time fix missed the opening path: TakeOpening's hide brings its own spot and skips
+  the cover search where the new limit was set, so DaddyAL's opening hide still ended "8 s on the
+  way to cover, 12 m short". Now SetHideTime runs for both. Debug build passed; not packed (game running).
+- Surrender-frame split (first data): DaddyAL's surrender frame 4.1 ms, of which Start
+  (SurrenderRegistry.Surrender) 0.44 ms and Captors 3.47 ms: the cost is on the bot-captor side.
+- Real restraint leaks (4 `RESTRAINT LEAK (hit)` warnings): DaddyAL took custody of Леха, then
+  fought a third party (Клим) past him; a round passed Леха at 0.9 m, then three hits, the last
+  trigger press 0.1-0.3 s before, 3 s after the decision; Bot-Scave hit him 5.3 s after "lets go"
+  the same way. Two gaps: the trigger guard only runs per press (a burst after a clear press swept
+  onto him), and the line box (0.55 m + 1 cm/m around the LOOK) was narrower than bots' scatter.
+  Now: a burst guard (Suppression.ShotPatch -> Restraint.ShotAtRestrained along the round's own
+  muzzle line; a hit ends the AI's shot via ShootData.EndShoot, logged "burst ... stopped"), and the
+  box 0.8 m + 1.5 cm/m (Perception.OnLine; shared with truce/scenario shield). tools/firesim:
+  13/13 (new case 13 is this raid's geometry: old fire -> new block).
+- "Shot with his hands up" names the shooter (it said nobody when no one held fire at him).
+- Perf detail section Decide (Captors.Decide): one surrender start cost 16 ms (Рустам: squad
+  hand-off to DaddyAL, three squadmates informed, cover chosen) against 0.44 ms for an unanswered one;
+  Decide says next time whether the captor decision is that cost. Other single frames: raid start
+  18 ms (Registry prewarm, every raid), raid end 18 ms (Scenarios cleanup), an opening 10.7 ms (the
+  old two-search code). Memory: heap flat at ~2.5 GB after the first minutes; our tracked state
+  bounded (prisoners/captors/restraint back to 0, history 35, loot cache 47). The ~80-95 ms frame
+  every 10 s is one GC each (not ours); Joel has Verbose logs on (58% of the log lines).
+- Not changed (offered to Joel): bots surrendering mid close-range firefight often die before the
+  shooter notices (Тимофей, Саша); a "lull" rule would trade fewer surrenders for more survivors.
+
+Build passed (Debug + Release, 0 warnings); tools/firesim 13/13; packed `dist/HandsAreHigh-0.28.4.zip`
+and installed in H:/SPT4.1.X (hash-verified; 0.28.3 DLL + cfg in that session scratchpad
+`backup-0.28.3`); not run in game.
+
+## 0.28.5 (2026-11-21): from the live 0.28.4 raid (3 surrenders, 0 leaks, 1 burst stopped, 0 warnings)
+
+- Surrender frame split (Ngst, first surrender of the raid): 31.9 ms in one frame, Start 21.5 ms,
+  of which Decide 8.6 ms; the rest of Start is the game's drop (weapon into the world), the voice
+  line and state setup. The captor's decision now runs from the next frame (Captors.TickDue, one per
+  frame, same validity rules as TickPending; cleared with Captors.Clear). Debug build passed; not
+  packed (game running).
+- Log typo: "take chance X, roll Ydeclines to guard him" now has its separator.
+- Seen in the 0.28.4 raid: the burst guard's first stop (Echo55 at Лёма past Станислав, no hit);
+  the shooter named on "shot with his hands up"; a captor blocked ~15 s behind a spared man in a
+  crossfire, resolved by FireBreak (no change made). No opening hide occurred: the hide-time fix is
+  still unseen in raid.
+
+Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.5.zip` and installed in
+H:/SPT4.1.X (hash-verified; 0.28.4 DLL + cfg in that session scratchpad `backup-0.28.4`); not run.
+
+## 0.28.6 (2026-11-21): from the live 0.28.5 raid (7 surrenders, 0 leaks, 0 warnings)
+
+- Deferred decision confirmed: Кот's surrender frame 2.5 ms (Start 0.16 ms) vs 22-32 ms before; the
+  decision landed in a later frame (Decide 6.6 ms in a 12.8 ms Captors frame), custody setup 7.2 ms.
+- Captor walk-up: oGRiZe took custody at 22 m, his walk-up stopped "stuck" at once (under 0.5 m in
+  2.5 s), he guarded blind from 22 m and retried only after 8 s; the prisoner walks off after 6 s
+  unwatched, so Кот left. Now a captor who can't see his man retries after 2 s, and the stuck line
+  gives the active layer, mover state and speed (cause of the stall still unknown).
+- Cosmetic: the take-chance line printed "roll 0.31;  -> takes him prisoner" (double space): fixed.
+- VERIFIED IN RAID (log): opening-hide timing. Толян slipped into cover during an opening and ended
+  "Hiding -> Released (in cover)" after 16 s, 23 m away (the 8 s limit would have stopped him short).
+Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.6.zip` and installed in
+H:/SPT4.1.X (hash-verified; 0.28.5 DLL + cfg in that session scratchpad `backup-0.28.5`); not run.

@@ -407,6 +407,13 @@ namespace HandsAreHigh
         {
             if (Time.time - h.KitAt < Settings.KitRecheck.Value) return;
             h.KitAt = Time.time;
+            long t0 = Perf.Begin();   // 0.28.2: detail section (inside Natural / Captors)
+            try { AssessKitInner(bot, h); }
+            finally { Perf.End(Perf.Sec.Kit, t0); }
+        }
+
+        private static void AssessKitInner(Player bot, BotHistory h)
+        {
 
             InventoryEquipment eq = bot.Equipment;
             if (eq == null) return;

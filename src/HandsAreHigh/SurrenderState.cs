@@ -245,6 +245,7 @@ namespace HandsAreHigh
         internal Player IgnoredBy;
         internal float IgnoredAt = -1f;
         internal bool IgnoredWaitLogged;
+        internal bool ForeignDrawLogged;   // 0.28.3: a gun in his hands that no draw of ours put there (logged once)
         internal bool Ignored => (object)IgnoredBy != null && IgnoredBy == Captor;
         // 0.25.0: the hand-off timeline (Time.time; -1 = didn't happen). Logged by ReleaseWatch once
         // his own AI is seen driving him, so "where does the delay come from" is a log fact.
@@ -529,6 +530,7 @@ namespace HandsAreHigh
             IgnoredBy = null;
             IgnoredAt = -1f;
             IgnoredWaitLogged = false;
+            ForeignDrawLogged = false;
             TLeftCue = TLeftNoticed = TEscape = THandsDown = TOnFeet = TFirstMove = TLayerOff = -1f;
             EscapeKind = null;
             OfferUntil =Time.time + Settings.Between(Settings.OfferMin, Settings.OfferMax) * (1.2f - 0.4f * Nerve);

@@ -4,12 +4,18 @@ Update this file at every task boundary (replace, don't append a transcript). Us
 exactly: **implemented** / **build passed** / **simulation passed** / **verified in raid** (log or
 Joel's eyes). Release history lives in `docs/history/`.
 
-Last updated: 2026-11-21 (0.28.0: ignored surrenders, F12 menu in seven sections).
+Last updated: 2026-11-21 (0.28.1: release-quality pass, Forge description in MOD-PAGE.md).
 
 ## State of the code
 
 | Version | Where | Level |
 |---|---|---|
+| 0.28.6 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.6.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.5 DLL + cfg in that session scratchpad `backup-0.28.5`) | build passed (Debug + Release, 0 warnings); not run in game |
+| 0.28.5 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.5.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.4 DLL + cfg in that session scratchpad `backup-0.28.4`) | build passed (Debug + Release, 0 warnings); not run in game |
+| 0.28.4 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.4.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.3 DLL + cfg in that session scratchpad `backup-0.28.3`) | build passed (Debug + Release, 0 warnings), simulation passed (tools/firesim 13/13); not run in game |
+| 0.28.3 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.3.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.2 DLL + cfg in that session scratchpad `backup-0.28.2`) | build passed (Debug + Release, 0 warnings); not run in game |
+| 0.28.2 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.2.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.1 DLL + cfg in that session scratchpad `backup-0.28.1`) | build passed (Debug + Release, 0 warnings); not run in game |
+| 0.28.1 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.1.zip`), installed in H:\SPT4.1.X 2026-11-21 (hash-verified; 0.28.0 DLL + cfg in that session scratchpad `backup-0.28.0`) | build passed (Debug + Release, 0 warnings); no settings changed; not run in game |
 | 0.28.0 | main @ 988d6e9 (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.28.0.zip`) and installed in H:\SPT4.1.X (hash-verified); 0.27.0 DLL + cfg in that session's scratchpad (`backup-0.27.0`); Joel's cfg not yet migrated (the mod does it at the next launch) | build passed (Debug + Release, 0 warnings), cfg check passed (bind.ps1 + carry.py on a copy of Joel's cfg: 428/428 values carried; merged settings on a synthetic copy); not run in game |
 | 0.27.0 | main @ b84c866 (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.27.0.zip`) and installed in H:\SPT4.1.X; 0.26.0 DLL + cfg in that session's scratchpad (`backup-0.26.0`) | build passed (Debug + Release, 0 warnings), simulation passed (tools/fingersim/lace.py); Joel: "looks better" in game (2026-11-21) |
 | 0.26.0 | main @ 0d1d50e (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.26.0.zip`) and installed in H:\SPT4.1.X; 0.25.0 DLL + cfg backed up in that session's scratchpad (`backup-0.25.0`) | build passed (Debug + Release, 0 warnings), simulation passed (overlap.py, releasesim, abandonsim), ORBIT members checked by reflection on the installed DLL; Joel: "looks better" in game (2026-11-21) |
@@ -19,10 +25,16 @@ No GitHub release exists for any version. Joel decides commits/pushes.
 
 ## Objective in progress
 
-Joel's 13th spec (0.28.0, notes + old->new key table in docs/history/releases-0.28.md): a bot may
-ignore a surrender (no custody, holds fire, back to his raid); the man notices, takes his gun back if
-safe or walks off, and both are under a truce at the hand-back. F12 menu: 7 sections, advanced
-settings hidden, 3 merged pairs, saved values migrated. All implemented; waiting for a raid.
+Performance + release pass driven by raid logs (notes: docs/history/releases-0.28.md, 0.28.1-0.28.6).
+Verified in raid (log level, five raids on 0.28.1-0.28.5): ~40 natural surrenders, cfg migration, our
+cost ~0.05-0.15% of frame time, heap flat, tracked state bounded; on 0.28.4/0.28.5: 0 restraint leaks,
+burst guard stopped one burst, opening hides reach cover (2/2), surrender frame ~2.5 ms with the
+captor decision deferred, shooter named on hits.
+0.28.6 (installed, unrun): a captor who can't see his prisoner retries the walk-up after 2 s (was 8 s:
+oGRiZe lost Кот), stuck walk-ups logged with layer/mover/speed, log double space.
+Joel ended live testing 2026-11-21 after one 0.28.6 surrender (refused + killed as decided, 0 warnings). Still unseen in raid: the 2 s blind-captor retry and the stuck walk-up details. Next (when convenient): a raid with a bot-custody surrender (captor keeps his man; any `stops walking up ... stuck`
+detail). Open for Joel: "lull" rule for surrenders mid close-range firefight; Verbose logs off;
+commit everything since 988d6e9 (incl. MOD-PAGE.md); release when he asks.
 
 ## What the 0.25.0 raid log showed (verified in raid, log level)
 
@@ -49,6 +61,8 @@ settings hidden, 3 merged pairs, saved values migrated. All implemented; waiting
 
 ## Needs in-raid verification (nothing below has been seen in game)
 
+0.28.1:
+- Keep-away legs (`keeps away, leg N`): a brisk walk; a sprint only while he sees his ex-captor within 30 m.
 0.28.0 (test plan in docs/history/releases-0.28.md):
 - First launch: `Config layout: 428 saved value(s) moved`; Joel's 10 changed values still set in F12.
 - Ignored surrender: `IGNORES the surrender`, prisoner `pays him no attention` -> gun back calmly or

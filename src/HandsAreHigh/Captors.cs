@@ -178,10 +178,43 @@ namespace HandsAreHigh
                 HandsAreHighPlugin.Log.LogInfo($"{Restraint.Name(captor)}: hasn't seen {s.Name} give up ({Vector3.Distance(captor.Position, s.Bot.Position):0} m); the surrender is unanswered for now");
                 return;
             }
+            // 0.28.4: decided from the next frame on (one decision per frame), not inside the surrender
+            // frame: the 0.28.4 raid measured a surrender frame of 32 ms, 8.6 ms of it this decision
+            // on top of the game's own drop. Nothing changes but its frame (~20 ms later).
+            if (Due.Count < 16) { Due.Add(s); DueBy.Add(o); DueFrame.Add(Time.frameCount); }
+            else Decide(s, o);
+        }
+
+        private static readonly List<SurrenderState> Due = new List<SurrenderState>(4);
+        private static readonly List<BotOwner> DueBy = new List<BotOwner>(4);
+        private static readonly List<int> DueFrame = new List<int>(4);
+
+        // One queued decision per frame, from the frame after the surrender; the same validity rules
+        // as TickPending (a surrender that ended, or an observer decision made meanwhile, drops it).
+        private static void TickDue(float now)
+        {
+            if (Due.Count == 0 || DueFrame[0] >= Time.frameCount) return;
+            SurrenderState s = Due[0];
+            BotOwner o = DueBy[0];
+            Due.RemoveAt(0); DueBy.RemoveAt(0); DueFrame.RemoveAt(0);
+            bool over = s.Dead || s.Bot == null || !SurrenderRegistry.TryGet(s.Bot, out SurrenderState cur) || cur != s ||
+                        s.Phase != Phase.HandsUp || s.Custody != null || o == null || o.IsDead || s.Captor != o.GetPlayer;
+            if (over) return;
+            if (Restraint.TryGet(s.Bot, o.GetPlayer, out RestraintEntry e) && now < e.Until) return;
             Decide(s, o);
         }
 
+        // 0.28.4: timed as a detail section (Perf "Decide"): the 0.28.3 raid had a 16 ms surrender start
+        // (Рустам: squad hand-off to DaddyAL, three squadmates informed, cover picked) against 0.44 ms
+        // for one nobody answered, with nothing yet to say which step it was.
         private static void Decide(SurrenderState s, BotOwner o)
+        {
+            long t0 = Perf.Begin();
+            try { DecideInner(s, o); }
+            finally { Perf.End(Perf.Sec.Decide, t0); }
+        }
+
+        private static void DecideInner(SurrenderState s, BotOwner o)
         {
             Player captor = o.GetPlayer;
             var log = new StringBuilder();
@@ -200,10 +233,10 @@ namespace HandsAreHigh
                 int backing = Mathf.Min(2, Reactions.FreeAlliesNear(o, captor));
                 float chance = Mathf.Clamp01(Settings.AcceptChance.Value * mercy * (1f + 0.1f * backing));
                 float roll = Dice.Value;
-                log.Append($"practical, mercy x{mercy:0.00}, {backing} squadmate(s) near, take chance {chance:0.00}, roll {roll:0.00}");
+                log.Append($"practical, mercy x{mercy:0.00}, {backing} squadmate(s) near, take chance {chance:0.00}, roll {roll:0.00}; ");
                 if (roll < chance)
                 {
-                    HandsAreHighPlugin.Log.LogInfo(log.Append(" -> takes him prisoner").ToString());
+                    HandsAreHighPlugin.Log.LogInfo(log.Append("-> takes him prisoner").ToString());
                     Accept(s, o, "his prisoner");
                     return;
                 }
@@ -543,6 +576,10 @@ namespace HandsAreHigh
             float now = Time.time;
             // 0.23.0: hand-backs followed once in the log (empty almost always).
             try { Encounter.Tick(); } catch (System.Exception e) { HandsAreHighPlugin.Report("encounter endings", e); }
+            if (Due.Count > 0)
+            {
+                try { TickDue(now); } catch (System.Exception e) { HandsAreHighPlugin.Report("captor decision", e); Due.Clear(); DueBy.Clear(); DueFrame.Clear(); }
+            }
             if (Pending.Count > 0 && now >= _nextPending)
             {
                 _nextPending = now + 0.5f;
@@ -963,8 +1000,20 @@ namespace HandsAreHigh
         // gun on the prisoner, at a walk. Only while nothing threatens him: any Alert, Fire or
         // Contact stops it at once (Fire breaks the hold-up, Contact goes to Engage), so he never
         // crosses open ground under fire; guarding from where he stands is always valid. Stuck
-        // 2.5 s, 25 s total or no path: he stops and guards from there (one retry after 8 s).
+        // 2.5 s, 25 s total or no path: he stops and guards from there (one retry after 8 s; 2 s
+        // when he can't see him, 0.28.5).
         private const float ApproachStuck = 2.5f, ApproachLimit = 25f;
+
+        // 0.28.5: what the game had him doing when a walk-up stalled (once, at the event).
+        private static string StuckWhy(CaptorState cs)
+        {
+            string layer = "?", mover = "?";
+            float speed = 0f;
+            try { layer = DrakiaXYZ.BigBrain.Brains.BrainManager.GetActiveLayerName(cs.Owner) ?? "?"; } catch { }
+            try { mover = cs.Owner?.Mover?.CurrentState.ToString() ?? "none"; } catch { }
+            try { Vector3 v = cs.Bot.Velocity; v.y = 0f; speed = v.magnitude; } catch { }
+            return $"stuck (under 0.5 m in {ApproachStuck:0.0} s; active layer {layer}, mover {mover}, {speed:0.0} m/s)";
+        }
 
         private static void Approach(CaptorState cs, SurrenderState s, float now, ThreatLevel t, bool sees)
         {
@@ -1008,8 +1057,12 @@ namespace HandsAreHigh
                 {
                     cs.Approaching = false;
                     cs.PathIssued = false;
-                    cs.NextApproachAt = now + (stop.StartsWith("close") ? 3f : 8f);
-                    if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: stops walking up to {s.Name}: {stop}");
+                    // 0.28.5: a captor who can't see his man tries again after 2 s, not 8: a prisoner
+                    // nobody watches walks off after 6 s (the 0.28.5 raid: oGRiZe's walk-up ended
+                    // "stuck" at once, he guarded blind from 22 m, Кот left 6 s later).
+                    cs.NextApproachAt = now + (stop.StartsWith("close") ? 3f : !sees ? 2f : 8f);
+                    if (stop == "stuck") stop = StuckWhy(cs);
+                    if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{cs.Name}: stops walking up to {s.Name}: {stop}{(!sees ? " (can't see him: tries again in 2 s)" : "")}");
                 }
                 return;
             }
@@ -1341,6 +1394,7 @@ namespace HandsAreHigh
             ByBot.Clear();
             Overwatch.Clear();   // 0.20.0 (ORBIT blocks are lifted by ReleaseAll below)
             Pending.Clear();
+            Due.Clear(); DueBy.Clear(); DueFrame.Clear();   // 0.28.4
             PendingScratch.Clear();
             CaptorLoot.Clear();
             Encounter.Clear();   // 0.23.0 (raid end, teardown)

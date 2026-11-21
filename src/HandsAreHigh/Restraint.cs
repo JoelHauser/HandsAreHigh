@@ -360,7 +360,7 @@ namespace HandsAreHigh
                 if (HitNoted.Add(key))
                 {
                     string line = $"{Name(shooter)} hit {s.Name} ({s.Phase}{(s.Custody != null ? $", in {s.Custody.Name}'s custody" : "")}): " +
-                        $"{(squad ? "he is of the captor's squad and was never told" : "not of the captor's squad: an outsider's own fight")}; his target {(goal != null ? Name(goal) : "none")}, " +
+                        $"{(squad ? "he is of the captor's squad and was never told" : shooter == s.Captor ? "the man he gave up to, who never answered the surrender (no decision to spare him)" : "not of the captor's squad: an outsider's own fight")}; his target {(goal != null ? Name(goal) : "none")}, " +
                         $"his EnemyInfo on him {(seenInfo == null ? "none" : seenInfo.IsVisible ? "visible" : "not visible")}, layer {layer}, {Vector3.Distance(shooter.Position, s.Bot.Position):0} m";
                     if (squad) HandsAreHighPlugin.Log.LogWarning("PRISONER HIT WITHOUT A DECISION: " + line);
                     else if (Settings.LogRestraint.Value) HandsAreHighPlugin.Log.LogInfo("Restraint: no decision about him: " + line);
@@ -908,6 +908,23 @@ namespace HandsAreHigh
         internal static void NoteShot(Player shooter) { if (ShotAt.Count > 256) ShotAt.Clear(); ShotAt[shooter] = Time.time; }
         internal static float LastShot(Player shooter) => shooter != null && ShotAt.TryGetValue(shooter, out float t) ? t : -1f;
 
+        // 0.28.4: a round leaving a restrained bot's muzzle with a man he holds fire at on its line (the
+        // burst guard, Suppression.ShotPatch). The trigger test runs once per press; a burst after a
+        // clear press swept onto the prisoner in the 0.28.3 raid (DaddyAL: "his last trigger press
+        // 0.10 s ago", three hits on the man he held, while he fought someone else).
+        internal static bool ShotAtRestrained(Player shooter, Vector3 from, Vector3 dir, out Player prisoner)
+        {
+            prisoner = null;
+            if (!HeldFireBy.TryGetValue(shooter, out List<Player> list)) return false;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (!Perception.OnLineOfFire(shooter, list[i], 150f, from, dir)) continue;
+                prisoner = list[i];
+                return true;
+            }
+            return false;
+        }
+
         // A restrained bot pressing the trigger with his aim on a prisoner he holds fire at.
         internal static bool AimedAtRestrained(Player shooter, out Player prisoner)
         {
@@ -928,12 +945,33 @@ namespace HandsAreHigh
             return false;
         }
 
+        private static float _burstLogAt;
+        internal static void LogBurstStopped(Player shooter, Player prisoner)
+        {
+            if (Time.realtimeSinceStartup - _burstLogAt < 2f) return;
+            _burstLogAt = Time.realtimeSinceStartup;
+            Player target = null;
+            try { target = Perception.PlayerOf(shooter?.AIData?.BotOwner?.Memory?.GoalEnemy?.Person); } catch { }
+            HandsAreHighPlugin.Log.LogInfo($"Restraint: {Name(shooter)}'s burst{(target != null && target != prisoner ? $" at {Name(target)}" : "")} stopped: a round went along {Name(prisoner)}'s line (he holds fire at him)");
+        }
+
         internal static void LogLeakBlocked(Player shooter, Player prisoner, string where)
         {
             if (Time.realtimeSinceStartup - _leakLogAt < 2f) return;
             _leakLogAt = Time.realtimeSinceStartup;
             string why = TryGet(prisoner, shooter, out RestraintEntry e) ? e.Why : "?";
-            HandsAreHighPlugin.Log.LogWarning($"RESTRAINT LEAK (blocked at {where}): {Name(shooter)} tried to fire at {Name(prisoner)} while holding fire ({why})");
+            // 0.28.2: the trigger guard blocks any press with the prisoner's body on the line of fire,
+            // so a press at someone else with the prisoner in the way is held back too (correctly).
+            // The 0.28.1 raid logged seven "leaks" from a bot fighting a Scav past a prisoner: say
+            // which it was (his target is the game's GoalEnemy, which SAIN mirrors its choice into).
+            Player target = null;
+            try { target = Perception.PlayerOf(shooter?.AIData?.BotOwner?.Memory?.GoalEnemy?.Person); } catch { }
+            if (target != null && target != prisoner)
+            {
+                HandsAreHighPlugin.Log.LogInfo($"Restraint: {Name(shooter)}'s shot at {Name(target)} held back at {where}: {Name(prisoner)} (spared: {why}) is in the line of fire");
+                return;
+            }
+            HandsAreHighPlugin.Log.LogWarning($"RESTRAINT LEAK (blocked at {where}): {Name(shooter)} tried to fire at {Name(prisoner)} while holding fire ({why}; his target: {(target != null ? Name(target) : "none")})");
         }
     }
 

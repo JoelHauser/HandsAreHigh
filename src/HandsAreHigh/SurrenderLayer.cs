@@ -375,7 +375,9 @@ namespace HandsAreHigh
             {
                 Voice.Say(s, VoiceEvent.Hurt);
                 SurrenderRegistry.Witness(Me.Position, Me, "a surrendered man shot");
-                s.BeginRetreat("shot with his hands up", emergency: true);
+                // 0.28.4: who fired (the 0.28.3 raid: "shot with his hands up" with no shooter named
+                // when nobody held fire at him, so the hit diagnosis in Restraint never ran).
+                s.BeginRetreat($"shot with his hands up by {(s.LastHitBy != null ? Restraint.Name(s.LastHitBy) : "someone unseen")}", emergency: true);
                 return;
             }
 
@@ -1314,7 +1316,7 @@ namespace HandsAreHigh
             else Add(options, log, $"scramble{reachWhy}", Settings.ScrambleWeight.Value * scramble * reach * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f) * legs * scrambleFoot);
 
             if (dist < Settings.EscapeMinDistance.Value) log.Append($"run: you're within {Settings.EscapeMinDistance.Value:0} m; ");
-            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.RetreatDistance.Value, false, out _)) log.Append("run: no way out; ");
+            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.RetreatDistance.Value, false, out _, anyOnly: true)) log.Append("run: no way out; ");
             else Add(options, log, "run", Settings.EscapeWeight.Value * Mathf.Max(0.1f, 1.3f - nerve) * flee * legs * onFoot);
 
             Vector3 hidePoint = Vector3.zero;
@@ -1351,6 +1353,7 @@ namespace HandsAreHigh
                 s.HideSearchPending = false;   // already found one
                 s.TargetPoint = hidePoint;
                 s.HideMoving = true;
+                SetHideTime(s);
                 MarkKneelEscape(s, "hide");
             }
             else if (Arsenal.Draw(s, BotOwner, false))
@@ -1990,6 +1993,14 @@ namespace HandsAreHigh
                 s.EquipLogged = true;
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: away from his captor ({Perception.Flat(Me.Position, s.HeldSet ? s.HeldAt : Me.Position):0} m from where he was held), what he has: {Arsenal.Equipment(Me)}");
             }
+            // 0.28.2: a usable gun already in his hands (a pick-up the game put straight there) needs
+            // no draw: asking for one is refused (hands busy) and 0.28.1 then handed him back as if he
+            // couldn't arm himself.
+            if (Arsenal.GunInHands(Me) && !s.DrawPending && !s.HandsPending && !s.DropPending)
+            {
+                Rearm(s, $"already has his {Me.HandsController.Item?.ShortName?.Localized() ?? "gun"} in his hands");
+                return;
+            }
             if (kept != null && Arsenal.Draw(s, BotOwner, false))
             {
                 Rearm(s, $"draws the {Arsenal.SlotName(kept)} he kept ({keptWhy})");
@@ -2158,11 +2169,22 @@ namespace HandsAreHigh
                 GiveUpOn(s, "pick-up reported success but the gun isn't on him");
                 return;
             }
+            // 0.28.2: the game can put a picked-up gun straight into his hands (0.28.1 raid: a Scav's
+            // TOZ-106 was "holding TOZ-106" when the draw was asked). A draw then is refused (hands
+            // busy) and 0.28.1 gave up on the gun he was holding, handing him back as an unarmed man.
+            if (InHands(weapon))
+            {
+                Rearm(s, $"rearmed with {weapon.ShortName.Localized()}{(s.Scrambling ? " after a scramble" : "")} (already in his hands)");
+                return;
+            }
             if (Arsenal.Draw(s, BotOwner, false))
                 Rearm(s, $"rearmed with {weapon.ShortName.Localized()}{(s.Scrambling ? " after a scramble" : "")}");
             else
                 GiveUpOn(s, "has the gun but couldn't draw it");
         }
+
+        private bool InHands(Item weapon) =>
+            weapon != null && Me.HandsController is Player.FirearmController fc && fc.Item == weapon;
 
         private bool PlayerNear(Vector3 point, float radius, out float distance)
         {
@@ -2222,6 +2244,21 @@ namespace HandsAreHigh
             s.HideSearchPending = Perception.CanSee(Me, s.ThreatAt);
         }
 
+        // 0.28.3: a hide not driven by fire had the FIRE move's limit ("Fire: move to cover at most",
+        // 8 s) for a spot up to CoverRadius x 1.3 (26 m) away. In the live 0.28.2 raid every opening
+        // hide (Санька, Давид, Fantia x2; hurt legs) ended "8 s on the way to cover", stopped short in
+        // the open. Now the time a man in his state needs to get there (never less than the fire
+        // limit, at most 25 s); a man who stops making progress still ends on Stalled. Called once
+        // the spot is known: the cover search below, or TakeOpening's hide, which brings its own
+        // spot (the first 0.28.3 build only set it in the search, so opening hides kept 8 s).
+        private void SetHideTime(SurrenderState s)
+        {
+            if (s.HideFromFire) return;
+            float speed = s.LegsBad ? 1.6f : s.HideUrgent ? 4f : 2.8f;
+            float need = Perception.Flat(Me.Position, s.TargetPoint) * 1.4f / speed + 3f;
+            s.HideUntil = Time.time + Mathf.Clamp(need, Settings.FireCoverSeconds.Value, 25f);
+        }
+
         private void Hiding(SurrenderState s, bool check)
         {
             if (s.HideSearchPending)
@@ -2237,6 +2274,7 @@ namespace HandsAreHigh
                     return;
                 }
                 s.HideMoving = true;
+                SetHideTime(s);
                 if (Settings.LogDecisions.Value || (s.HideFromFire && Settings.LogFireBreak.Value))
                     HandsAreHighPlugin.Log.LogInfo($"{s.Name}: cover {Vector3.Distance(Me.Position, s.TargetPoint):0} m away, hidden from {(s.HideFromFire ? "the fire" : Restraint.Name(s.Captor))}");
             }
@@ -2255,7 +2293,7 @@ namespace HandsAreHigh
             if (!s.HideFromFire && QuickClear(s, out string quick)) { HandBack(s, $"on his way to cover, {quick}: his own AI takes over"); return; }
             if (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value)) { HandBack(s, s.HideFromFire ? "in cover from the fire" : "in cover"); return; }
             if (Stalled(s)) { HandBack(s, "stuck on the way to cover"); return; }
-            if (Time.time > s.HideUntil && !Kneel.LegsLocked(s)) HandBack(s, $"{Settings.FireCoverSeconds.Value:0} s on the way to cover");
+            if (Time.time > s.HideUntil && !Kneel.LegsLocked(s)) HandBack(s, $"{Time.time - s.PhaseSince:0} s on the way to cover, {Perception.Flat(Me.Position, s.TargetPoint):0} m short");
         }
 
         // A human player close by aims straight at him for a moment: hands go up again.

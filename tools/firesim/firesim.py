@@ -33,7 +33,7 @@ def on_line(eye, look, feet, max_range):
     if up < -0.1 or up > 1.95:
         return False, along
     flat = (off[0], 0.0, off[2])
-    return norm(flat) <= 0.55 + 0.01 * along, along
+    return norm(flat) <= 0.8 + 0.015 * along, along   # 0.28.4 (was 0.55 + 0.01)
 
 
 def in_line_of_fire(shooter_feet, look, man_feet, goal_feet, max_range):
@@ -109,9 +109,19 @@ cases.append(("aim at a man on a balcony over the prisoner", in_line_of_fire(S, 
 # 11. Protected man behind the shooter: never.
 back = (0.0, 0.0, -5.0)
 cases.append(("protected man behind the shooter", in_line_of_fire(S, (0, 0, 1), back, None, 150), False, False))
-# 12. 120 m, 1.5 m off the line (0.7 deg): new body width 0.55 + 1.2 = 1.75 m -> blocks (spread).
+# 12. 120 m, 1.5 m off the line (0.7 deg): body width 0.8 + 1.8 = 2.6 m (0.28.4) -> blocks (spread).
 far = (1.5, 0.0, 120.0)
 cases.append(("120 m out, 1.5 m off the line (spread allowance)", in_line_of_fire(S, (0, 0, 1), far, None, 200), old_scenario(S, (0, 0, 1), far), True))
+# 13. 0.28.4, the 0.28.3 raid (DaddyAL): a captor fights a third party 30 m out; his prisoner stands
+#     10 m out, 0.75 m off the line (rounds passed him at 0.9 m, then hit him). Must block: the old
+#     0.55 + 0.01/m box (0.65 m at 10 m) let it through.
+p13 = (0.75, 0.0, 10.0)
+def old_box(shooter_feet, look, man_feet, goal_feet):
+    eye = add(shooter_feet, (0.0, EYE_H, 0.0)); look = unit(look)
+    along = dot(sub(add(man_feet, UP), eye), look)
+    off = sub(man_feet, add(eye, mul(look, along))); flat = (off[0], 0.0, off[2])
+    return 0.2 < along <= 150 and norm(flat) <= 0.55 + 0.01 * along
+cases.append(("captor at third party, prisoner 0.75 m off the line at 10 m (0.28.3 raid)", in_line_of_fire(S, aim_at(S, third), p13, third, 150), old_box(S, aim_at(S, third), p13, third), True))
 
 bad = 0
 for name, new, old, want in cases:

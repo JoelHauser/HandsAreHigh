@@ -192,6 +192,14 @@ namespace HandsAreHigh
         internal static void Surrender(Player bot, Player captor, string reason, Vector3? knownAt = null, bool decideNow = true,
             SurrenderSource source = SurrenderSource.Natural)
         {
+            long t0 = Perf.Begin();   // 0.28.2: detail section (inside its caller's)
+            try { SurrenderInner(bot, captor, reason, knownAt, decideNow, source); }
+            finally { Perf.End(Perf.Sec.Start, t0); }
+        }
+
+        private static void SurrenderInner(Player bot, Player captor, string reason, Vector3? knownAt, bool decideNow,
+            SurrenderSource source)
+        {
             if (bot == null || captor == null || !Settings.Enabled.Value) return;
             EnsureRaid();
 
@@ -587,6 +595,17 @@ namespace HandsAreHigh
                 UpdateSuspension(bot, s);
                 // try/catch inline: a lambda here would allocate a closure per bot per frame.
                 try { Voice.Tick(s); } catch (System.Exception e) { HandsAreHighPlugin.Report("voice", e); }
+                // 0.28.3: the live 0.28.2 raid handed Fantia back from an opening hide "armed: a gun in
+                // his hands" with no draw of ours asked (his slung AKS). Who draws while we hold a man
+                // is unknown (the game's weapon selector, SAIN): said once, when it shows.
+                if (!s.ForeignDrawLogged && !s.DrawPending && !s.DropPending && !s.HandsPending && s.THandsEmpty >= 0f && s.Phase != Phase.Rearmed && s.Phase != Phase.PickingUp
+                    && bot.HandsController is Player.FirearmController fdc && fdc.Item != null)
+                {
+                    s.ForeignDrawLogged = true;
+                    string layer = "?";
+                    try { BotOwner fo = bot.AIData?.BotOwner; if (fo != null) layer = DrakiaXYZ.BigBrain.Brains.BrainManager.GetActiveLayerName(fo) ?? "?"; } catch { }
+                    HandsAreHighPlugin.Log.LogWarning($"{s.Name}: a {fdc.Item.ShortName.Localized()} is in his hands with no draw of ours ({s.Phase}, arms {s.Weight:0.00}, active layer {layer}, hands request {(s.HandsPending ? "open" : "none")})");
+                }
                 if (s.ArmedPending != null && (s.Phase == Phase.HandsUp || s.Phase == Phase.Retreating || s.Phase == Phase.Hiding || s.Phase == Phase.Regrouping || s.Phase == Phase.Released)) s.ArmedPending = null;
                 if (!s.Dead && s.ArmedPending != null && (Reactions.Shows(s) != null || Time.time - s.ArmedPendingSince > 1.5f))
                 {

@@ -9,7 +9,7 @@ He isn't a statue after that. He watches you, and if you look away, reload or ho
 ## Features
 
 - **Bots surrender on their own:** it's rare, and it depends on how bad things are for the bot, his nerve, and his SAIN personality if SAIN is installed.
-- **Openings:** a held bot breaks free if you stop covering him. Close up he uses his knife, further away a sidearm.
+- **Openings:** a held bot breaks free if you stop covering him. He draws whatever he kept (slung gun first, then sidearm; his knife only with no gun), or runs.
 - **Escape and rearm:** he runs, regroups, then goes back for his own gun, finds another one, or hides.
 - **Bots take prisoners too:** a Scav or PMC can give up to a hostile bot. That bot decides whether to guard him, spare him or keep fighting, its squad holds fire at that prisoner only, and other bots decide for themselves whether to spare a man with his hands up.
 - **Orders:** look at a held bot up close to make him drop his weapons, drop his kit, take his armour off, follow you, get down on his knees with his hands behind his head (and back on his feet), stay, or leave.
@@ -38,7 +38,7 @@ Extract the zip into your SPT folder, so that `HandsAreHigh.dll` ends up in `Bep
 | `1`-`9` (or numpad) | Give that numbered order while the menu is open; `0` closes it. Your hotbar ignores these keys while the menu is open |
 | Mouse wheel, `.` / `=` | Move the highlight |
 
-You can rebind the keys in F12 > Hands Are High > 10. Orders.
+You can rebind the keys in F12 > Hands Are High > 5. Commands and dialogue. Your Interact key (F) also opens the menu and gives the highlighted order.
 
 ## Building
 
