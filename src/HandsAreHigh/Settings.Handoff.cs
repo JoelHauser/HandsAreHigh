@@ -11,6 +11,7 @@ namespace HandsAreHigh
         private const string V25Sec = "27. Hand-off, interact key, kneel variants";
 
         internal static ConfigEntry<bool> HandsOverHands;
+        internal static ConfigEntry<bool> HandsLaced;   // 0.27.0
         internal static ConfigEntry<bool> QuickHandBack;
         internal static ConfigEntry<float> QuickHandBackDistance;
         internal static ConfigEntry<float> QuickHandBackSeconds;
@@ -26,7 +27,9 @@ namespace HandsAreHigh
         private static void BindV25(ConfigFile c)
         {
             HandsOverHands = c.Bind(V25Sec, "Hands behind head: one over the other", true,
-                "Hands behind the head rest one over the other: each palm on its own side of the back of the skull, the fingers overlapping in the middle, one hand's fingers lying over the other's (which hand is on top is chosen once per man). The top hand arrives after the bottom one and leaves first. Off: both palms on the skull side by side, fingers meeting in the middle (0.24). Interlaced fingers are not used: on the game's hand rig the knuckles are closer together than two gloved fingers are wide, so laced fingers always pass through each other.");
+                "Hands behind the head rest one over the other: each palm on its own side of the back of the skull, the fingers overlapping in the middle, one hand's fingers lying over the other's (which hand is on top is chosen once per man). The top hand arrives after the bottom one and leaves first. Off: both palms on the skull side by side, fingers meeting in the middle (0.24). Used when the laced-fingers key below is off.");
+            HandsLaced = c.Bind(V25Sec, "Hands behind head: fingers laced", true,
+                "Hands behind the head with the fingers interlaced: palms on the back of the skull, each finger between two of the other hand's, curled round the head (which hand's fingers sit higher is chosen once per man). On the game's hand rig the knuckles are a little closer than two gloved fingers are wide, so the laced fingers are pressed together by a few millimetres at the webs, as real laced fingers are. Takes precedence over one over the other.");
             QuickHandBack = c.Bind(V25Sec, "Hand back to his own AI on the way out", true,
                 "A man let go, or left behind by his captor, is handed to his own AI (SAIN, ORBIT, the game) as soon as his arms are down, he is on his feet and on his way (see the two keys below), mid-stride: no further flight legs, regroup or stop first. His own AI then has his squad, personality and raid objectives; the capture memory (Keep away radius) still stops him drifting back while unarmed. Off: the 0.24 flight (legs until clear, then a decision).");
             QuickHandBackDistance = c.Bind(V25Sec, "Hand back once this far from where he was held (m)", 8f,

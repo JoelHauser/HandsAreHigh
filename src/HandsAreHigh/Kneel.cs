@@ -1751,7 +1751,7 @@ namespace HandsAreHigh
         internal static bool OverHands(SurrenderState s, out int top)
         {
             top = -1;
-            if (!Settings.HandsOverHands.Value || s == null) return false;
+            if (!Settings.HandsOverHands.Value || s == null || Settings.HandsLaced.Value) return false;
             // Most people put the right hand over the left; chosen once per man.
             if (s.HeadTopHand < 0) s.HeadTopHand = Dice.Value < 0.6f ? 1 : 0;
             top = s.HeadTopHand;
@@ -1761,6 +1761,28 @@ namespace HandsAreHigh
         // Each hand's own progress from the shared, eased hands-to-head weight: the bottom hand
         // leads (done at 1 - OverLag), the top one follows (starts at OverLag); reversed, the top
         // hand leaves first. Smoothstep ends: neither hand starts or stops with a jump.
+        // 0.27.0: fingers laced behind the head (Joel: "interlace the fingers as best we can ... natural").
+        // tools/fingersim/lace.py (differential evolution over palm spacing, the vertical offset
+        // between the hands, each hand's finger tilt, per-finger spread and curl; helmet on/off):
+        // palms on the back of the skull LaceW either side of the middle, one hand LaceDv higher than
+        // the other (half a knuckle pitch: the fingers alternate), each hand's fingers tilted in the
+        // palm plane so the two rows run parallel (the 0.25 interlace.py search had both tilted up, a V
+        // that crossed), knuckle rows a proximal phalanx apart and each hand's fingertips at the other's
+        // webs, curled round the skull. The rig cannot lace cleanly (knuckle pitch 2.3-2.7 cm < two
+        // gloved fingers), so the fingers are pressed a few mm into each other at the webs, as real
+        // laced fingers are; numbers in docs/history/releases-0.27.md. Which hand's fingers sit higher
+        // is chosen once per man (HeadTopHand); the other hand is the mirror of the sim's layout.
+        private const float LaceW = 0.0745f, LaceDv = 0.019f, LaceTiltHigh = -0.35f, LaceTiltLow = -0.35f;
+
+        internal static bool Laced(SurrenderState s, out int high)
+        {
+            high = -1;
+            if (!Settings.HandsLaced.Value || s == null) return false;
+            if (s.HeadTopHand < 0) s.HeadTopHand = Dice.Value < 0.6f ? 1 : 0;
+            high = s.HeadTopHand;
+            return true;
+        }
+
         internal static float HandT(float h, bool over, bool isTop) =>
             !over ? h : isTop ? Ss(OverLag, 1f, h) : Ss(0f, 1f - OverLag, h);
 
@@ -1796,6 +1818,7 @@ namespace HandsAreHigh
             // Both targets come from the skull frame, never from the other hand's live bones, so
             // neither drags the other. The top hand arrives after the bottom one and leaves first.
             bool over = OverHands(s, out int top);
+            bool laced = Laced(s, out int high);
             float sb = top == 1 ? -1f : 1f;   // the bottom hand's side (-1 left)
             float back = Settings.HandsBehindHead.Value + helmet;
             Vector3 palmB = skull - fwdL * back + rightL * (sb * OverBottomW);
@@ -1827,6 +1850,13 @@ namespace HandsAreHigh
                     palmAt = isTop ? palmT : palmB;
                     faceEnd = isTop ? faceT : faceB;
                     fingEnd = isTop ? fingT : fingB;
+                }
+                else if (laced)
+                {
+                    bool isHigh = hi == high;
+                    palmAt = skull - fwdL * back + rightL * (side * LaceW) + upL * (isHigh ? LaceDv * 0.5f : -LaceDv * 0.5f);
+                    faceEnd = (skull - palmAt).normalized;
+                    fingEnd = Vector3.ProjectOnPlane(-rightL * side + upL * (isHigh ? LaceTiltHigh : LaceTiltLow), faceEnd).normalized;
                 }
                 else
                 {
@@ -1866,8 +1896,8 @@ namespace HandsAreHigh
                 // Wrist: palm to the skull, fingers round it towards the middle, thumb down.
                 if (hand)
                 {
-                    Vector3 face = over ? faceEnd : skull - palm.position;
-                    Vector3 fingers = over ? fingEnd : Vector3.ProjectOnPlane(-rightL * side + upL * 0.25f, face);
+                    Vector3 face = over || laced ? faceEnd : skull - palm.position;
+                    Vector3 fingers = over || laced ? fingEnd : Vector3.ProjectOnPlane(-rightL * side + upL * 0.25f, face);
                     ArmPose.SetWrist(palm, hr.Middle[hi], hr.Thumb[hi], hr.TwistA[hi], hr.TwistB[hi],
                                      palm.position - fore.position, fingers, -upL, face, ww);
                 }

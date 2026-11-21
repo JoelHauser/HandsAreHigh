@@ -67,6 +67,15 @@ namespace HandsAreHigh
         {
             { float.NaN, 10f, 12f }, { 10f, 8f, 5f }, { 12f, 10f, 5f }, { 14f, 12f, 5f }, { 16f, 14f, 5f },
         };
+        // 0.27.0: laced fingers behind the head (tools/fingersim/lace.py; Kneel.Laced). Curl per joint,
+        // and each hand's spread at the knuckle (about the bone's local +Y), the higher hand's and the
+        // lower hand's; eased in with the curl as the hand lands.
+        private static readonly float[,] Laced =
+        {
+            { float.NaN, 10f, 12f }, { 1f, 8f, 22f }, { 1.5f, 8.5f, 22.3f }, { 2f, 9f, 22.6f }, { 2.5f, 9.5f, 22.9f },
+        };
+        private static readonly float[] SpreadHigh = { 0f, 7.5f, 6f, 7.5f, 2.5f };
+        private static readonly float[] SpreadLow = { 0f, -1.5f, -4.5f, -7.5f, -8f };
         private static readonly float[,] Flat =
         {
             { float.NaN, 3f, 4f }, { 3f, 5f, 3f }, { 3f, 5f, 3f }, { 3f, 5f, 3f }, { 3f, 5f, 3f },
@@ -124,12 +133,14 @@ namespace HandsAreHigh
             // the fingers stay open while the hand travels and settle into their shape as it lands
             // (the last 45% of its move), and open first when it leaves.
             bool over = Kneel.OverHands(s, out int top);
+            bool laced = Kneel.Laced(s, out int high);
             float head = Mathf.Clamp01(s.HeadHands);
             for (int hi = 0; hi < 2; hi++)
             {
                 bool isTop = over && hi == top;
-                float cup = over ? Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.55f, 1f, Kneel.HandT(head, true, isTop))) : head;
-                float[,] shape = isTop ? OverTop : Cupped;
+                float cup = over || laced ? Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.55f, 1f, Kneel.HandT(head, over, isTop))) : head;
+                float[,] shape = laced ? Laced : isTop ? OverTop : Cupped;
+                float[] spread = !laced ? null : hi == high ? SpreadHigh : SpreadLow;
                 float w = s.Weight * strength;
                 if (hi == 0) w *= 1f - s.GestureArm;   // the game's gesture has the left hand
                 float flat = hi == braceHand ? brace : 0f;
@@ -152,7 +163,8 @@ namespace HandsAreHigh
                         else
                         {
                             float f = Mathf.Lerp(Mathf.Lerp(o, shape[d, j], cup), Flat[d, j], flat);
-                            target = _swing[d, j] * Quaternion.AngleAxis(f, Vector3.forward);
+                            float sp = spread != null && j == 0 ? spread[d] * cup * (1f - flat) : 0f;
+                            target = _swing[d, j] * Quaternion.AngleAxis(sp, Vector3.up) * Quaternion.AngleAxis(f, Vector3.forward);
                         }
                         if (hi == 1) target = new Quaternion(-target.x, -target.y, target.z, target.w);
                         t.localRotation = w >= 0.999f ? target : Quaternion.Slerp(from, target, w);

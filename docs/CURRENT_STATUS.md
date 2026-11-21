@@ -4,12 +4,13 @@ Update this file at every task boundary (replace, don't append a transcript). Us
 exactly: **implemented** / **build passed** / **simulation passed** / **verified in raid** (log or
 Joel's eyes). Release history lives in `docs/history/`.
 
-Last updated: 2026-11-21 (0.26.0: behind-head hands, ORBIT objective after release, gun at his feet).
+Last updated: 2026-11-21 (0.27.0: fingers laced behind the head).
 
 ## State of the code
 
 | Version | Where | Level |
 |---|---|---|
+| 0.27.0 | UNCOMMITTED; packed (`dist/HandsAreHigh-0.27.0.zip`) and installed in H:\SPT4.1.X; 0.26.0 DLL + cfg in that session's scratchpad (`backup-0.26.0`) | build passed (Debug + Release, 0 warnings), simulation passed (tools/fingersim/lace.py); **never run in a raid** |
 | 0.26.0 | main @ 0d1d50e (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.26.0.zip`) and installed in H:\SPT4.1.X; 0.25.0 DLL + cfg backed up in that session's scratchpad (`backup-0.25.0`) | build passed (Debug + Release, 0 warnings), simulation passed (overlap.py, releasesim, abandonsim), ORBIT members checked by reflection on the installed DLL; **never run in a raid** |
 | 0.25.0 | main @ f2a4d51 (pushed, no tag/release) | ran in one raid: LogOutput 2026-11-21 03:31 (3 player-vs-Scav scenarios) + Joel's screenshot (top glove inside the other sleeve) |
 
@@ -47,6 +48,9 @@ All implemented; waiting for a raid.
 
 ## Needs in-raid verification (nothing below has been seen in game)
 
+0.27.0 (notes in docs/history/releases-0.27.md):
+- Laced fingers behind the head (rear/side/front, standing and kneeling, either hand high): fingers
+  alternating and across each other, no finger visibly through another, thumbs clear, clean transitions.
 0.26.0:
 - Hands behind the head (front/side/rear, standing and kneeling, both transitions): no glove in a
   sleeve or through the other hand, top fingers resting on the bottom ones, elbows out and relaxed.
@@ -76,6 +80,7 @@ Older, still open:
 
 ## Next steps
 
+0. Joel looks at the laced hands (0.27.0) from behind and the side; screenshot if anything clips.
 1. Joel runs a raid with 0.26.0: a bot-captor scenario that leaves the gun, a let-go, and hands behind
    the head (screenshots from behind and the side); sends LogOutput.log.
 2. Read the `hand-off timeline` lines first: the longest step names where any remaining delay is.
