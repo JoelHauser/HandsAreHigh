@@ -4,22 +4,33 @@ Update this file at every task boundary (replace, don't append a transcript). Us
 exactly: **implemented** / **build passed** / **simulation passed** / **verified in raid** (log or
 Joel's eyes). Release history lives in `docs/history/`.
 
-Last updated: 2026-11-21 (after the 0.25.0 work and the docs reorganisation).
+Last updated: 2026-11-21 (0.26.0: behind-head hands, ORBIT objective after release, gun at his feet).
 
 ## State of the code
 
 | Version | Where | Level |
 |---|---|---|
-| 0.25.0 | main @ f2a4d51 (pushed 2026-11-21, no tag/release); installed in H:\SPT4.1.X (`dist/HandsAreHigh-0.25.0.zip`); 0.24.0 DLL + cfg backed up in that session's scratchpad (`backup-0.24.0`) | build passed (Debug + Release, 0 warnings), cfg bind passed, simulation passed (overhand, kneelsim, abandonsim); **never run in a raid** |
-| 0.24.0 | main @ f5f9180 (pushed, no tag/release) | ran in one raid: LogOutput 2026-11-21 02:47, 8 scenarios + Joel's screenshot (stacked fingers behind the head) |
+| 0.26.0 | working tree, UNCOMMITTED; packed (`dist/HandsAreHigh-0.26.0.zip`) and installed in H:\SPT4.1.X; 0.25.0 DLL + cfg backed up in that session's scratchpad (`backup-0.25.0`) | build passed (Debug + Release, 0 warnings), simulation passed (overlap.py, releasesim, abandonsim), ORBIT members checked by reflection on the installed DLL; **never run in a raid** |
+| 0.25.0 | main @ f2a4d51 (pushed, no tag/release) | ran in one raid: LogOutput 2026-11-21 03:31 (3 player-vs-Scav scenarios) + Joel's screenshot (top glove inside the other sleeve) |
 
 No GitHub release exists for any version. Joel decides commits/pushes.
 
 ## Objective in progress
 
-Joel's 11th spec (0.25.0): hands behind the head (interlace -> one over the other), fast reaction
-to being abandoned, a prompt hand-off to SAIN/normal AI with a logged timeline, F opens/confirms the
-order menu (debug: bot-held prisoners), kneel variants. All implemented; waiting for a raid.
+Joel's 12th spec (0.26.0, notes in docs/history/releases-0.26.md): hands behind the head without
+clipping (fingers overlap in the middle, palms on their own sides), released men not walked back by a
+stale ORBIT objective (dropped at the hand-back), the gun his captor left at his feet picked up first.
+All implemented; waiting for a raid.
+
+## What the 0.25.0 raid log showed (verified in raid, log level)
+
+- Hand-off timelines 3.0 s (#1 let go) and 5.2 s (#2 let go, braced rise + hurt leg); an opening
+  slip into cover 8.2 s (#2, captor present).
+- #1: ORBIT turned him back to his pre-capture objective 3 s after the hand-back; 3 keep-away legs
+  each undone by ORBIT; CIRCLED BACK at +46 s (fixed in 0.26.0 at the source).
+- Let-go men refuse their own gun ("lies where he was held, off limits"): by design for a Leave
+  order (the captor is still there).
+- No bot-captor abandonment and no natural surrender in that log.
 
 ## What the 0.24.0 raid log showed (verified in raid, log level)
 
@@ -36,6 +47,12 @@ order menu (debug: bot-held prisoners), kneel variants. All implemented; waiting
 
 ## Needs in-raid verification (nothing below has been seen in game)
 
+0.26.0:
+- Hands behind the head (front/side/rear, standing and kneeling, both transitions): no glove in a
+  sleeve or through the other hand, top fingers resting on the bottom ones, elbows out and relaxed.
+- `ORBIT objective ... dropped` after releases; no `drifting back ... OrbitBrainLayer` / CIRCLED BACK.
+- Bot captor walks off leaving the gun: `picks up his X at his feet first`, no shout/turn at the captor,
+  then his own AI; covered: `not going for his X at his feet: ... covers him`.
 0.25.0:
 - Hands one over the other: look on real gloves/sleeves/helmets, front/side/rear; top hand path never
   brushing the bottom hand mid-move; fingers settling as each lands; head still free.
@@ -59,7 +76,7 @@ Older, still open:
 
 ## Next steps
 
-1. Joel runs the 0.25.0 checks (docs/testing/in-raid-regression.md items 1-6) and sends LogOutput.log
-   + screenshots of hands behind the head and the settled kneel.
+1. Joel runs a raid with 0.26.0: a bot-captor scenario that leaves the gun, a let-go, and hands behind
+   the head (screenshots from behind and the side); sends LogOutput.log.
 2. Read the `hand-off timeline` lines first: the longest step names where any remaining delay is.
 3. If fine: a GitHub release only when Joel asks (none exists for any version).

@@ -17,7 +17,7 @@ namespace HandsAreHigh
     {
         public const string PluginGuid = "com.joelhauser.handsarehigh";
         public const string PluginName = "Hands Are High";
-        public const string PluginVersion = "0.25.0";
+        public const string PluginVersion = "0.26.0";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").
@@ -81,6 +81,7 @@ namespace HandsAreHigh
             // never unloads, so anything its statics keep stays referenced for the session.
             _teardown.Add(Arsenal.ClearCache);
             _teardown.Add(SainAdapter.Reset);
+            _teardown.Add(OrbitObjectives.Reset);   // 0.26.0: cached ORBIT members dropped
             _teardown.Add(OrbitAdapter.Reset);      // every ORBIT sleep block we set is lifted
             _teardown.Add(CaptorVoice.Clear);
             _teardown.Add(OrderMenu.ClearNotes);

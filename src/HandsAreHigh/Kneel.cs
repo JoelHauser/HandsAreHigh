@@ -1737,7 +1737,15 @@ namespace HandsAreHigh
         // fingers resting <= 2 cm off the bottom hand). A real interlace is not used: on this rig the
         // knuckles are 2.3-2.7 cm apart, less than two gloved fingers, and the best laced layout of
         // ~3,000 tried (interlace.py) still had fingers 0.7 cm inside each other at the webs.
-        private const float OverBottom = 0.06f, OverAlong = 0.05f, OverLift = 0.038f;
+        // 0.26.0 (tools/fingersim/overlap.py): the 0.25.0 top hand lay along the bottom hand towards its
+        // wrist, so its fingertips ended ~4.6 cm inside the other sleeve's cuff (Joel's screenshot; the
+        // sim reproduces it). Now each palm rests on its own side of the back of the skull (wrists out
+        // behind the ears), fingers towards the middle; the top hand a little wider, 3 cm higher and one
+        // gloved finger (2 cm) further out, so only the FINGERS overlap, the top ones lying on the bottom
+        // ones. Offline, either hand on top, helmet on/off: hands +0.48 cm clear, the other sleeve +8 cm,
+        // top fingers resting <= 0.6 cm off the bottom ones, top fingertips >= 17 cm from the bottom
+        // wrist, every capsule further from the skull than the 0.24 hands.
+        private const float OverBottomW = 0.095f, OverTopW = 0.105f, OverTopUp = 0.03f, OverLift = 0.020f;
         private const float OverLag = 0.15f;   // the top hand's share of the move it waits / the bottom one leads
 
         internal static bool OverHands(SurrenderState s, out int top)
@@ -1781,18 +1789,22 @@ namespace HandsAreHigh
             float minR = HeadRadius + helmet + 0.02f;
             float elbowsOut = Settings.ElbowsOut.Value + Presence.IdleElbow(s);
             HandRig hr = ArmPose.HandsOf(p, s);
-            // 0.25.0: one hand over the other (tools/fingersim/overhand.py). The bottom hand's palm on
-            // the back of the skull, OverBottom to its own side, fingers towards the middle; the top
-            // hand's palm OverAlong along the bottom hand's fingers and OverLift off its back, palm
-            // parallel to it, fingers the other way (over the bottom hand's back towards its wrist).
+            // 0.26.0: one hand over the other (tools/fingersim/overlap.py). Each palm on its own side
+            // of the back of the skull (OverBottomW / OverTopW), fingers towards the middle; the top
+            // hand OverTopUp higher and OverLift further out, so the fingers overlap in the middle and
+            // no fingertip reaches the other hand's wrist or sleeve.
             // Both targets come from the skull frame, never from the other hand's live bones, so
             // neither drags the other. The top hand arrives after the bottom one and leaves first.
             bool over = OverHands(s, out int top);
             float sb = top == 1 ? -1f : 1f;   // the bottom hand's side (-1 left)
-            Vector3 palmB = skull - fwdL * (Settings.HandsBehindHead.Value + helmet) + rightL * (sb * OverBottom);
+            float back = Settings.HandsBehindHead.Value + helmet;
+            Vector3 palmB = skull - fwdL * back + rightL * (sb * OverBottomW);
             Vector3 faceB = (skull - palmB).normalized;
             Vector3 fingB = Vector3.ProjectOnPlane(-rightL * sb + upL * 0.25f, faceB).normalized;
-            Vector3 palmT = palmB + fingB * OverAlong - faceB * OverLift;
+            Vector3 palmT = skull - fwdL * back + rightL * (-sb * OverTopW) + upL * OverTopUp;
+            Vector3 faceT = (skull - palmT).normalized;
+            palmT -= faceT * OverLift;
+            Vector3 fingT = Vector3.ProjectOnPlane(rightL * sb + upL * 0.25f, faceT).normalized;
             for (int side = -1; side <= 1; side += 2)
             {
                 if (!Arm(b, side, right, out Transform upper, out Transform fore, out Transform palm)) continue;
@@ -1813,8 +1825,8 @@ namespace HandsAreHigh
                 if (over)
                 {
                     palmAt = isTop ? palmT : palmB;
-                    faceEnd = faceB;
-                    fingEnd = isTop ? -fingB : fingB;
+                    faceEnd = isTop ? faceT : faceB;
+                    fingEnd = isTop ? fingT : fingB;
                 }
                 else
                 {
@@ -1840,7 +1852,9 @@ namespace HandsAreHigh
                 // Elbow: from where it is towards out to his side (a little forward and up), so it
                 // bends the way an elbow bends all the way there; then the arm on its own hinge.
                 Vector3 bendNow = Perp(el - sh, pa - sh, right * side);
-                Vector3 bendOut = (rightL * (side * elbowsOut) + fwd * 0.35f + up * 0.25f).normalized;
+                // 0.26.0: up 0.10 (was 0.25): elbows out and a little forward, not lifted above the
+                // hands (a strained, chicken-wing look from behind).
+                Vector3 bendOut = (rightL * (side * elbowsOut) + fwd * 0.35f + up * 0.10f).normalized;
                 // 0.16.0: an arm never straightens to make contact (a locked elbow behind the head is
                 // not a pose people hold) nor folds tighter than an elbow bends: the hand stops
                 // short of an unreachable point instead (anatomy over exact contact), and nothing
@@ -1852,7 +1866,7 @@ namespace HandsAreHigh
                 // Wrist: palm to the skull, fingers round it towards the middle, thumb down.
                 if (hand)
                 {
-                    Vector3 face = over ? faceB : skull - palm.position;
+                    Vector3 face = over ? faceEnd : skull - palm.position;
                     Vector3 fingers = over ? fingEnd : Vector3.ProjectOnPlane(-rightL * side + upL * 0.25f, face);
                     ArmPose.SetWrist(palm, hr.Middle[hi], hr.Thumb[hi], hr.TwistA[hi], hr.TwistB[hi],
                                      palm.position - fore.position, fingers, -upL, face, ww);

@@ -520,8 +520,13 @@ namespace HandsAreHigh
         }
 
         // Is this gun still lying loose (or on a body) near where we expect it?
-        internal static bool StillThere(Item weapon, Vector3 near, float radius = 3f)
+        internal static bool StillThere(Item weapon, Vector3 near, float radius = 3f) => Locate(weapon, near, radius, out _);
+
+        // 0.26.0: the same check, with where the item actually lies now (the thrown gun's LootItem,
+        // or the body it is on), not where its owner stood when he dropped it.
+        internal static bool Locate(Item weapon, Vector3 near, float radius, out Vector3 at)
         {
+            at = near;
             if (weapon == null) return false;
             int n = Physics.OverlapSphereNonAlloc(near, radius, Hits, LootMask, QueryTriggerInteraction.Ignore);
             Seen.Clear();
@@ -533,11 +538,11 @@ namespace HandsAreHigh
                     if (c == null) continue;
                     InteractableObject io = OwnerOfCollider(c);
                     if (io == null || !Seen.Add(io)) continue;
-                    if (io is LootItem loot) { if (loot.Item == weapon) return true; }
+                    if (io is LootItem loot) { if (loot.Item == weapon) { at = loot.transform.position; return true; } }
                     else if (io is Corpse corpse && corpse.ItemOwner?.RootItem is InventoryEquipment eq)
                     {
                         foreach (EquipmentSlot slot in GunSlots)
-                            if (eq.GetSlot(slot)?.ContainedItem == weapon) return true;
+                            if (eq.GetSlot(slot)?.ContainedItem == weapon) { at = corpse.transform.position; return true; }
                     }
                 }
                 return false;

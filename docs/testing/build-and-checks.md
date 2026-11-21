@@ -60,7 +60,8 @@ still at the OLD default. `Migrate` runs at the end of `Settings.Bind`, after ev
 | tools/headsim | head rig axes from skeleton.bundle, absolute head target | pass 0.18.0 |
 | tools/fingersim/fingersim.py `<skeleton.bundle>` | open/cupped finger shapes | pass 0.24.0 |
 | tools/fingersim/interlace.py `<bundle>` | whether fingers can interlace (they can't cleanly) | 0.25.0 |
-| tools/fingersim/overhand.py `<bundle>` | hands one over the other: clearance, skull, resting | pass 0.25.0 |
+| tools/fingersim/overhand.py `<bundle>` | 0.25.0 hands one over the other (superseded by overlap.py) | pass 0.25.0 |
+| tools/fingersim/overlap.py `<bundle>` | 0.26.0 fingers overlapping in the middle: hands, skull, OTHER SLEEVE, resting, top tips to bottom wrist; prints 0.25.0's sleeve failure | pass 0.26.0 |
 | tools/fingersim/dumprig.py `<bundle>` | prints the finger rig | - |
 | tools/posesim | turn driver, trunk limit, hands profile reversals | pass 0.22.0 |
 | tools/kneelsim/variants.py | kneel variant geometry, blends, rise shift speed | pass 0.25.0 |

@@ -241,6 +241,9 @@ namespace HandsAreHigh
         {
             Hold(1f);
             if (!s.DrawPending) return;
+            // 0.26.0: he picked up the gun his captor left: the draw plays where he looks; whether he
+            // turns on anyone is his own AI's call once he is handed back (no revenge by default).
+            if (s.CalmRearm) return;
             // Turns on his planted feet once his knees are off the ground (within MaxPivot), the
             // rest once the kneel pose is off him entirely (SteerTo).
             // 0.24.0: fighting back under fire: towards the shooter, not the captor.
@@ -798,6 +801,8 @@ namespace HandsAreHigh
         {
             Gestures.Cancel(s, "left by his captor");
             float now = Time.time;
+            // 0.26.0: the gun his captor left lying at his feet comes before any walk-off or roll.
+            if (TryGunAtFeet(s, captor, $"left by {Restraint.Name(captor)}")) return;
             var log = new StringBuilder($"{s.Name}: left by {Restraint.Name(captor)} ({s.LeftWhy}, {dist:0} m), lowers his hands (nerve {s.Nerve:0.00}): ");
             var options = new List<Choice>(3);
             Add(options, log, "walk off", Mathf.Lerp(0.8f, 1.3f, Mathf.InverseLerp(0.6f, 1.6f, s.Flee)));
@@ -829,6 +834,7 @@ namespace HandsAreHigh
                 s.TargetWeapon = s.DroppedWeapon;
                 s.TargetPoint = s.DropPosition;
                 s.RecoverTries++;
+                s.CalmRearm = true;
                 s.SetPhase(Phase.Recovering, "left by his captor: goes back for his own gun");
                 return;
             }
@@ -849,11 +855,83 @@ namespace HandsAreHigh
             s.BeginRetreat($"left by {Restraint.Name(captor)}: walks off, away from him", emergency: false);
         }
 
+        // ---- 0.26.0: the gun at his feet -----------------------------------------------------------
+        //
+        // His captor has left (Abandonment -> LeftDecide, or DecideOnLeave) and the gun he made him
+        // drop still lies at his feet: picking it up comes first, before any walk-off, regroup or
+        // weighted roll (0.25.0 rolled it against "walk off" and only with the captor > 20 m or out of
+        // sight; once walking off, Decide refused it as "lies where he was held" for 150 s). Only the
+        // real item where it lies now (Arsenal.Locate), picked up by the normal inventory move
+        // (Recovering -> PickingUp -> Arsenal.PickUp, one hands request at a time) and drawn. Not when
+        // it is gone, out of reach, under fire, or someone has him covered (his ex-captor, one of his
+        // squad, a player): then he goes on as before. Afterwards (CalmRearm) no battle cry and no turn
+        // to his ex-captor; his own AI decides cover, leaving or a fight.
+        private const float AtFeet = 4f;
+
+        private bool TryGunAtFeet(SurrenderState s, Player captor, string context)
+        {
+            Item gun = s.DroppedWeapon;
+            if (gun == null) return false;
+            string what = $"his {gun.ShortName.Localized()} at his feet";
+            float d = Perception.Flat(Me.Position, s.DropPosition);
+            Vector3 at = s.DropPosition;
+            string no = null;
+            if (!Settings.RecoverOwnWeapon.Value) no = "recovering his own gun is off";
+            else if (s.GunGone) no = "he saw it's gone";
+            else if (s.Skip.Contains(gun)) no = "failed to get it before";
+            else if (d > AtFeet + 2f) no = $"{d:0} m away";
+            else if (!Arsenal.Locate(gun, s.DropPosition, 3f, out at)) { s.GunGone = true; no = "it isn't there any more (taken)"; }
+            else if ((d = Perception.Flat(Me.Position, at)) > AtFeet) no = $"{d:0.0} m away, not at his feet";
+            else if (FireBreak.Blocks(Me)) no = "under fire";
+            else if (s.HandsPending || s.DrawPending || s.DropPending) no = "a hands change of ours is still open";
+            else if (Endangered(s, captor, at, out string danger)) no = danger;
+            else if (!Perception.PathTo(Me.Position, at, out _, out string noPath)) no = $"can't reach it ({noPath})";
+            if (no != null)
+            {
+                Escape.LogRefusal(s, what, no);
+                return false;
+            }
+            float now = Time.time;
+            s.TEscape = now; s.EscapeKind = "picks up his gun";
+            s.MarkFlight();
+            s.FleeLockUntil = now;   // his own gun, left with him: not off limits
+            Kneel.Urge(s, KneelRise.Compliant);
+            s.LowerArms(Settings.LowerSeconds.Value);
+            s.GraceUntil = now + Settings.Grace.Value;
+            s.Order = Order.None;
+            s.DropQueue.Clear();
+            s.TargetWeapon = gun;
+            s.TargetPoint = at;
+            s.Scrambling = false;
+            s.RecoverTries++;
+            s.CalmRearm = true;
+            s.SetPhase(Phase.Recovering, $"{context}: picks up {what} first ({d:0.0} m)");
+            return true;
+        }
+
+        // Picking it up now would expose him: someone has him covered, or his ex-captor (in sight)
+        // stands by the gun.
+        private bool Endangered(SurrenderState s, Player captor, Vector3 gunAt, out string why)
+        {
+            why = null;
+            if (Perception.Alive(captor) && Perception.LineClear(Perception.Eye(captor), Perception.Chest(Me)))
+            {
+                float cd = Perception.Flat(captor.Position, Me.Position);
+                if (cd < 40f && Overwatch.Visibly(captor, Me, Settings.WatchAngle.Value) == null) { why = $"{Restraint.Name(captor)} has his gun on him ({cd:0} m)"; return true; }
+                if (Perception.Flat(captor.Position, gunAt) < 5f) { why = $"{Restraint.Name(captor)} is by it"; return true; }
+            }
+            if (captor != null && Reactions.SquadCovers(s, captor, Me, Settings.WatchAngle.Value, out string who, out _)) { why = $"{who} covers him"; return true; }
+            if (PlayerCovers(out who)) { why = $"{who} covers him"; return true; }
+            return false;
+        }
+
         // The captor is gone (walked off, out of sight, dead). What he does depends on what he
         // has and who he is: run, slip into cover, draw a gun he kept, or go for his own.
         private void DecideOnLeave(SurrenderState s, Player captor, float dist, string gone)
         {
             Gestures.Cancel(s, "you left");
+            // 0.26.0: the gun his captor left lying at his feet comes before run / hide / draw.
+            if (TryGunAtFeet(s, captor, gone)) return;
             // Only what he knows: the captor's position if he sees him, else his last sighting.
             Vector3 threat = ThreatPos(s, captor);
             Vector3 threatEye = ThreatEye(s, captor);
@@ -895,6 +973,9 @@ namespace HandsAreHigh
             {
                 s.CaptorLastSeen = threat;
                 BeginHide(s, threat, $"lies low ({gone})");
+                // 0.26.0: nobody is guarding him: on his way to cover his own AI takes over as soon as
+                // he is out of sight / away (QuickClear), not only once he gets there.
+                s.QuickHandBack = Settings.QuickHandBack.Value;
                 return;
             }
             s.BeginRetreat(gone, emergency: false);
@@ -1530,7 +1611,7 @@ namespace HandsAreHigh
             s.Order = Order.None;
             s.DropQueue.Clear();
             s.TargetWeapon = null;
-            Voice.Say(s, VoiceEvent.Break);
+            if (!s.CalmRearm) Voice.Say(s, VoiceEvent.Break);
             s.SetPhase(Phase.Rearmed, reason);
         }
 
@@ -2047,6 +2128,7 @@ namespace HandsAreHigh
             }
             if (!check) return;
             if (SpottedAgain(s)) return;
+            if (!s.HideFromFire && QuickClear(s, out string quick)) { HandBack(s, $"on his way to cover, {quick}: his own AI takes over"); return; }
             if (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value)) { HandBack(s, s.HideFromFire ? "in cover from the fire" : "in cover"); return; }
             if (Stalled(s)) { HandBack(s, "stuck on the way to cover"); return; }
             if (Time.time > s.HideUntil && !Kneel.LegsLocked(s)) HandBack(s, $"{Settings.FireCoverSeconds.Value:0} s on the way to cover");

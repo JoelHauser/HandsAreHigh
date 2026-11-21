@@ -1,4 +1,4 @@
-# Code map (src/HandsAreHigh, 0.25.0)
+# Code map (src/HandsAreHigh, 0.26.0)
 
 Files and the symbols to search for first. Verified against the tree on 2026-11-21; prefer
 `grep -n "SymbolName"` over line numbers. Many files open with a header comment that explains the
@@ -72,8 +72,12 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 - `Perception.cs`: `FleePoint`, `CoverPoint`, `RetreatPoint`, `PathTo`, `Reachable`, `RoutePassesNear`,
   `Sees`, `Recognises`, `CanSee`, `LineClear`, `InLineOfFire`, `KnownPosition`, `PlayerOf/Same/InfoAbout`,
   `TakeHeavy` (search budget).
-- `Escape.cs` (capture memory, `KeepAwayLayer`), `ReleaseWatch.cs` (+15..+120 s lines, hand-off
-  timeline), `WeaponState.cs` (`HaveBulletsPatch`, `TryReloadPatch`).
+- `Escape.cs` (capture memory, `KeepAwayLayer`, `CheckObjective` -> `OrbitObjectives.RetireIfBack` in
+  Compat.cs: drops an ORBIT objective that leads back to the capture), `ReleaseWatch.cs` (+15..+120 s
+  lines, hand-off timeline), `WeaponState.cs` (`HaveBulletsPatch`, `TryReloadPatch`).
+- 0.26.0 gun at his feet: `SurrenderLayer.TryGunAtFeet` / `Endangered` (first thing in `LeftDecide`
+  and `DecideOnLeave`), `Arsenal.Locate` (the item where it lies now), `SurrenderState.CalmRearm`
+  (no battle cry / no turn to the ex-captor in `Rearm`/`Rearmed`).
 
 **Pose: hands, fingers, head, torso, kneeling, turning**
 - `ArmPose.cs`: `ArmPosePatch` (the order of everything), `Apply`, `ArmFrame`, `TorsoFrame`,

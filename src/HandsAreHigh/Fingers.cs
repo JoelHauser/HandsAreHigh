@@ -60,11 +60,12 @@ namespace HandsAreHigh
         {
             { float.NaN, 10f, 12f }, { 14f, 24f, 14f }, { 17f, 27f, 15f }, { 19f, 29f, 17f }, { 21f, 31f, 19f },
         };
-        // 0.25.0: the top hand of hands-over-hands (tools/fingersim/overhand.py): lightly bent over
-        // the bottom hand's back, each finger a little more than the one before.
+        // 0.26.0: the top hand of hands-over-hands (tools/fingersim/overlap.py): lightly bent, lying
+        // over the bottom hand's fingers, each finger a little more than the one before (0.25.0's
+        // shape lay over the bottom hand's back towards its wrist).
         private static readonly float[,] OverTop =
         {
-            { float.NaN, 10f, 12f }, { 15f, 10f, 6f }, { 17f, 12f, 7f }, { 19f, 14f, 8f }, { 21f, 16f, 10f },
+            { float.NaN, 10f, 12f }, { 10f, 8f, 5f }, { 12f, 10f, 5f }, { 14f, 12f, 5f }, { 16f, 14f, 5f },
         };
         private static readonly float[,] Flat =
         {

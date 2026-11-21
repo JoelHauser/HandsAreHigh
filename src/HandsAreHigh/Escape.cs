@@ -36,6 +36,9 @@ namespace HandsAreHigh
             internal Vector3 HeldAt, ThreatAt, ThreatVel;
             internal float Until, Next, Since;
             internal int Legs;
+            // 0.26.0: ORBIT objectives dropped for leading back to the capture (OrbitObjectives).
+            internal int OrbitDrops;
+            internal float NextOrbit;
             internal readonly float[] Dist = new float[4];
             internal int Samples;
             internal bool ArmedNoted, FireNoted;
@@ -104,6 +107,22 @@ namespace HandsAreHigh
             Entries[p] = e;
             if (Settings.LogEscape.Value)
                 HandsAreHighPlugin.Log.LogInfo($"{s.Name}: remembers for {secs:0} s where he was held ({Perception.Flat(p.Position, e.HeldAt):0} m away) and where he last saw {(e.Captor != null ? Restraint.Name(e.Captor) : "the threat")} ({Perception.Flat(p.Position, e.ThreatAt):0} m away); {Arsenal.Equipment(p)}");
+            // 0.26.0: the objective his AI is handed back with (ORBIT keeps the pre-capture one): one
+            // that leads straight back to the capture is dropped now, before his AI turns him round.
+            CheckObjective(e, now, always: true);
+        }
+
+        // At the hand-back, then every 2 s while remembered (at most 4 drops per release: ORBIT's
+        // next pick may lie that way too, but it can't be fought forever).
+        private static void CheckObjective(Entry e, float now, bool always)
+        {
+            if (e.OrbitDrops >= 4 || now < e.NextOrbit) return;
+            e.NextOrbit = now + 2f;
+            BotOwner o = e.Bot?.AIData?.BotOwner;
+            string said = OrbitObjectives.RetireIfBack(o, e.HeldAt, e.ThreatAt, Settings.KeepAwayRadius.Value, out bool dropped);
+            if (dropped) e.OrbitDrops++;
+            if (said != null && (dropped || always) && Settings.LogEscape.Value)
+                HandsAreHighPlugin.Log.LogInfo($"{e.Name}: {said}");
         }
 
         internal static void Tick()
@@ -145,6 +164,7 @@ namespace HandsAreHigh
             for (int i = e.Dist.Length - 1; i > 0; i--) e.Dist[i] = e.Dist[i - 1];
             e.Dist[0] = d;
             e.Samples++;
+            CheckObjective(e, now, always: false);
             if (e.Active) return;
 
             float radius = Settings.KeepAwayRadius.Value;

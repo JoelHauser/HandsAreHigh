@@ -134,6 +134,7 @@ namespace HandsAreHigh
             // start, not in the frame of the first surrender check.
             if (world != null) HandsAreHighPlugin.Try("prewarm", SainAdapter.Prewarm);
             if (world != null) HandsAreHighPlugin.Try("prewarm orbit", OrbitAdapter.Prewarm);
+            if (world != null) HandsAreHighPlugin.Try("prewarm orbit objectives", OrbitObjectives.Prewarm);
             if (world != null) HandsAreHighPlugin.Try("prewarm looting bots", () => { bool _ = LootingBotsAdapter.Present; });
         }
 

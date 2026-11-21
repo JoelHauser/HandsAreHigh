@@ -45,9 +45,23 @@ LootingBotsAdapter, Teammates), `HeadFreeLook.cs`, `WeaponState.cs`.
   blocks sleep for the bot's ORBIT squad too; false on a ghost wakes it. We keep captor + prisoner
   awake during custody (`OrbitAdapter.KeepAwake`), released on end/raid change/teardown. [code; log
   "ORBIT found: bot-held encounters can be kept awake"]
-- ORBIT keeps its own objectives; this mod never stashes or restores them. A released bot can be
-  walked back near the capture spot by ORBIT (0.24.0 log #6: "CIRCLED BACK ... layer OrbitBrainLayer"
-  at +84 s); KeepAway handles it while unarmed. [log]
+- ORBIT keeps its own objectives; this mod never stashes or restores them. A released bot was
+  walked straight back to his pre-capture objective (0.24.0 log #6 +84 s; 0.25.0 log #1: handed back
+  9 m away walking off, 3 s later "drifting back ... OrbitBrainLayer", three keep-away legs each
+  undone, CIRCLED BACK at +46 s). [log]
+- 0.26.0, ORBIT 3.1.1 objective internals (decompiled from the installed ORBIT.dll; every member
+  checked by reflection on that DLL, 2026-11-21): no public API drops an objective
+  (`OrbitBotControl` = Exclude/Enable/SleepAllowed only). `Singleton<Orbit.Core.OrbitManager>.Instance`
+  (Comfort `Singleton<T>.Instance` is a static property) `.AgentData.GetByProfileId(string)` -> `Agent`
+  (`IsActive`, `Squad`, readonly `Objective`). `Objective.Location` / `SplinterParent` (`Waypoint`:
+  field `Position`, property `Id`), `Status` (`ObjectiveStatus.None`). `Squad.Objective`
+  (`SquadObjective.Location`), `CompletedPoiIds` (HashSet<int>, skipped by every waypoint pick),
+  `Leader`, `Size`. ORBIT's own `GotoObjectiveAction.AbandonStalledObjective` drops a stuck objective
+  exactly so (CompletedPoiIds.Add, matching squad Location = null, agent Location/SplinterParent =
+  null, Status None); `GotoObjectiveStrategy` then calls `AssignNewObjective` (RequestNear his own
+  position) for a squad whose Location is null. `OrbitObjectives.RetireIfBack` mirrors it for a
+  released man whose objective leads back to the capture (leaders / solo only). [decompile +
+  reflection; effect in game unverified]
 - Whether ORBIT's sleep shows as `BotState != Active` or an inactive GameObject: unverified (both
   handled).
 
