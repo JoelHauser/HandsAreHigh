@@ -17,9 +17,10 @@ namespace HandsAreHigh
     {
         internal static readonly string[] HealthPresets = { "Full", "Wounded", "Badly wounded", "Bleeding", "Leg destroyed" };
         internal static readonly string[] AmmoPresets = { "As generated", "No spare ammo", "Empty gun" };
-        internal static readonly string[] KitPresets = { "As generated", "Keeps sidearm", "Keeps slung primary", "Knife only", "Disarmed" };
+        internal static readonly string[] KitPresets = { "As generated", "Keeps sidearm", "Keeps slung primary", "Knife only", "Disarmed", "Grenades only" };
         // 0.23.0: a captor missing gear (GearNeeds tests): removed by the same transaction.
-        internal static readonly string[] CaptorGearPresets = { "As generated", "No body armour", "No rig", "No backpack", "No armour, rig or backpack" };
+        // 0.24.0: "No knife" (the dropped-knife tests).
+        internal static readonly string[] CaptorGearPresets = { "As generated", "No body armour", "No rig", "No backpack", "No armour, rig or backpack", "No knife" };
         internal static readonly string[] NervePresets = { "Rolled", "0.0", "0.25", "0.5", "0.75", "1.0" };
         internal static readonly string[] Personalities = { "SAIN's own", "Coward", "Timmy", "Rat", "Normal", "Chad", "GigaChad", "Wreckless" };
 
@@ -141,6 +142,11 @@ namespace HandsAreHigh
                 case "Disarmed":
                     remove.Add(EquipmentSlot.SecondPrimaryWeapon); remove.Add(EquipmentSlot.Holster); remove.Add(EquipmentSlot.Scabbard);
                     break;
+                case "Grenades only":   // 0.24.0: no gun or knife left after the drop; his grenades stay
+                    remove.Add(EquipmentSlot.FirstPrimaryWeapon); remove.Add(EquipmentSlot.SecondPrimaryWeapon); remove.Add(EquipmentSlot.Holster); remove.Add(EquipmentSlot.Scabbard);
+                    if (Arsenal.Throwables(bot) == 0) note = "his generated kit has no grenade: relaunch, or another seed (the test needs at least one)";
+                    break;
+                case "No knife": remove.Add(EquipmentSlot.Scabbard); break;
                 case "No body armour": remove.Add(EquipmentSlot.ArmorVest); break;
                 case "No rig": remove.Add(EquipmentSlot.TacticalVest); break;
                 case "No backpack": remove.Add(EquipmentSlot.Backpack); break;

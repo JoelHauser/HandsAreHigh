@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Comfort.Common;
 using EFT;
 using EFT.HandBook;
@@ -94,6 +95,7 @@ namespace HandsAreHigh
             Item inHands = bot.HandsController?.Item;
             if (inHands is Weapon)
             {
+                WeaponState.Track(bot);   // 0.24.0: his weapon manager will keep this gun as "current"
                 Empty(bot, () =>
                 {
                     onEmpty?.Invoke();
@@ -140,6 +142,8 @@ namespace HandsAreHigh
             EquipmentSlot.FirstPrimaryWeapon, EquipmentSlot.SecondPrimaryWeapon, EquipmentSlot.Holster
         };
 
+        // Any gun in a weapon slot, loaded or not: what a captor must disarm, what the man can
+        // refuse to hand over. Whether he can FIGHT with it is UsableGun.
         internal static EquipmentSlot? GunOnBody(Player bot)
         {
             foreach (EquipmentSlot slot in DrawOrder)
@@ -147,16 +151,146 @@ namespace HandsAreHigh
             return null;
         }
 
+        // ---- 0.24.0: what an item is, and whether a gun is any use ---------------------------
+        //
+        // The game's own item classes (0.16.9 decompile): a gun is EFT.InventoryLogic.Weapon; a
+        // knife, axe or shovel in the Scabbard slot is EFT.InventoryLogic.Knife : Item with a
+        // KnifeComponent (NOT a Weapon); a grenade is EFT.InventoryLogic.ThrowWeap : Item. Kept
+        // apart: a grenade never makes a man "armed" for escaping or rearming, a knife is a knife.
+        internal enum GearKind { None, Firearm, Melee, Throwable, Other }
+
+        internal static GearKind Kind(Item it) =>
+            it == null ? GearKind.None : it is Weapon ? GearKind.Firearm : IsMelee(it) ? GearKind.Melee : it is ThrowWeap ? GearKind.Throwable : GearKind.Other;
+
+        internal static string KindText(Item it)
+        {
+            switch (Kind(it))
+            {
+                case GearKind.Firearm: return "firearm (Weapon)";
+                case GearKind.Melee: return $"melee weapon ({it.GetType().Name}, KnifeComponent: not a firearm)";
+                case GearKind.Throwable: return "throwable (ThrowWeap: not a firearm)";
+                case GearKind.None: return "nothing";
+                default: return $"other ({it.GetType().Name})";
+            }
+        }
+
+        // A gun he can fight with: not a flare gun, not broken (durability 0), and rounds in it
+        // (chamber + magazine) or rounds of its calibre on him (rig, pockets, backpack, secure
+        // container: loose or in magazines, which is what the game's reload draws on). A
+        // malfunction doesn't count against it (the game clears those). The ammo walk is cached
+        // per man for 4 s; callers are decisions (a few per escape), never per frame.
+        internal static bool Usable(Player bot, Weapon w, out string why)
+        {
+            why = null;
+            if (w == null) { why = "no gun"; return false; }
+            string name = w.ShortName.Localized();
+            try
+            {
+                if (w.IsFlareGun) { why = $"{name}: a flare gun"; return false; }
+                RepairableComponent rep = w.Repairable;
+                if (rep != null && rep.MaxDurability > 0f && rep.Durability <= 0f) { why = $"{name}: broken (durability 0)"; return false; }
+                int inGun = w.ChamberAmmoCount + w.GetCurrentMagazineCount();
+                if (inGun > 0) { why = $"{name}: {inGun} round(s) in it"; return true; }
+                string cal = w.AmmoCaliber;
+                int spare = SpareRounds(bot, cal);
+                if (spare > 0) { why = $"{name}: empty, {spare} round(s) of {cal} on him to load"; return true; }
+                why = $"{name}: empty and no {cal} on him";
+                return false;
+            }
+            catch (Exception e)
+            {
+                why = $"{name}: couldn't read its state ({e.GetType().Name}), taken as usable";
+                return true;
+            }
+        }
+
+        private sealed class AmmoNote { internal float At; internal string Cal; internal int Rounds; }
+        private static readonly Dictionary<Player, AmmoNote> AmmoSeen = new Dictionary<Player, AmmoNote>();
+        private static readonly EquipmentSlot[] AmmoSlots =
+            { EquipmentSlot.TacticalVest, EquipmentSlot.Pockets, EquipmentSlot.Backpack, EquipmentSlot.SecuredContainer };
+
+        private static int SpareRounds(Player bot, string cal)
+        {
+            if (bot?.Equipment == null || string.IsNullOrEmpty(cal)) return 0;
+            float now = Time.time;
+            if (AmmoSeen.TryGetValue(bot, out AmmoNote n) && n.Cal == cal && now - n.At < 4f) return n.Rounds;
+            int rounds = 0;
+            foreach (EquipmentSlot slot in AmmoSlots)
+            {
+                Item c = bot.Equipment.GetSlot(slot)?.ContainedItem;
+                if (c == null) continue;
+                foreach (Item it in c.GetAllItems())
+                    if (it is Ammo a && a.StackObjectsCount > 0 && a.Caliber == cal) rounds += a.StackObjectsCount;
+            }
+            if (n == null) AmmoSeen[bot] = n = new AmmoNote();
+            n.At = now; n.Cal = cal; n.Rounds = rounds;
+            return rounds;
+        }
+
+        // The first gun on him he can fight with (slung first, then the sidearm); why: every gun
+        // looked at and what was wrong with it (for the decision logs).
+        internal static EquipmentSlot? UsableGun(Player bot, out string why)
+        {
+            why = null;
+            if (bot?.Equipment == null) { why = "no equipment"; return null; }
+            StringBuilder sb = null;
+            foreach (EquipmentSlot slot in DrawOrder)
+            {
+                if (!(bot.Equipment.GetSlot(slot)?.ContainedItem is Weapon w)) continue;
+                bool ok = Usable(bot, w, out string wWhy);
+                if (ok) { why = $"{SlotName(slot)} {wWhy}"; return slot; }
+                (sb ?? (sb = new StringBuilder())).Append(sb.Length > 0 ? "; " : "").Append(SlotName(slot)).Append(' ').Append(wWhy);
+            }
+            why = sb?.ToString() ?? "no gun on him";
+            return null;
+        }
+
+        internal static EquipmentSlot? UsableGun(Player bot) => UsableGun(bot, out _);
+
+        // His hands hold a gun he can fight with now (the game's firearm controller).
+        internal static bool GunInHands(Player bot) =>
+            bot?.HandsController is Player.FirearmController fc && fc.Item != null && Usable(bot, fc.Item, out _);
+
+        internal static int Throwables(Player bot)
+        {
+            int n = 0;
+            if (bot?.Equipment == null) return 0;
+            foreach (EquipmentSlot slot in AmmoSlots)
+            {
+                Item c = bot.Equipment.GetSlot(slot)?.ContainedItem;
+                if (c == null) continue;
+                foreach (Item it in c.GetAllItems()) if (it is ThrowWeap) n++;
+            }
+            return n;
+        }
+
+        // 0.24.0: what he carries, by kind (decision logs): "firearm: sidearm PM: 8 round(s) in it;
+        // melee: 6Kh5; throwables: 2 (not counted as armed)".
+        internal static string Equipment(Player bot)
+        {
+            if (bot == null) return "?";
+            EquipmentSlot? usable = UsableGun(bot, out string why);
+            Item knife = bot.Equipment?.GetSlot(EquipmentSlot.Scabbard)?.ContainedItem;
+            int nades = Throwables(bot);
+            return $"firearm: {(usable != null ? why : $"none usable ({why})")}; melee: {(knife != null ? knife.ShortName.Localized() : "none")}; " +
+                   $"throwables: {nades}{(nades > 0 ? " (not counted as armed)" : "")}";
+        }
+
         internal static string SlotName(EquipmentSlot? slot) =>
             slot == EquipmentSlot.Holster ? "sidearm" : slot == null ? "nothing" : "slung gun";
 
         // 0.21.0: for the hand-back line: what he goes back to his own AI with.
+        // 0.24.0: only a usable gun is "armed"; grenades are named but never count.
         internal static string DescribeArmed(Player bot)
         {
             if (bot == null) return "?";
-            EquipmentSlot? gun = GunOnBody(bot);
+            if (GunInHands(bot)) return "armed: a gun in his hands";
+            EquipmentSlot? gun = UsableGun(bot);
             if (gun != null) return $"armed: {SlotName(gun)}";
-            return HasMelee(bot) ? "no gun, a knife" : "unarmed";
+            string unusable = GunOnBody(bot) != null ? ", an unusable gun" : "";
+            int nades = Throwables(bot);
+            string g = nades > 0 ? $", {nades} grenade(s)" : "";
+            return HasMelee(bot) ? $"no usable gun, a knife{unusable}{g}" : $"unarmed{unusable}{g}";
         }
 
         internal static bool HasMelee(Player bot) =>
@@ -192,7 +326,9 @@ namespace HandsAreHigh
                     HandsAreHighPlugin.Log.LogInfo($"{s.Name}: draw not asked: {(s.DrawPending ? "an earlier draw is still pending" : "his drop isn't answered yet")}");
                 return false;
             }
-            EquipmentSlot? slot = melee ? (HasMelee(bot) ? EquipmentSlot.Scabbard : (EquipmentSlot?)null) : GunOnBody(bot);
+            // 0.24.0: a gun he can fight with first (an empty rifle on his back no longer beats a
+            // loaded sidearm); any gun only when none is usable (a bluff draw, as before).
+            EquipmentSlot? slot = melee ? (HasMelee(bot) ? EquipmentSlot.Scabbard : (EquipmentSlot?)null) : (UsableGun(bot) ?? GunOnBody(bot));
             if (slot == null) return false;
             BotWeaponSelector selector = owner.WeaponManager?.Selector;
             if (selector == null) return false;
@@ -370,6 +506,7 @@ namespace HandsAreHigh
             OwnerOf.Clear();
             Seen.Clear();
             Claimed.Clear();
+            AmmoSeen.Clear();   // 0.24.0
         }
 
         private static InteractableObject OwnerOfCollider(Collider c)

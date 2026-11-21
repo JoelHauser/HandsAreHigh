@@ -12,6 +12,10 @@ namespace HandsAreHigh
     // a log fact, not an impression: a bot still standing at the capture spot after 30 s is
     // flagged STILL NEAR. Positions are sampled once a second (no per-frame work, no logs between
     // the three lines). Nothing here acts on him.
+    // 0.24.0: followed for the longer of this and "Remembers the capture for", with lines at +15,
+    // +30, +60, +90, +120 s, the furthest he got from where he was held, and CIRCLED BACK when he is
+    // back within the keep-away radius after having been 15 m further out (Escape.cs acts on that;
+    // this only reports it).
     internal static class ReleaseWatch
     {
         private sealed class Entry
@@ -21,18 +25,21 @@ namespace HandsAreHigh
             internal Vector3 HeldAt, HandedAt, Last;
             internal bool HeldKnown;
             internal float Since, NextSample, Travelled, LastMoveAt;
+            internal float Furthest;
             internal int Reported;
+            internal bool Circled;
         }
 
         private static readonly List<Entry> Entries = new List<Entry>(4);
-        private static readonly float[] ReportAt = { 15f, 30f };
+        private static readonly float[] ReportAt = { 15f, 30f, 60f, 90f, 120f };
+        private static float Limit => Mathf.Max(Settings.ReleaseWatchSeconds.Value, Settings.EscapeMemory.Value);
 
         internal static int Count => Entries.Count;
 
         internal static void Start(SurrenderState s, Player p)
         {
-            float secs = Settings.ReleaseWatchSeconds.Value;
-            if (secs <= 0f || p == null || Entries.Count >= 16) return;
+            float secs = Limit;
+            if (Settings.ReleaseWatchSeconds.Value <= 0f || p == null || Entries.Count >= 16) return;
             for (int i = 0; i < Entries.Count; i++) if (Entries[i].Bot == p) { Entries.RemoveAt(i); break; }
             float now = Time.time;
             Entries.Add(new Entry
@@ -46,7 +53,7 @@ namespace HandsAreHigh
         {
             if (Entries.Count == 0) return;
             float now = Time.time;
-            float limit = Settings.ReleaseWatchSeconds.Value;
+            float limit = Limit;
             for (int i = Entries.Count - 1; i >= 0; i--)
             {
                 Entry e = Entries[i];
@@ -65,6 +72,13 @@ namespace HandsAreHigh
                 if (step > 0.3f) { e.Travelled += step; e.LastMoveAt = now; }
                 e.Last = pos;
                 float t = now - e.Since;
+                float held = Perception.Flat(pos, e.HeldAt);
+                if (held > e.Furthest) e.Furthest = held;
+                if (!e.Circled && e.Furthest - held > 15f && held < Settings.KeepAwayRadius.Value)
+                {
+                    e.Circled = true;
+                    try { Report(e, now, t, false, "CIRCLED BACK"); } catch (System.Exception ex) { HandsAreHighPlugin.Report("release watch", ex); }
+                }
                 bool end = t >= limit;
                 if (!end && (e.Reported >= ReportAt.Length || t < ReportAt[e.Reported])) continue;
                 e.Reported++;
@@ -73,7 +87,7 @@ namespace HandsAreHigh
             }
         }
 
-        private static void Report(Entry e, float now, float t, bool end)
+        private static void Report(Entry e, float now, float t, bool end, string flag = null)
         {
             BotOwner o = e.Bot.AIData?.BotOwner;
             string layer = "?";
@@ -86,7 +100,7 @@ namespace HandsAreHigh
             string target = enemy != null ? Restraint.Name(enemy) : "none";
             string idle = moving ? "moving" : $"still for {now - e.LastMoveAt:0} s";
             bool stuck = t >= 30f && fromHeld < 10f && e.Travelled < 10f && !moving && enemy == null;
-            HandsAreHighPlugin.Log.LogInfo($"{e.Name}: after release +{t:0} s{(end ? " (last check)" : "")}: {fromHeld:0} m from where he was held, " +
+            HandsAreHighPlugin.Log.LogInfo($"{e.Name}: after release +{t:0} s{(end ? " (last check)" : "")}{(flag != null ? $": {flag}" : "")}: {fromHeld:0} m from where he was held (furthest {e.Furthest:0} m), " +
                 $"{fromHand:0} m from the hand-back ({e.Travelled:0} m walked), layer {layer}, {idle}, {pose}, target {target}, {Arsenal.DescribeArmed(e.Bot)}" +
                 $"{(stuck ? "; STILL NEAR THE CAPTURE SPOT" : "")}");
         }

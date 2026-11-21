@@ -48,6 +48,7 @@ namespace HandsAreHigh
         internal float WatchUntil;      // squadmate: stands and watches him until then (when idle)
         internal EnemyInfo Flagged;     // the EnemyInfo whose ignore flag we set (cleared on release)
         internal bool Final;            // 0.16.0: a deliberate lethal decision (Judgement): kept, never re-rolled
+        internal bool Rejudged;         // 0.24.0: after a release, his one renewed decision on seeing him (Rejudge)
         internal bool Holds => Kind != RestraintKind.Reject;
     }
 
@@ -638,6 +639,7 @@ namespace HandsAreHigh
             internal Player Bot;
             internal string Name;
             internal float Until, Next;
+            internal float Since, Hard;   // 0.24.0: when he was handed back; the memory's end
         }
 
         private static readonly List<Detachment> Detached = new List<Detachment>(4);
@@ -663,9 +665,10 @@ namespace HandsAreHigh
             EntryScratch.Clear();
             Any = HeldFireBy.Count > 0;
             if (map.Count == 0) { ByPrisoner.Remove(p); return; }
+            foreach (RestraintEntry e in map.Values) e.Rejudged = false;   // 0.24.0: one renewed decision per release
             float now = Time.time;
             for (int i = Detached.Count - 1; i >= 0; i--) if (Detached[i].Bot == p) Detached.RemoveAt(i);
-            Detached.Add(new Detachment { Bot = p, Name = s.Name, Until = now + secs, Next = now + 0.25f });
+            Detached.Add(new Detachment { Bot = p, Name = s.Name, Until = now + secs, Next = now + 0.25f, Since = now, Hard = now + Mathf.Max(secs, Settings.EscapeMemory.Value) });
             if (Settings.LogRestraint.Value || Settings.LogFireBreak.Value)
             {
                 var names = new System.Text.StringBuilder();
@@ -690,18 +693,131 @@ namespace HandsAreHigh
                 {
                     Detached.RemoveAt(i);
                     string saw = Witnesses(p);
+                    string driver = Driver(p);
                     ForgetPrisoner(p);
-                    HandsAreHighPlugin.Log.LogInfo($"Restraint: {d.Name} takes a {what} in his hands after his release: nobody holds fire at him any more{(saw.Length > 0 ? $" (seen by {saw})" : "")}");
+                    HandsAreHighPlugin.Log.LogInfo($"Restraint: RENEWED HOSTILITY: {d.Name} takes a {what} in his hands {now - d.Since:0} s after his release ({driver}): nobody holds fire at him any more{(saw.Length > 0 ? $" (seen by {saw})" : "")}");
                     continue;
                 }
-                if (now >= d.Until)
+                if (now >= d.Until && !Rejudge(d, now)) Detached.RemoveAt(i);
+            }
+        }
+
+        // 0.24.0: the hold-fire window ran out. 0.22/0.23 forgot every decision at once here
+        // (ForgetPrisoner): the ignore flag came off and the GoalEnemy / SAIN guards let go for every
+        // observer together, so a bot whose combat memory still held the man (seen 30 s ago, out of
+        // sight since) could take him straight back as a target: a timer acting as a provocation.
+        // Now each observer separately, from his own perception:
+        //   sees him now   ONE explicit decision per observer per release (no series of rolls): let
+        //                  him go again (the running-unarmed respect chance x the observer's mercy),
+        //                  kept until the capture memory ends, or engage (logged as RENEWED HOSTILITY
+        //                  with the roll); a weapon in the man's hands is handled above;
+        //   doesn't        the hold stays (nothing points him at the man) until he sees him again or
+        //                  the capture memory ends.
+        // At the memory's end every hold is dropped (no permanent immunity); one on a man he can't
+        // see also clears a vanilla target still on him, so nothing reactivates from stale memory.
+        // True: someone still holds, keep the detachment; false: it is over.
+        private static bool Rejudge(Detachment d, float now)
+        {
+            Player p = d.Bot;
+            if (!ByPrisoner.TryGetValue(p, out var map) || map.Count == 0) { ForgetPrisoner(p); return false; }
+            EntryScratch.Clear();
+            foreach (RestraintEntry e in map.Values) EntryScratch.Add(e);
+            bool hard = now >= d.Hard;
+            for (int k = 0; k < EntryScratch.Count; k++)
+            {
+                RestraintEntry e = EntryScratch[k];
+                Player o = e.Observer;
+                if (!Perception.Alive(o)) { DropEntry(p, map, e); continue; }
+                BotOwner ob = e.Owner ?? o.AIData?.BotOwner;
+                EnemyInfo info = ob != null ? Perception.InfoAbout(ob, p) : null;
+                bool sees = info != null && info.IsVisible;
+                float dist = Vector3.Distance(o.Position, p.Position);
+                if (hard)
                 {
-                    Detached.RemoveAt(i);
-                    ForgetPrisoner(p);
-                    if (Settings.LogRestraint.Value)
-                        HandsAreHighPlugin.Log.LogInfo($"Restraint: {d.Name}: {Settings.ExPrisonerHoldFire.Value:0} s since his release with empty hands; the decisions about him end (the bots around him judge him as anyone else now)");
+                    // The memory is over: no permanent immunity. Unseen: nothing to reactivate from.
+                    bool cleared = false;
+                    if (!sees)
+                        try { if (ob?.Memory?.GoalEnemy != null && Perception.Same(ob.Memory.GoalEnemy.Person, p)) { ob.Memory.GoalEnemy = null; cleared = true; } } catch { }
+                    DropEntry(p, map, e);
+                    if (Settings.LogRestraint.Value || Settings.LogEscape.Value)
+                        HandsAreHighPlugin.Log.LogInfo($"Restraint: {Name(o)}'s hold on {d.Name} ends {now - d.Since:0} s after his release ({(sees ? $"he sees him, {dist:0} m: judged as anyone else from here" : "not seen since")}){(cleared ? "; a stale target on him cleared" : "")}");
+                    continue;
+                }
+                if (!sees || e.Rejudged) continue;
+                BotHistory h = SurrenderRegistry.HistoryOf(o);
+                float mercy = Mercy(o, h);
+                float chance = Mathf.Clamp(Settings.FleeingRespect.Value * mercy, 0f, 0.97f);
+                float roll = Dice.Value;
+                string armed = Arsenal.DescribeArmed(p);
+                if (roll < chance)
+                {
+                    e.Rejudged = true;
+                    if (Settings.LogRestraint.Value || Settings.LogEscape.Value)
+                        HandsAreHighPlugin.Log.LogInfo($"Restraint: {Name(o)} sees {d.Name} again ({dist:0} m, {armed}) {now - d.Since:0} s after his release: lets him go again (chance {chance:0.00} = respect {Settings.FleeingRespect.Value:0.00} x mercy {mercy:0.00}, roll {roll:0.00})");
+                }
+                else
+                {
+                    DropEntry(p, map, e);
+                    HandsAreHighPlugin.Log.LogInfo($"Restraint: RENEWED HOSTILITY: {Name(o)} sees {d.Name} again ({dist:0} m, {armed}) {now - d.Since:0} s after his release and decides to engage him (chance to let him go {chance:0.00}, roll {roll:0.00}); his own AI from here");
                 }
             }
+            EntryScratch.Clear();
+            if (map.Count == 0) { ByPrisoner.Remove(p); Any = HeldFireBy.Count > 0; return false; }
+            d.Until = now + 1f;   // looked at again each second (cheap: a few EnemyInfo reads)
+            return true;
+        }
+
+        // 0.24.0, scenarios: an explicit, logged decision by one observer (an ex-captor) to attack a
+        // man he holds fire at, held or already handed back. Only his own decision changes: the hold
+        // is dropped (or turned to a refusal while the man is held) and, if he has an EnemyInfo on
+        // him, the man becomes his vanilla target; SAIN picks its own target from what it perceives.
+        internal static string ForceAttack(Player observer, Player man, string why)
+        {
+            if (observer == null || man == null) return "nobody";
+            BotOwner o = observer.AIData?.BotOwner;
+            if (o == null) return "not a bot";
+            string how;
+            if (SurrenderRegistry.TryGet(man, out SurrenderState s))
+            {
+                RestraintEntry e = Set(s, o, RestraintKind.Reject, $"attacks him: {why}", squad: false);
+                if (e != null) e.Final = true;
+                how = "held: his hold turned to a refusal";
+            }
+            else if (ByPrisoner.TryGetValue(man, out var map) && map.TryGetValue(observer, out RestraintEntry e2))
+            {
+                DropEntry(man, map, e2);
+                if (map.Count == 0) { ByPrisoner.Remove(man); for (int i = Detached.Count - 1; i >= 0; i--) if (Detached[i].Bot == man) Detached.RemoveAt(i); }
+                how = "handed back: his hold dropped";
+            }
+            else how = "no hold of his on him";
+            bool target = false;
+            try
+            {
+                EnemyInfo info = Perception.InfoAbout(o, man);
+                if (info != null && o.Memory != null) { o.Memory.GoalEnemy = info; target = true; }
+            }
+            catch (System.Exception ex) { HandsAreHighPlugin.Report("force attack", ex); }
+            HandsAreHighPlugin.Log.LogInfo($"Restraint: RENEWED HOSTILITY: {Name(observer)} DECIDES TO ATTACK {Name(man)} ({why}; {how}; {(target ? "made his target" : "no EnemyInfo: his AI must find him")})");
+            return null;
+        }
+
+        // One observer's decision about him gone (flag, guards), the rest kept.
+        private static void DropEntry(Player prisoner, Dictionary<Player, RestraintEntry> map, RestraintEntry e)
+        {
+            if (e.Flagged != null) { try { e.Flagged.SetIgnoreState(false); } catch { } e.Flagged = null; }
+            if (HeldFireBy.TryGetValue(e.Observer, out List<Player> list)) { list.Remove(prisoner); if (list.Count == 0) HeldFireBy.Remove(e.Observer); }
+            if (map.Remove(e.Observer)) EntryCount--;
+            Any = HeldFireBy.Count > 0;
+        }
+
+        // For the renewed-hostility line: which layer drives him and whom it targets.
+        private static string Driver(Player p)
+        {
+            BotOwner o = p?.AIData?.BotOwner;
+            string layer = "?";
+            try { if (o != null) layer = DrakiaXYZ.BigBrain.Brains.BrainManager.GetActiveLayerName(o) ?? "?"; } catch { }
+            Player t = Perception.PlayerOf(o?.Memory?.GoalEnemy?.Person);
+            return $"his AI: layer {layer}, target {(t != null ? Name(t) : "none")}";
         }
 
         // Who saw him take it (in range, a clear line): they remember him as a man who went for a

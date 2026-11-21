@@ -809,6 +809,7 @@ namespace HandsAreHigh
             BindSquadCover(c);   // 0.20.0
             BindFireBreak(c);    // 0.21.0
             BindEncounter(c);    // 0.23.0
+            BindEscape(c);       // 0.24.0
         }
 
         private static void BindKneel(ConfigFile c)

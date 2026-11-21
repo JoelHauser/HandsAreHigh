@@ -1317,6 +1317,20 @@ namespace HandsAreHigh
             return Mathf.Sin(Mathf.PI * (t - a) / (b - a));
         }
 
+        // 0.24.0: which hand braces on the knee now (0 left, 1 right; -1 none) and how far (Fingers.cs
+        // lays its fingers flat on the thigh).
+        internal static float BraceFor(SurrenderState s, out int hand)
+        {
+            hand = -1;
+            float e = BraceWeight(s);
+            KneelRig rig = s.Rig;
+            if (e <= 0.001f || rig?.Legs == null) return 0f;
+            int leg = 1 - s.KneelLead;
+            if (leg < 0 || leg >= rig.Legs.Length || rig.Legs[leg] == null) return 0f;
+            hand = rig.Legs[leg].Side > 0f ? 1 : 0;
+            return e;
+        }
+
         private static float BraceWeight(SurrenderState s)
         {
             KneelStyle st = s.KneelStyle;

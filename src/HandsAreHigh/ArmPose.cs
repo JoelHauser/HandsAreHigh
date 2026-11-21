@@ -59,6 +59,12 @@ namespace HandsAreHigh
                 try { if (head) Kneel.ApplyHands(__instance, s); if (kneel) Kneel.ApplyBrace(__instance, s); }
                 catch (System.Exception e) { HandsAreHighPlugin.Report("kneel hands", e); }
             }
+            // 0.24.0: the fingers last, over whatever posed the hands this frame.
+            if (s.Weight > 0f)
+            {
+                try { Fingers.Apply(__instance, s); }
+                catch (System.Exception e) { HandsAreHighPlugin.Report("fingers", e); }
+            }
             Perf.End(Perf.Sec.Pose, t0);
         }
     }
@@ -69,6 +75,11 @@ namespace HandsAreHigh
     internal sealed class HandRig
     {
         internal readonly Transform[] Middle = new Transform[2], Thumb = new Transform[2], TwistA = new Transform[2], TwistB = new Transform[2];
+        // 0.24.0: every finger bone [hand, digit 0..4, joint 0..2] (Fingers.cs).
+        internal readonly Transform[,,] Digits = new Transform[2, 5, 3];
+        internal readonly Quaternion[,,] FingerBase = new Quaternion[2, 5, 3], FingerLast = new Quaternion[2, 5, 3];
+        internal bool FingerBaseSet, FingerWritten;
+        internal int FingerAnim = -1;   // -1 not known yet, 1 the animator writes them, 0 nothing else does
         internal bool Ok(int hi) => Middle[hi] != null && Thumb[hi] != null;
     }
 
@@ -99,6 +110,7 @@ namespace HandsAreHigh
                 if (t3 != null && t3.name == $"Base Human{sd}Forearm3" && t3.parent != null && t3.parent.name == $"Base Human{sd}Forearm2")
                 { h.TwistB[i] = t3; h.TwistA[i] = t3.parent; }
             }
+            Fingers.Find(h, lp, rp);
             s.Hands = h;
             if (!h.Ok(0) || !h.Ok(1))
                 HandsAreHighPlugin.Log.LogWarning($"{s.Name}: no Digit31/Digit11 finger bones under the palms: wrists follow the forearms (no palm orientation)");

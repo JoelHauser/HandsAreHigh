@@ -1,4 +1,4 @@
-"""0.21.0: the post-captivity phase graph of SurrenderLayer, as coded, with each edge's guard.
+"""0.21.0 (+0.24.0 graph): the post-captivity phase graph of SurrenderLayer, as coded, with each edge's guard.
 
 Checks that every way out of HandsUp ends in a hand-back to the bot's own AI (Released or
 Rearmed -> SurrenderRegistry.Tick) within a bounded time, and shows the 0.20.1 graph's
@@ -42,7 +42,22 @@ V20 = {
     "Rearmed":    [("AI", None, DRAW + ARMS)],
 }
 
-LIMITS = {"legs": 2, "recover": 2, "scramble": 1}   # extra passes each counter allows
+# 0.24.0: up to 4 legs (FleeLegs < 3), a walk-off for a man left behind is a Retreating flight
+# (calm), Regrouping under fire goes to cover before any gun (-> Hiding -> Released), and under
+# fire while Retreating / Regrouping / Hiding a usable gun may be drawn (DefendSelf -> Rearmed).
+# After the hand-back ("AI") the keep-away layer may take him at most KeepAwayLegs (3) legs of
+# at most 20 s each: AI -> KeepAway -> AI, counted by "keepaway".
+V24 = dict(V21)
+V24["HandsUp"] = V21["HandsUp"]
+V24["Retreating"] = [("Retreating", "legs", 15 + RISE), ("Hiding", None, 15 * 3 + RISE), ("Regrouping", None, 15 + RISE), ("Rearmed", None, 15 + RISE)]
+V24["Regrouping"] = [("Rearmed", None, 0.3), ("Recovering", "recover", 0.3), ("Hiding", None, 0.3), ("Released", None, 0.3)]
+V24["Hiding"] = [("Released", None, 8 + RISE), ("Rearmed", None, 8 + RISE)]
+V24["Released"] = [("AI", None, ARMS + RISE + 2.0)]
+V24["Rearmed"] = [("AI", None, DRAW + ARMS + RISE)]
+
+LIMITS = {"legs": 3, "recover": 2, "scramble": 1}   # extra passes each counter allows (0.24.0: 4 legs)
+LIMITS21 = {"legs": 2, "recover": 2, "scramble": 1}
+KEEPAWAY_LEGS, KEEPAWAY_LEG_S = 3, 20.0
 
 
 def worst(graph, node, used, depth=0):
@@ -66,6 +81,10 @@ def worst(graph, node, used, depth=0):
 
 
 ok = True
+t24 = worst(V24, "HandsUp", {})
+print(f"0.24.0: every path from HandsUp ends with his own AI; worst case {t24:.0f} s; then at most {KEEPAWAY_LEGS} keep-away legs of {KEEPAWAY_LEG_S:.0f} s ({KEEPAWAY_LEGS * KEEPAWAY_LEG_S:.0f} s) over the memory, each handing back" if t24 is not None else "0.24.0: UNBOUNDED loop")
+ok &= t24 is not None
+LIMITS.clear(); LIMITS.update(LIMITS21)
 t21 = worst(V21, "HandsUp", {})
 print(f"0.21.0: every path from HandsUp ends with his own AI; worst case {t21:.0f} s" if t21 is not None else "0.21.0: UNBOUNDED loop")
 ok &= t21 is not None

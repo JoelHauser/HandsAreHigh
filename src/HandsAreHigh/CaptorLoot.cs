@@ -96,6 +96,7 @@ namespace HandsAreHigh
         internal bool Wanted;
         internal bool Demanded;         // 0.18.0: a weapon he made him drop
         internal bool Needed;           // 0.23.0: gear he told him to drop because he lacks it (GearNeeds)
+        internal bool Melee;            // 0.24.0: a knife / melee item (EFT.InventoryLogic.Knife): optional, never postponed
         internal bool StepAsked;        // 0.23.0: he asked the man to step off it once
         internal int Tries;             // fetches started
         // 0.19.0: tracking and what he knows (see the header).
@@ -308,8 +309,10 @@ namespace HandsAreHigh
             return false;
         }
 
-        // A weapon the man dropped because a captor told him to (or at the surrender): guns and knives.
-        private static bool IsDemanded(Item it) => Settings.CollectDemanded.Value && (it is Weapon || Arsenal.IsMelee(it));
+        // A weapon the man dropped because a captor told him to (or at the surrender).
+        // 0.24.0: guns only. A knife from his Scabbard slot is EFT.InventoryLogic.Knife : Item (with a
+        // KnifeComponent, not a Weapon): weighed as optional (MeleeWant), not always fetched.
+        private static bool IsDemanded(Item it) => Settings.CollectDemanded.Value && it is Weapon;
 
         // Every item on the ground not weighed yet (all of them the first time).
         private static void Assess(CaptorState cs, SurrenderState s, LootPlan plan, int situation, float now)
@@ -340,6 +343,14 @@ namespace HandsAreHigh
                     c.Value = Value(it);
                     ItemAddress where = AddressFor(cs.Bot, it, out c.Fit, out c.Gap);
                     if (where == null) { c.Decision = "leave"; c.Why = $"{(c.Demanded ? "a weapon he made him drop, but " : "")}no room for it ({c.Fit})"; }
+                    else if (Arsenal.Kind(it) == Arsenal.GearKind.Melee)
+                    {
+                        // 0.24.0: optional; leaving it is a finished decision (never postponed).
+                        c.Melee = true;
+                        MeleeWant(cs, s, c, greed, out string mw);
+                        if (!c.Wanted) { c.Decision = "leave"; c.Why = $"{mw}: leaves it"; }
+                        else { c.Why = mw; Weigh(cs, s, c, now); }
+                    }
                     else if (c.Demanded)
                     {
                         c.Want = 1f;
@@ -431,6 +442,32 @@ namespace HandsAreHigh
             return Vector3.Angle(captor.LookDirection, at - eye) < 65f && Perception.LineClear(eye, at);
         }
 
+        // 0.24.0: a dropped knife (or axe, shovel: any KnifeComponent item). The captor used to fetch
+        // it like a gun (always wanted, "the weapon he made him drop": 0.23.0 log, #29/#30/#32 walked
+        // over and bent down by the man for a 3,560-rouble MPL-50 and a 6Kh5 he had no use for).
+        // Wanted only if it is worth it to him: "Captors pick up a dropped knife" x his appetite
+        // (greed) x use (none of his own 1.4, has one 0.35) x value (0.6 at nothing .. 1.5 at 40k
+        // roubles) x a little denial if it lies within the man's reach (1.15). Then the same exposure
+        // weighing as any item with a lower tolerance; too risky = left (never "later" or "after the
+        // release": a knife keeps nobody waiting). Logged with what the item is.
+        private static void MeleeWant(CaptorState cs, SurrenderState s, LootCandidate c, float greed, out string why)
+        {
+            Item own = cs.Bot?.Equipment?.GetSlot(EquipmentSlot.Scabbard)?.ContainedItem;
+            float use = own == null ? 1.4f : 0.35f;
+            float worth = Mathf.Lerp(0.6f, 1.5f, Mathf.Clamp01(c.Value / 40000f));
+            LootItem li = c.Loose;
+            float toMan = li != null && s?.Bot != null ? Vector3.Distance(li.transform.position, s.Bot.Position) : 99f;
+            float denial = toMan <= Settings.ScrambleRange.Value ? 1.15f : 1f;
+            c.Want = Mathf.Clamp01(Settings.MeleePickupChance.Value * greed * use * worth * denial);
+            float roll = Dice.Value;
+            c.Wanted = roll < c.Want;
+            bool forced = ForcedWant.Contains(cs.Bot);
+            if (forced) { c.Wanted = true; c.Want = 1f; }
+            why = $"{Arsenal.KindText(c.Item)}, {c.Value:0} roubles, into his {c.Fit}; {(own == null ? "he has no knife of his own" : $"he has his own {own.ShortName.Localized()}")}; " +
+                  $"want {c.Want:0.00} (base {Settings.MeleePickupChance.Value:0.00} x greed {greed:0.00} x use {use:0.00} x value {worth:0.00}{(denial > 1f ? $" x by his reach {denial:0.00}" : "")}), " +
+                  $"{(forced ? "FORCED appetite" : $"roll {roll:0.00}")}";
+        }
+
         // What to do about it now, from what he knows (see the header).
         private static void Weigh(CaptorState cs, SurrenderState s, LootCandidate c, float now)
         {
@@ -453,7 +490,9 @@ namespace HandsAreHigh
             if (c.Decision == "later")
             {
                 c.NextWeigh = now + Settings.LootReweighSeconds.Value;
-                if (c.Postponed >= Settings.LootMaxPostpone.Value)
+                if (c.Melee)
+                    Decide(cs, c, "leave", "a knife: not worth waiting for");
+                else if (c.Postponed >= Settings.LootMaxPostpone.Value)
                     Decide(cs, c, Settings.LootAfterRelease.Value ? "after release" : "leave",
                         $"postponed {c.Postponed} time(s): keeps his hands on the man{(Settings.LootAfterRelease.Value ? ", fetches it after letting him go" : "")}");
             }
@@ -497,13 +536,14 @@ namespace HandsAreHigh
             float cost = (walk + custody) * caution;
 
             float toMan = Vector3.Distance(c.KnownAt, s.Bot.Position);
-            float denial = c.Demanded ? (toMan <= Settings.ScrambleRange.Value ? 0.6f : 0.25f) : 0f;
+            float denial = c.Demanded ? (toMan <= Settings.ScrambleRange.Value ? 0.6f : 0.25f) : c.Melee && toMan <= Settings.ScrambleRange.Value ? 0.15f : 0f;
             float use = c.Gap ? 0.5f : Mathf.Lerp(0f, 0.45f, Mathf.Clamp01(c.Value / 100000f));
             float appetite = c.Demanded ? 1f : Greed(cs.Bot, out _);
             float benefit = (denial + use) * appetite;
             string why = $"{c.PathLen:0} m walk, {toMan:0} m from him: benefit {benefit:0.00} (denial {denial:0.00}, use {use:0.00}, appetite x{appetite:0.00}) " +
                          $"vs cost {cost:0.00} (walk {walk:0.00}, custody {custody:0.00}: {cw}; caution x{caution:0.00})";
-            if (wait != null) Decide(cs, c, "later", $"{why}; {wait}: not now");
+            if (c.Melee && (wait != null || benefit < cost)) Decide(cs, c, "leave", $"{why}{(wait != null ? $"; {wait}" : "")}: a knife isn't worth leaving his post for");
+            else if (wait != null) Decide(cs, c, "later", $"{why}; {wait}: not now");
             else if (benefit >= cost) Decide(cs, c, "take", $"{why}: goes for it");
             else if (!covered && custody > walk) Decide(cs, c, "later", $"{why}: would leave him unwatched; waits");
             else Decide(cs, c, Settings.LootAfterRelease.Value ? "after release" : "leave", $"{why}: not worth leaving his post for");
@@ -516,8 +556,9 @@ namespace HandsAreHigh
             if (loose == null) { c.Decision = "leave"; c.Why += "; gone since"; return; }
             float risk = Risk(cs, s, c.Seen ? c.KnownAt : loose.transform.position, out string riskWhy);
             float accepts = c.Demanded || c.Needed ? Mathf.Max(Settings.LootRisk.Value, Settings.DemandedRisk.Value) : Settings.LootRisk.Value;
+            if (c.Melee) accepts = Settings.LootRisk.Value * 0.8f;   // 0.24.0: not worth much exposure
             string before = c.Decision;
-            c.Decision = risk <= accepts ? "take" : Settings.LootAfterRelease.Value || c.Demanded || c.Needed ? "later" : "leave";
+            c.Decision = risk <= accepts ? "take" : !c.Melee && (Settings.LootAfterRelease.Value || c.Demanded || c.Needed) ? "later" : "leave";
             string verdict = c.Decision == "take" ? "takes it now" : c.Decision == "later" ? "too risky now: later" : "too risky: leaves it";
             int cut = c.Why.IndexOf("; risk ");
             if (cut >= 0) c.Why = c.Why.Substring(0, cut);

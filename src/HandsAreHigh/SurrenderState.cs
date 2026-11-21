@@ -182,6 +182,18 @@ namespace HandsAreHigh
         internal float FleeSince = -1f, LegSince, FleeLockUntil, NextFleeCheck;
         internal bool FleeLockLogged;
 
+        // 0.24.0: release and escape. CalmFlight: left behind by his captor, he walks off (no
+        // sprint; any fire ends it). CaptorLastVel: how the captor was moving when last SEEN (flat;
+        // zero when not seen: no tracking). EquipLogged / LastRefused: one equipment line per
+        // flight, each refused weapon recovery logged once. DefendWeighedUntil: one fight-or-cover
+        // weighing per burst. FaceThreat: a draw under fire turns to the shooter, not the captor.
+        internal bool CalmFlight;
+        internal Vector3 CaptorLastVel;
+        internal bool EquipLogged;
+        internal string LastRefused;
+        internal float DefendWeighedUntil;
+        internal Vector3? FaceThreat;
+
         // 0.16.0: who hit him last (BeingHitAction), for the death report: decided or a leak.
         internal Player LastHitBy;
         internal float LastHitAt = -1000f;
@@ -502,6 +514,7 @@ namespace HandsAreHigh
         {
             Phase old = Phase;
             Phase = p;
+            if (p == Phase.HandsUp) { CalmFlight = false; FaceThreat = null; EquipLogged = false; LastRefused = null; }
             if (p != Phase.HandsUp)
             {
                 Gestures.Cancel(this, $"now {p}");

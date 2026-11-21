@@ -210,8 +210,10 @@ namespace HandsAreHigh
             if (!s.DrawPending) return;
             // Turns on his planted feet once his knees are off the ground (within MaxPivot), the
             // rest once the kneel pose is off him entirely (SteerTo).
-            if (Kneel.Posing(s)) { SteerTo(s, ThreatPos(s, s.Captor) - Me.Position, PivotSpeed); return; }
-            Face(s, ThreatPos(s, s.Captor) + Vector3.up * 1.3f);
+            // 0.24.0: fighting back under fire: towards the shooter, not the captor.
+            Vector3 at = s.FaceThreat ?? ThreatPos(s, s.Captor);
+            if (Kneel.Posing(s)) { SteerTo(s, at - Me.Position, PivotSpeed); return; }
+            Face(s, at + Vector3.up * 1.3f);
         }
 
         // ---- hands up ------------------------------------------------------------------
@@ -730,8 +732,8 @@ namespace HandsAreHigh
             else if (!far) log.Append($"his gun: {Restraint.Name(captor)} still too close ({dist:0} m); ");
             else if (!Perception.Reachable(Me.Position, s.DropPosition)) log.Append("his gun: can't get to it; ");
             else Add(options, log, "get his gun", 0.9f * s.Fight * (0.5f + s.Nerve));
-            EquipmentSlot? kept = Arsenal.GunOnBody(Me);
-            if (kept == null) log.Append("draw: no gun on him; ");
+            EquipmentSlot? kept = Arsenal.UsableGun(Me, out string keptWhy);
+            if (kept == null) log.Append($"draw: {keptWhy}; ");
             else if (!far) log.Append("draw: his captor too close; ");
             else Add(options, log, "draw " + Arsenal.SlotName(kept), 0.5f * s.Fight * s.Nerve);
             Choice chosen = Pick(options, log);
@@ -757,8 +759,14 @@ namespace HandsAreHigh
                 Rearm(s, $"left by his captor: draws the {Arsenal.SlotName(kept)} he kept");
                 return;
             }
-            s.MarkFlight();
-            HandBack(s, $"left by {Restraint.Name(captor)}: walks off");
+            // 0.24.0: "walk off" was a hand-back on the spot (0 m from where he was held): his own AI
+            // then had a man whose ex-captor was still its nearest known enemy, and SAIN, reading a
+            // stale loaded gun (see WeaponState), walked him after that captor or threw grenades
+            // (0.23.0 raid: #9, #18, #19, #26). Now he walks away first, leg by leg, his route judged
+            // against where his ex-captor is and where he is heading (FleePoint), and decides once
+            // clear (Regrouping), like any flight.
+            s.CalmFlight = true;
+            s.BeginRetreat($"left by {Restraint.Name(captor)}: walks off, away from him", emergency: false);
         }
 
         // The captor is gone (walked off, out of sight, dead). What he does depends on what he
@@ -770,7 +778,7 @@ namespace HandsAreHigh
             Vector3 threat = ThreatPos(s, captor);
             Vector3 threatEye = ThreatEye(s, captor);
             bool seen = captor != null && s.CaptorSeen;
-            EquipmentSlot? gun = Arsenal.GunOnBody(Me);
+            EquipmentSlot? gun = Arsenal.UsableGun(Me, out string gunWhy);
             float nerve = s.Nerve;
 
             var options = new List<Choice>(4);
@@ -779,7 +787,7 @@ namespace HandsAreHigh
 
             Add(options, log, "run", Settings.EscapeWeight.Value * 2f * s.Flee * (s.LegsBad ? 0.4f : 1f));
 
-            if (gun == null) log.Append("draw: no gun on him; ");
+            if (gun == null) log.Append($"draw: {gunWhy}; ");
             else Add(options, log, "draw " + Arsenal.SlotName(gun),
                 Settings.DrawWeight.Value * Mathf.Max(0f, nerve - 0.25f) * s.Fight * (seen ? 0.5f : 1f));
 
@@ -985,7 +993,8 @@ namespace HandsAreHigh
             Gestures.Cancel(s, "takes his chance");   // a gesture never holds up a real action
             float fight = s.Fight, flee = s.Flee;
             float nerve = s.Nerve;
-            EquipmentSlot? gun = Arsenal.GunOnBody(Me);
+            // 0.24.0: a gun he can fight with (loaded, or ammo for it on him; not broken).
+            EquipmentSlot? gun = Arsenal.UsableGun(Me);
             float legs = s.LegsBad ? 0.35f : 1f;
             // On his knees he has to get up first (Kneel quick stand) before he can move: anything
             // on foot weighs less, a draw a little less (he can draw while rising).
@@ -1099,6 +1108,8 @@ namespace HandsAreHigh
                 case Phase.Retreating:
                 case Phase.Regrouping:
                 case Phase.Hiding:
+                    s.CalmFlight = false;   // fire: no more walking
+                    if (DefendSelf(s, threat)) return;
                     if (s.Phase == Phase.Hiding && s.HideFromFire && (s.HideMoving || s.HideSearchPending)) { s.ThreatAt = threat; return; }   // already on his way to cover from it
                     TakeCoverFromFire(s, threat, $"under fire while {(s.Phase == Phase.Retreating ? "getting away" : "out of captivity")}");
                     return;
@@ -1133,7 +1144,7 @@ namespace HandsAreHigh
 
             float nerve = s.Nerve;
             bool handsBusy = s.DropPending || s.HandsPending || s.DrawPending || !Arsenal.HandsEmpty(Me);
-            EquipmentSlot? gun = Arsenal.GunOnBody(Me);
+            EquipmentSlot? gun = Arsenal.UsableGun(Me, out string gunWhy);
             bool kneeling = Kneel.Active(s) && s.KneelT > 0.5f;
             var options = new List<Choice>(3);
             var log = new StringBuilder($"{s.Name} under fire ({(s.FireHit ? "hit" : "near miss")}{(s.FireBy != null ? $" from {Restraint.Name(s.FireBy)}" : "")}, " +
@@ -1141,7 +1152,7 @@ namespace HandsAreHigh
                                         $"{(string.IsNullOrEmpty(s.Personality) ? "" : ", " + s.Personality)}{(kneeling ? ", on his knees" : "")}): ");
 
             Add(options, log, "cover", Settings.EscapeWeight.Value * 1.5f * s.Flee * (1.3f - 0.3f * nerve) * (s.FireHit ? 1.3f : 1f));
-            if (gun == null) log.Append("draw: no gun on him; ");
+            if (gun == null) log.Append($"draw: {gunWhy}; ");
             else if (handsBusy) log.Append($"draw: hands busy ({Arsenal.DescribeHands(Me)}); ");
             else Add(options, log, "draw " + Arsenal.SlotName(gun),
                 Settings.DrawWeight.Value * (0.4f + nerve) * s.Fight * (1f - 0.4f * s.Injury) * (kneeling ? 0.85f : 1f));
@@ -1203,6 +1214,47 @@ namespace HandsAreHigh
             bool seen = s.FireFromKnown && Perception.LineClear(threat + Vector3.up * 1.5f, spot + Vector3.up * 0.4f);
             why = towards ? "out towards the fire" : seen ? "in the shooter's view" : "out of the line of fire";
             return towards || seen;
+        }
+
+        // 0.24.0: under fire while getting away, with a gun he can fight with on him and free hands:
+        // fight back or keep going for cover, weighed once per burst (logged). Drawing is likelier
+        // when he was hit, the shooter is close, he is already in the shooter's sight with nowhere
+        // hidden near, and with nerve and a fighter's personality; cover is likelier the further
+        // the shooter and the more he flees by nature. A draw goes through Arsenal.Draw (one hands
+        // operation at a time: nothing while a drop or another draw is open) and Rearm hands him
+        // to his own AI once the gun is ready, with no restriction of ours left on his aim or
+        // trigger. False: no gun, hands busy, off, or cover chosen.
+        private bool DefendSelf(SurrenderState s, Vector3 threat)
+        {
+            if (!Settings.DefendWhenFleeing.Value) return false;
+            float now = Time.time;
+            if (now < s.DefendWeighedUntil) return false;
+            s.DefendWeighedUntil = now + 2f;
+            EquipmentSlot? gun = Arsenal.UsableGun(Me, out string gunWhy);
+            bool busy = s.DropPending || s.HandsPending || s.DrawPending || !Arsenal.HandsEmpty(Me) || Kneel.LegsLocked(s);
+            float d = Vector3.Distance(Me.Position, threat);
+            var log = new StringBuilder($"{s.Name} under fire while {s.Phase} ({(s.FireHit ? "hit" : "near miss")}{(s.FireBy != null ? $" from {Restraint.Name(s.FireBy)}" : "")}, {d:0} m{(s.FireFromKnown ? "" : ", direction unknown")}): ");
+            if (gun == null) { if (Settings.LogFireBreak.Value || Settings.LogEscape.Value) HandsAreHighPlugin.Log.LogInfo(log.Append($"fight back: {gunWhy}; -> cover").ToString()); return false; }
+            if (busy) { if (Settings.LogFireBreak.Value || Settings.LogEscape.Value) HandsAreHighPlugin.Log.LogInfo(log.Append($"fight back: hands or legs busy ({Arsenal.DescribeHands(Me)}); -> cover").ToString()); return false; }
+            bool exposed = s.FireFromKnown && Perception.LineClear(threat + Vector3.up * 1.5f, Perception.Chest(Me));
+            float close = Mathf.Lerp(1.6f, 0.5f, Mathf.InverseLerp(8f, 60f, d));
+            float fight = Settings.DrawWeight.Value * (0.4f + s.Nerve) * s.Fight * close * (s.FireHit ? 1.5f : 1f) * (exposed ? 1.3f : 0.8f) * (1f - 0.4f * s.Injury);
+            float cover = Settings.EscapeWeight.Value * 1.2f * s.Flee * (1.3f - 0.3f * s.Nerve) * (exposed ? 0.8f : 1.2f);
+            var options = new List<Choice>(2);
+            Add(options, log, $"fight back ({gunWhy})", fight);
+            Add(options, log, "cover", cover);
+            Choice c = Pick(options, log);
+            if (Settings.LogFireBreak.Value || Settings.LogEscape.Value) HandsAreHighPlugin.Log.LogInfo(log.ToString());
+            if (c.Name == null || !c.Name.StartsWith("fight")) return false;
+            StopMoving();
+            s.TargetWeapon = null;
+            s.Scrambling = false;
+            s.HideMoving = false;
+            s.HideSearchPending = false;
+            if (!Arsenal.Draw(s, BotOwner, false)) return false;
+            s.FaceThreat = threat;
+            Rearm(s, $"fights back under fire with his {Arsenal.SlotName(gun)}");
+            return true;
         }
 
         // Cover from fire: the nearest reachable spot hidden from where it came from (Hiding), at a
@@ -1473,11 +1525,13 @@ namespace HandsAreHigh
                 if (!PickRetreat(s)) return;
             }
 
-            if (!MoveTo(s, s.TargetPoint, sprint: true))
+            // 0.24.0: a man left behind walks off (briskly, not a sprint: nobody is chasing him).
+            if (!MoveTo(s, s.TargetPoint, sprint: !s.CalmFlight))
             {
                 Retry(s, "no path");
                 return;
             }
+            if (s.CalmFlight && s.Moving) BotOwner.SetTargetMoveSpeed(0.85f);
             if (!check) return;
             if (SpottedAgain(s)) return;
 
@@ -1502,12 +1556,23 @@ namespace HandsAreHigh
             {
                 s.NextFleeCheck = Time.time + 1f;
                 Player c = s.Captor;
-                if (Perception.Alive(c) && Perception.Flat(c.Position, s.TargetPoint) < 10f && Perception.Sees(Me, c, Vector3.Distance(Me.Position, c.Position)) && Perception.TakeHeavy())
+                // 0.24.0: also where the captor he sees is walking to (his heading over the look-ahead):
+                // a man leaving the same way as his ex-captor, or beside him, takes another way.
+                if (Perception.Alive(c) && Perception.Sees(Me, c, Vector3.Distance(Me.Position, c.Position)))
                 {
-                    s.FleeReplans++;
-                    s.CaptorLastSeen = c.Position;
-                    if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {Restraint.Name(c)} is {Perception.Flat(c.Position, s.TargetPoint):0} m from where he is running to: another way");
-                    if (PickRetreat(s)) { s.NextMoveOrder = -1f; ResetProgress(s); }
+                    Vector3 ahead = Escape.Ahead(c);
+                    float near = Mathf.Min(Perception.Flat(c.Position, s.TargetPoint), Perception.Flat(ahead, s.TargetPoint));
+                    float beside = Perception.Flat(c.Position, Me.Position);
+                    bool sameWay = Escape.SameWay(Me, c, s.TargetPoint);
+                    if ((near < 10f || (sameWay && beside < 15f)) && Perception.TakeHeavy())
+                    {
+                        s.FleeReplans++;
+                        s.CaptorLastSeen = c.Position;
+                        s.CaptorLastVel = Escape.FlatVelocity(c);
+                        if (Settings.LogDecisions.Value || Settings.LogEscape.Value)
+                            HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {Restraint.Name(c)} is {near:0} m from where he is going{(sameWay ? $" and heading the same way ({beside:0} m from him)" : "")}: another way");
+                        if (PickRetreat(s)) { s.NextMoveOrder = -1f; ResetProgress(s); }
+                    }
                 }
             }
         }
@@ -1516,17 +1581,22 @@ namespace HandsAreHigh
         private bool PickRetreat(SurrenderState s)
         {
             if (!s.HeldSet) { s.HeldAt = Me.Position; s.HeldSet = true; s.FleeSince = s.LegSince = Time.time; s.FleeFrom = Me.Position; }
-            float radius = Settings.CaptivityRadius.Value;
-            Vector3 threat = Perception.Alive(s.Captor) && Perception.Sees(Me, s.Captor, Vector3.Distance(Me.Position, s.Captor.Position)) ? s.Captor.Position : s.CaptorLastSeen;
-            if (Perception.FleePoint(Me, threat, s.HeldAt, radius, out s.TargetPoint, out bool leg, out string why))
+            float radius = Mathf.Max(Settings.CaptivityRadius.Value, Settings.SafeDistance.Value);
+            // Only what he perceives: the captor where he sees him now (and how he is moving), else
+            // where he last saw him (standing still, as far as he knows).
+            bool sees = Perception.Alive(s.Captor) && Perception.Sees(Me, s.Captor, Vector3.Distance(Me.Position, s.Captor.Position));
+            if (sees) { s.CaptorLastSeen = s.Captor.Position; s.CaptorLastVel = Escape.FlatVelocity(s.Captor); }
+            Vector3 threat = s.CaptorLastSeen;
+            Vector3 vel = sees ? s.CaptorLastVel : Vector3.zero;
+            if (Perception.FleePoint(Me, threat, s.HeldAt, radius, out s.TargetPoint, out bool leg, out string why, vel))
             {
-                if (Settings.LogDecisions.Value)
-                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: flees to a spot {Perception.Flat(s.TargetPoint, Me.Position):0} m away, {Perception.Flat(s.TargetPoint, s.HeldAt):0} m from where he was held " +
-                        $"({(leg ? $"a leg through cover {s.FleeLegs + 1}: no way straight out of {radius:0} m" : $"out of the {radius:0} m area")}; {Perception.Flat(s.TargetPoint, threat):0} m from the threat, " +
-                        $"{(Perception.LineClear(threat + Vector3.up * 1.5f, s.TargetPoint + Vector3.up * 1.2f) ? "in its sight" : "hidden from it")})");
+                if (Settings.LogDecisions.Value || Settings.LogEscape.Value)
+                    HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {(s.CalmFlight ? "walks off" : "flees")} to a spot {Perception.Flat(s.TargetPoint, Me.Position):0} m away, {Perception.Flat(s.TargetPoint, s.HeldAt):0} m from where he was held " +
+                        $"({(leg ? $"a leg through cover {s.FleeLegs + 1}: no way straight out of {radius:0} m" : $"out of the {radius:0} m area")}; {Perception.Flat(s.TargetPoint, threat):0} m from the threat{(sees ? "" : " (last seen there)")}, " +
+                        $"{(Perception.LineClear(threat + Vector3.up * 1.5f, s.TargetPoint + Vector3.up * 1.2f) ? "in its sight" : "hidden from it")}; {why})");
                 return true;
             }
-            if (Settings.LogDecisions.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {why}");
+            if (Settings.LogDecisions.Value || Settings.LogEscape.Value) HandsAreHighPlugin.Log.LogInfo($"{s.Name}: {why}");
             GoHide(s, "no way out");
             return false;
         }
@@ -1535,12 +1605,20 @@ namespace HandsAreHigh
         // 0.21.0: also done once he is out of his captor's sight and well clear of where he was held
         // (12 m): a hidden spot is what the flight was for; the area radius is no longer a goal he
         // must reach leg after leg. At most 3 legs (was 5).
+        // 0.24.0: done only once he is clear: "Escape ends this far from the threat" from where he was
+        // held and 3/4 of it from the threat he last saw, out of its sight; or hidden and well away
+        // (60% of it from where he was held, half of it from the threat). Up to 4 legs (was 3, and
+        // 12 m out of sight was enough: the released men of the 0.23.0 raid stopped 5-15 m away).
         private void LegDone(SurrenderState s, string why)
         {
-            float radius = Settings.CaptivityRadius.Value;
+            float radius = Mathf.Max(Settings.CaptivityRadius.Value, Settings.SafeDistance.Value);
             float sep = Perception.Flat(Me.Position, s.HeldAt);
-            bool hidden = sep >= 12f && !Perception.CanSee(Me, ThreatPos(s, s.Captor)) && !CaptorSeesMe(s);
-            if (sep < radius && s.FleeLegs < 2 && !hidden)
+            Vector3 threat = ThreatPos(s, s.Captor);
+            float fromThreat = Perception.Flat(Me.Position, threat);
+            bool unseen = !Perception.CanSee(Me, threat) && !CaptorSeesMe(s);
+            bool hidden = unseen && sep >= Mathf.Max(12f, radius * 0.6f) && fromThreat >= radius * 0.5f;
+            bool clear = sep >= radius && fromThreat >= radius * 0.75f && unseen;
+            if (!clear && !hidden && s.FleeLegs < 3)
             {
                 s.FleeLegs++;
                 s.LegSince = Time.time;
@@ -1550,7 +1628,7 @@ namespace HandsAreHigh
                 ResetProgress(s);
                 return;
             }
-            EndFlight(s, sep >= radius ? why : hidden ? $"{why}, out of his captor's sight" : $"{why}, after {s.FleeLegs + 1} legs");
+            EndFlight(s, clear ? $"{why}, clear" : hidden ? $"{why}, out of his captor's sight" : $"{why}, after {s.FleeLegs + 1} legs");
             Regroup(s, why);
         }
 
@@ -1604,32 +1682,58 @@ namespace HandsAreHigh
         }
 
         // How to get back in the fight, best option first.
+        // 0.24.0: only a gun he can fight with counts (Arsenal.UsableGun: loaded or ammo for it on
+        // him, not broken); a grenade never does. Under fire, safety before any fetch (the fetch is
+        // refused, he goes to cover). Every refused recovery is logged once with its reason; a fetch
+        // whose route passes the threat he last saw is refused like an escape route would be. The
+        // capture area is off limits for "Remembers the capture for" (not FleeCommit alone).
+        // The knife comeback only when the man he fled is dead: an unarmed man with a knife walking
+        // back at a gun was SAIN's melee charge (IsMelee) on the ex-captor.
         private void Decide(SurrenderState s)
         {
-            EquipmentSlot? kept = Arsenal.GunOnBody(Me);
+            EquipmentSlot? kept = Arsenal.UsableGun(Me, out string keptWhy);
+            if (!s.EquipLogged && (Settings.LogEscape.Value || Settings.LogDecisions.Value))
+            {
+                s.EquipLogged = true;
+                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: away from his captor ({Perception.Flat(Me.Position, s.HeldSet ? s.HeldAt : Me.Position):0} m from where he was held), what he has: {Arsenal.Equipment(Me)}");
+            }
             if (kept != null && Arsenal.Draw(s, BotOwner, false))
             {
-                Rearm(s, $"draws the {Arsenal.SlotName(kept)} he kept");
+                Rearm(s, $"draws the {Arsenal.SlotName(kept)} he kept ({keptWhy})");
+                return;
+            }
+
+            // Under fire: cover first, no fetching.
+            if (FireBreak.Blocks(Me) && s.ThreatAt != Vector3.zero)
+            {
+                Escape.LogRefusal(s, "any gun", "under fire: cover before a gun");
+                TakeCoverFromFire(s, s.ThreatAt, "under fire after getting away: cover before a gun");
                 return;
             }
 
             // 0.17.0: fled from captivity: no going back into that area for a gun until the commitment
             // runs out (no escape, linger, recapture loop). Weapons he carries stay options (above).
-            bool committed = s.HeldSet && Time.time < s.FleeLockUntil;
-            float area = Settings.CaptivityRadius.Value;
+            float lockUntil = Mathf.Max(s.FleeLockUntil, s.HeldSet && s.FleeSince > 0f ? s.FleeSince + Settings.EscapeMemory.Value : 0f);
+            bool committed = s.HeldSet && Time.time < lockUntil;
+            float area = Mathf.Max(Settings.CaptivityRadius.Value, Settings.KeepAwayRadius.Value);
             bool ownInArea = committed && s.DroppedWeapon != null && Perception.Flat(s.DropPosition, s.HeldAt) < area;
-            if (ownInArea && !s.FleeLockLogged && Settings.LogDecisions.Value)
-            {
-                s.FleeLockLogged = true;
-                HandsAreHighPlugin.Log.LogInfo($"{s.Name}: his {s.DroppedWeapon.ShortName.Localized()} lies where he was held: not going back for it for {s.FleeLockUntil - Time.time:0} s");
-            }
             // 0.21.0: two tries at a gun after getting away, then his own AI (no endless fetching).
             bool fetch = s.RecoverTries < 2;
             // What he believes: unless he saw it gone, his gun is where he dropped it.
-            if (fetch && !ownInArea && Settings.RecoverOwnWeapon.Value && s.DroppedWeapon != null && !s.Skip.Contains(s.DroppedWeapon) &&
-                Vector3.Distance(s.DropPosition, s.CaptorLastSeen) > Settings.AvoidRadius.Value &&
-                !s.GunGone &&
-                Perception.Reachable(Me.Position, s.DropPosition))
+            string refuse = null;
+            if (s.DroppedWeapon != null)
+            {
+                if (ownInArea) refuse = $"it lies where he was held (off limits for {lockUntil - Time.time:0} s more)";
+                else if (!fetch) refuse = "tried twice already";
+                else if (!Settings.RecoverOwnWeapon.Value) refuse = "recovering his own gun is off";
+                else if (s.Skip.Contains(s.DroppedWeapon)) refuse = "failed to get it before";
+                else if (s.GunGone) refuse = "he saw it's gone";
+                else if (Vector3.Distance(s.DropPosition, s.CaptorLastSeen) <= Settings.AvoidRadius.Value) refuse = $"{Vector3.Distance(s.DropPosition, s.CaptorLastSeen):0} m from where he last saw his captor";
+                else if (!Perception.PathTo(Me.Position, s.DropPosition, out Vector3[] gunPath, out string noPath)) refuse = $"no route ({noPath})";
+                else if (Perception.RoutePassesNear(gunPath, s.CaptorLastSeen, 8f)) refuse = "the way there passes where he last saw his captor";
+                if (refuse != null) Escape.LogRefusal(s, $"his {s.DroppedWeapon.ShortName.Localized()}", refuse);
+            }
+            if (s.DroppedWeapon != null && refuse == null)
             {
                 s.TargetWeapon = s.DroppedWeapon;
                 s.TargetPoint = s.DropPosition;
@@ -1650,12 +1754,13 @@ namespace HandsAreHigh
                 if (found != null && committed && Perception.Flat(at, s.HeldAt) < area)
                 {
                     // In the area he just fled: not now (looked at again once the commitment ends).
-                    s.NextScavengeScan = s.FleeLockUntil;
+                    Escape.LogRefusal(s, found.ShortName.Localized(), "lies in the area he just fled");
+                    s.NextScavengeScan = lockUntil;
                     found = null;
                 }
                 if (found != null)
                 {
-                    if (Perception.Reachable(Me.Position, at))
+                    if (Perception.PathTo(Me.Position, at, out Vector3[] fp, out string fw) && !Perception.RoutePassesNear(fp, s.CaptorLastSeen, 8f))
                     {
                         s.TargetWeapon = found;
                         s.TargetPoint = at;
@@ -1663,14 +1768,20 @@ namespace HandsAreHigh
                         s.SetPhase(Phase.Recovering, $"going for {found.ShortName.Localized()} {Vector3.Distance(at, Me.Position):0} m away");
                         return;
                     }
+                    Escape.LogRefusal(s, found.ShortName.Localized(), fw != null ? $"no route ({fw})" : "the way there passes where he last saw his captor");
                     s.Skip.Add(found);
                 }
             }
 
-            if (Settings.HighNerveKnife.Value && s.Nerve >= Settings.HighNerve.Value && Arsenal.HasMelee(Me) && Arsenal.Draw(s, BotOwner, true))
+            bool captorGone = !Perception.Alive(s.Captor);
+            if (Settings.HighNerveKnife.Value && s.Nerve >= Settings.HighNerve.Value && Arsenal.HasMelee(Me))
             {
-                Rearm(s, $"no gun to find, comes back with his knife (nerve {s.Nerve:0.00})");
-                return;
+                if (captorGone && Arsenal.Draw(s, BotOwner, true))
+                {
+                    Rearm(s, $"no gun to find, his captor is dead: comes back with his knife (nerve {s.Nerve:0.00})");
+                    return;
+                }
+                if (!captorGone) Escape.LogRefusal(s, "his knife", "a knife against the armed man he fled: keeps getting away");
             }
 
             s.TargetWeapon = null;

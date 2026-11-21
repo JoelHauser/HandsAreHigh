@@ -122,6 +122,8 @@ namespace HandsAreHigh
             Runtime.Menu.Reset();   // nothing bound to the old raid's bots, no key blocked
             FireBreak.Clear();      // 0.21.0: captors' hit hooks, queued fire
             ReleaseWatch.Clear();
+            Escape.Clear();         // 0.24.0
+            WeaponState.Clear();    // 0.24.0
             UnhookAll();
             States.Clear();
             Finished.Clear();
@@ -552,6 +554,7 @@ namespace HandsAreHigh
             // 0.21.0: bots handed back are followed in the log for a while (ReleaseWatch), and
             // queued incoming fire is acted on (FireBreak) before anything reads the phases.
             ReleaseWatch.Tick();
+            Escape.Tick();          // 0.24.0: the capture remembered after a release, keep-away legs
             if (States.Count == 0) { FireBreak.Idle(); return; }
             FireBreak.Tick();
             Finished.Clear();
@@ -658,6 +661,7 @@ namespace HandsAreHigh
                     try { BotOwner o = p.AIData?.BotOwner; if (s.Moving) o?.StopMove(); o?.Sprint(false); } catch { }
                     s.Moving = false;
                     ReleaseWatch.Start(s, p);
+                    Escape.Begin(s, p);     // 0.24.0
                     Release(s, "left surrender");
                 }
                 else
@@ -721,6 +725,7 @@ namespace HandsAreHigh
         {
             HandsAreHighPlugin.Try("release gesture", () => Gestures.Cancel(s, why));
             HandsAreHighPlugin.Try("release turn", () => TurnDriver.StopNow(s));   // 0.17.0: the game's trunk limit back (at once: he is leaving us)
+            HandsAreHighPlugin.Try("release fingers", () => Fingers.Restore(s));   // 0.24.0: only if nothing else writes them
             s.PendingVoice = null;
             s.VerifyAt = -1f;
             s.VerifyClip = null;
@@ -769,6 +774,8 @@ namespace HandsAreHigh
             SurrenderStats.EndRaid();
             FireBreak.Clear();      // 0.21.0: captors' hit hooks off (an old assembly's handler must not stay on a Player)
             ReleaseWatch.Clear();
+            Escape.Clear();         // 0.24.0: keep-away layer inert (BigBrain can't unregister it)
+            WeaponState.Clear();    // 0.24.0: both weapon-state patches step aside (unpatched too)
             UnhookAll();
             Restraint.Clear();
             Captors.Clear();

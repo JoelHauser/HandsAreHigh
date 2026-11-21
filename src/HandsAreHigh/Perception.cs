@@ -200,12 +200,20 @@ namespace HandsAreHigh
         //
         // Candidates (PathCandidates x 1.5, spread +-80 deg around "away from the threat, away from
         // where he was held") are placed beyond `radius` from `heldAt`; each needs a complete path
-        // (its corners are checked: no part of the route within 5 m of the threat), and is scored by
+        // (its corners are checked: no part of the route within 8 m of the threat), and is scored by
         // concealment from the threat, separation from heldAt and the threat, minus route length.
         // None out of the area reachable (a closed room, a cliff): a leg instead, the best hidden spot
         // that gains at least 8 m on heldAt within `radius` of him, so he works his way out through
         // cover. False when not even that exists.
-        internal static bool FleePoint(Player bot, Vector3 threat, Vector3 heldAt, float radius, out Vector3 point, out bool leg, out string why)
+        //
+        // 0.24.0: threatVel, the captor's flat velocity when he SEES him walking (zero otherwise: no
+        // knowledge of what he can't see). His path over "Allow for where the captor is walking"
+        // seconds (at most 20 m) counts as the threat too: a route that crosses it within 6 m is
+        // refused, the spot is scored against where he will be as well as where he is, and a spot
+        // the same way he is walking (within 35 deg of his heading, while he is within 25 m) is
+        // penalised, so the man doesn't leave alongside him. Route stand-off from the threat 5 -> 8 m.
+        // why: on success, how many candidates were refused and for what (the escape log).
+        internal static bool FleePoint(Player bot, Vector3 threat, Vector3 heldAt, float radius, out Vector3 point, out bool leg, out string why, Vector3 threatVel = default)
         {
             point = bot.Position;
             leg = false;
@@ -215,15 +223,31 @@ namespace HandsAreHigh
             Vector3 fromHeld = (me - heldAt); fromHeld.y = 0f;
             if (away.sqrMagnitude < 0.01f) away = -bot.Transform.forward;
             Vector3 dir = away.normalized + (fromHeld.sqrMagnitude > 1f ? fromHeld.normalized * 0.5f : Vector3.zero);
+            threatVel.y = 0f;
+            bool walking = threatVel.sqrMagnitude > 0.5f * 0.5f;
+            Vector3 ahead = threat;
+            if (walking)
+            {
+                Vector3 step = threatVel * Settings.HeadingLookAhead.Value;
+                if (step.magnitude > 20f) step = step.normalized * 20f;
+                ahead = threat + step;
+                // Walking: the search leans away from where he WILL be (weight 1) over where he is
+                // (0.5): with the captor walking through the man's spot, "away from him" points down
+                // his path (escsim: 100% of escapes then came within 6 m of him again).
+                Vector3 fromAhead = me - ahead; fromAhead.y = 0f;
+                dir = away.normalized * 0.5f + (fromHeld.sqrMagnitude > 1f ? fromHeld.normalized * 0.5f : Vector3.zero) +
+                      (fromAhead.sqrMagnitude > 1f ? fromAhead.normalized : Vector3.zero);
+            }
             dir.y = 0f;
             if (dir.sqrMagnitude < 0.01f) dir = away;
             dir.Normalize();
             Vector3 threatEye = threat + Vector3.up * 1.5f;
             float here = Flat(me, heldAt);
+            bool nearHim = Flat(me, threat) < 25f;
             int tries = Mathf.RoundToInt(Settings.PathCandidates.Value * 1.5f);
             float best = float.MinValue, bestLeg = float.MinValue;
             Vector3 legPoint = me;
-            int noMesh = 0, noPath = 0, pastThreat = 0;
+            int noMesh = 0, noPath = 0, pastThreat = 0, crossesHim = 0, sameWay = 0, hiddenN = 0;
             for (int i = 0; i < tries; i++)
             {
                 float angle = Dice.Range(-80f, 80f);
@@ -233,12 +257,20 @@ namespace HandsAreHigh
                 if (!NavMesh.SamplePosition(candidate, out NavMeshHit hit, 6f, NavMesh.AllAreas)) { noMesh++; continue; }
                 Vector3 c = hit.position;
                 if (!PathTo(me, c, out Vector3[] corners, out _)) { noPath++; continue; }
-                if (PassesNear(corners, threat, 5f)) { pastThreat++; continue; }
+                if (PassesNear(corners, threat, 8f)) { pastThreat++; continue; }
+                if (walking && PassesNearSegment(corners, threat, ahead, 6f)) { crossesHim++; continue; }
                 float len = 0f;
                 for (int k = 1; k < corners.Length; k++) len += Vector3.Distance(corners[k - 1], corners[k]);
                 bool hidden = !LineClear(threatEye, c + Vector3.up * 1.2f);
+                if (hidden) hiddenN++;
                 float sep = Flat(c, heldAt);
-                float score = (hidden ? 30f : 0f) + sep + 0.5f * Flat(c, threat) - 0.35f * len;
+                float fromThreat = walking ? Mathf.Min(Flat(c, threat), Flat(c, ahead)) : Flat(c, threat);
+                float score = (hidden ? 30f : 0f) + sep + 0.5f * fromThreat - 0.35f * len;
+                if (walking && nearHim)
+                {
+                    Vector3 go = c - me; go.y = 0f;
+                    if (go.sqrMagnitude > 1f && Vector3.Angle(go, threatVel) < 35f) { score -= 25f; sameWay++; }
+                }
                 if (sep >= radius)
                 {
                     if (score > best) { best = score; point = c; }
@@ -249,11 +281,17 @@ namespace HandsAreHigh
                     if (ls > bestLeg) { bestLeg = ls; legPoint = c; }
                 }
             }
-            if (best > float.MinValue) return true;
-            if (bestLeg > float.MinValue) { point = legPoint; leg = true; return true; }
-            why = $"no way out of {radius:0} m ({tries} tries: {noMesh} off the NavMesh, {noPath} no complete path, {pastThreat} past the threat)";
+            string stats = $"{tries} spots tried: {noMesh} off the NavMesh, {noPath} no complete path, {pastThreat} past the threat" +
+                           (walking ? $", {crossesHim} across his path, {sameWay} his way (penalised); he walks {threatVel.magnitude:0.0} m/s" : "") +
+                           $", {hiddenN} hidden from him";
+            if (best > float.MinValue) { why = stats; return true; }
+            if (bestLeg > float.MinValue) { point = legPoint; leg = true; why = stats; return true; }
+            why = $"no way out of {radius:0} m ({stats})";
             return false;
         }
+
+        // 0.24.0: for a fetch route (SurrenderLogic.Decide): the same stand-off test as an escape.
+        internal static bool RoutePassesNear(Vector3[] corners, Vector3 p, float r) => corners != null && corners.Length > 1 && PassesNear(corners, p, r);
 
         // Does this route come closer to p than he already is (or than r, if he is further)? Leaving
         // from beside his captor is fine; running past him is not.
@@ -270,6 +308,17 @@ namespace HandsAreHigh
                 float t = ab.sqrMagnitude < 1e-4f ? 0f : Mathf.Clamp01(Vector3.Dot(p - a, ab) / ab.sqrMagnitude);
                 if ((a + ab * t - p).sqrMagnitude < limit * limit) return true;
             }
+            return false;
+        }
+
+        // 0.24.0: the same against the captor's path p0 -> p1 (sampled every metre: a few dozen
+        // point tests per candidate at most).
+        private static bool PassesNearSegment(Vector3[] corners, Vector3 p0, Vector3 p1, float r)
+        {
+            float len = Flat(p0, p1);
+            int n = Mathf.Clamp(Mathf.CeilToInt(len), 1, 20);
+            for (int i = 1; i <= n; i++)
+                if (PassesNear(corners, Vector3.Lerp(p0, p1, i / (float)n), r)) return true;
             return false;
         }
 

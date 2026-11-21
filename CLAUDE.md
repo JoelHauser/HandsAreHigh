@@ -6,6 +6,122 @@ leave, and come back armed later. Repo https://github.com/JoelHauser/HandsAreHig
 
 ## Status
 
+**0.24.0 (2026-11-21): open hands, an optional dropped knife, escapes that don't circle back, a
+grenade is not a weapon, self-defence after release, no hostility from timers. From Joel's pasted
+6-part spec, his screenshot (curled fingers) and the 0.23.0 raid log (LogOutput 2026-11-21, 34
+scenario launches). Release packed (dist/HandsAreHigh-0.24.0.zip) and installed in H:\SPT4.1.X
+(0.23.0 DLL backed up in that session's scratchpad, backup-0.23.0). Committed and pushed to main 2026-11-21 (no tag/release). NEVER RUN IN GAME.**
+
+Root causes (evidence: the 0.23.0 log, the 0.16.9 decompile, SAIN 4.5.1 decompile, skeleton.bundle):
+- Curled fingers: nothing of ours ever wrote a finger bone (ArmPose.SetWrist only READS Digit31/
+  Digit11 to lay the palm). Rig (tools/fingersim): Base Human{L,R}Digit{1..5}{1..3}, child along
+  local -X, flexion about local +Z, right = left with x,y negated; the bind pose itself is curled
+  (index ~72 deg over 3 joints). Not verified: whether the animator rewrites fingers every frame
+  (Fingers.cs detects it per surrender and logs it).
+- Captor always fetching the knife: CaptorLoot.IsDemanded counted IsMelee items as "the weapon he
+  made him drop" (always wanted, Demanded risk tolerance, postponed "later"). The Scabbard item is
+  EFT.InventoryLogic.Knife : Item (KnifeComponent), not a Weapon. Log: #29/#30/#32 bent down by the
+  man for a 6Kh5 / a 3,560-rouble MPL-50.
+- Circling back, grenade throws, "shared walk then aggression": BotWeaponManager.ShootController is
+  only cleared in Dispose, so after our drop HaveBullets (= _currentWeaponInfo.Reload.BulletCount,
+  read from ShootController.Item) stayed TRUE for an empty-handed man. SAIN's EnemyDecisionClass
+  tests "!HaveBullets -> Retreat" first; past it: StandAndShoot / Rush / ThrowGrenade / MoveToEngage
+  / Search (squad GroupSearch / Help come even earlier). SAIN's grenade check needs the enemy NOT
+  visible for 3 s, last known 8-75 m, updated within 120 s, every 5-10 s: exactly a man who got
+  away. Log: every released man went to "SAIN : Combat Layer" targeting his ex-captor; #2 walked from
+  54 m back to 25 m and died; #19 had walked 32 m and was 8 m from where he was held; #2, #9, #20
+  took a grenade into their hands seconds after the hand-back (which ended every hold-fire: a
+  grenade in hand counts as a weapon), and the captors opened fire.
+- Walk-off release: Abandonment's "walk off" was HandBack at 0 m from where he was held (#9, #18,
+  #19, #26): his own AI started next to his ex-captor, with the stale gun above.
+- Released men stopped 5-15 m away: LegDone ended a flight once 12 m away and out of sight.
+- Timer as provocation: Restraint.TickDetached dropped every hold-fire decision at once after 30 s
+  (ForgetPrisoner): ignore flag, GoalEnemy and SAIN guards off for every observer, whatever they
+  perceived.
+- Self-defence: under fire in Retreating/Regrouping/Hiding the only answer was cover, even with a
+  loaded gun on him. GunOnBody counted any gun (empty, broken, flare gun) as "a gun to draw".
+
+What changed:
+- Fingers.cs (new): per-joint target = bind swing x flexion table (open: index 5/9/5 .. little
+  11/17/10, thumb 4/6; cupped round the head ~15/25/15; flat on the thigh for the brace hand),
+  blended open<->cupped by HandsPose's own eased s.HeadHands (fingers move with wrists/elbows,
+  reversals included), laid over by s.Weight (fades with the arms), left hand x (1 - GestureArm).
+  Applied last in ArmPosePatch. Animator detection: first posed frame keeps the hand (FingerBase);
+  next frame, unchanged bones = not animated -> blend from base, Fingers.Restore on every registry
+  exit (SurrenderRegistry.Release). Log once: "fingers: the game's animator writes them..." or
+  "fingers: nothing else writes them...". Setting "Open hands" (0 = game's own).
+- WeaponState.cs (new): for bots whose gun we threw (Arsenal.EmptyHands -> Track), with no
+  FirearmController in hand: HaveBullets getter postfix -> false; BotReload.TryReload prefix -> false
+  (no reload on the stale controller; instead, with an enemy and a usable gun in a slot and not held
+  by us: Selector.TryChangeWeapon, <= every 2 s). Logged once per bot. Setting "Disarmed bots know
+  they are unarmed".
+- Arsenal: GearKind (Firearm / Melee / Throwable / Other) from the game's classes; Usable(gun):
+  not a flare gun, durability > 0, rounds in it or Ammo of its calibre in rig/pockets/backpack/secure
+  (cached 4 s); UsableGun(bot, why); Equipment(bot) line; DescribeArmed names grenades but never
+  counts them; Draw prefers a usable gun. GunOnBody unchanged (what must be disarmed).
+- SurrenderLayer: every fight/flee decision uses UsableGun; Decide logs equipment once, refuses
+  recoveries with a logged reason (in the capture area for "Remembers the capture for", route passes
+  the captor (8 m), under fire -> cover first), knife comeback only if the captor is dead; walk-off
+  = a calm Retreating flight (CalmFlight: walk 0.85, any fire ends it); flights end only when clear
+  ("Escape ends this far from the threat" 40 m from where held, 3/4 of it from the threat, unseen) or
+  hidden and well away, up to 4 legs; replan when the captor he SEES is heading near his spot or the
+  same way; DefendSelf: under fire with a usable gun and free hands, fight back vs cover (logged),
+  draw faces the shooter (FaceThreat).
+- Perception.FleePoint: optional threat velocity (only when seen): route refused within 8 m of the
+  threat (was 5) or 6 m of the captor's path over the look-ahead, spot scored against where he will
+  be, same-heading spots penalised, the search leans away from where he will be; rejection counts in
+  the log line.
+- Escape.cs (new): after every hand-back, a memory (capture spot, threat where last SEEN) for
+  "Remembers the capture for" (150 s); unarmed + not under fire + within "Keep away radius" (25 m)
+  and closing >= 3 m in 3 s -> KeepAwayLayer (priority CaptorPriority + 2 = 72: above SAIN combat and
+  ORBIT, below SAIN avoid-threat 80) runs one leg away (FleePoint, <= 20 s, ends at once under fire or
+  with a gun in hand), at most "Keep away legs" (3). Armed: logged, not prevented. Cleared on raid
+  change / teardown (layer inert after hot reload).
+- Restraint after the hand-back: a weapon in his hands -> "RENEWED HOSTILITY: ... takes a <gun/knife/
+  grenade> ... (his AI: layer, target)"; at the 30 s expiry each observer separately: sees him -> ONE
+  explicit decision per release (FleeingRespect x mercy) logged as "lets him go again" or "RENEWED
+  HOSTILITY ... decides to engage"; doesn't see him -> the hold stays; at the memory's end all holds
+  drop, and an unseen man's stale vanilla target is cleared. ForceAttack (scenarios).
+- CaptorLoot: melee items not Demanded; MeleeWant (base "Captors pick up a dropped knife" 0.3 x greed
+  x use (none of his own 1.4 / has one 0.35) x value 0.6-1.5 by 40k x 1.15 within the man's reach),
+  risk tolerance LootRisk x 0.8, never "later"/"after release": leaving is final.
+- ReleaseWatch: followed for max(watch, memory), lines at +15/30/60/90/120 s with furthest distance;
+  "CIRCLED BACK" when back within the keep-away radius after being 15 m further out.
+- Settings section 26 "Release and escape" (10 keys). Scenarios: "Open hands", "Dropped knife:
+  captor's choice", "Release and escape" (keeps nothing / gun removed / loaded sidearm / empty
+  sidearm / grenades only; walk away / Leave / his own), "Captor attacks after release" (while still
+  ours / 5 s after the hand-back). Kit presets "Grenades only", captor "No knife".
+
+Tests done (offline): Debug + Release builds 0 warnings; pack.ps1 name check; Settings.Bind on a copy
+of Joel's cfg through the installed DLL, twice: 442 -> 452 entries, exactly the 10 new keys, no value
+changed, second load stable. tools/fingersim (skeleton.bundle): open/cupped shapes, no joint bent back,
+tips palm-side, neighbour tips 3.4-4.3 cm (bind 3.2-3.7), open<->cupped monotonic: PASS.
+tools/escsim (FleePoint rules, 300 seeded runs x 4 cases): captor walking the escape line: walking off
+alongside him 70% -> 0%, within 6 m after 4 s 100% -> 0%; walking across 30% -> 0%; standing / walking
+away unchanged: PASS. tools/releasesim: 0.24.0 graph bounded (worst 241 s + <= 3 x 20 s keep-away legs).
+firesim 12/12. NOT done: anything in a raid. Not verified in game: whether the animator writes the
+finger bones (the log says), the finger look under gloves and helmets, that SAIN retreats (not
+searches) once HaveBullets reads false, KeepAway vs ORBIT objectives, the knife comeback rule.
+
+### In-game test plan (0.24.0)
+Log decisions, Log loot, Log escapes, Log restraint, Log encounter endings on.
+1. "Open hands" (Scav and PMC, standing and kneeling, Interrupt reverse, Turn): fingers open with hands
+   up, curved round the head on it, never a grip during a switch or reversal, no snap; note which
+   "fingers: ..." line appears; after the Leave the fingers loosen to the game's own.
+2. "Dropped knife: captor's choice", knife as generated and removed, own roll x5: mostly
+   "<knife>: leave (melee weapon (Knife, KnifeComponent ...) ... leaves it)" when he has his own,
+   more takes when he has none; a left knife never brings him back, "done with ..." follows.
+3. "Release and escape", each "He keeps", ending Walks away: "walks off to a spot ... (N spots tried
+   ...)", "retreat ends (..., clear)", the equipment line, then draw (loaded) or refusals + hand-back;
+   once "'has bullets' reads false"; +15..+120 s lines: furthest grows, never CIRCLED BACK, layer not
+   chasing his captor; Grenades only: no "takes a grenade in his hands"; any "keeps away, leg ..."
+   line names what pulled him back.
+4. "Captor attacks after release", both timings x both kits: "RENEWED HOSTILITY ... DECIDES TO
+   ATTACK", then fight back (sidearm) or cover; after the hand-back his AI reacts; no busy hands.
+5. Natural raid: release a few prisoners yourself and watch them for 2 minutes.
+
+### 0.23.0
+
 **0.23.0 (2026-11-21): encounters end on their own; prisoners notice being left; one voice per
 encounter and no silent squad kills; kneeling turns without twisted feet; captors demand gear they
 lack; pick-ups from a spot beside the item. From Joel's pasted 7-part spec and the 0.22.0 raid log
