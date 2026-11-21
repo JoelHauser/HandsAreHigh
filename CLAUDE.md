@@ -33,7 +33,7 @@ dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.
 
 - csproj default `SPTPath` is `C:\HUH` (work laptop): pass it. 0 warnings is required.
 - Version lives twice: csproj `<Version>` and `HandsAreHighPlugin.PluginVersion` (pack.ps1 refuses a
-  mismatch). Zip = `BepInEx/plugins/HandsAreHigh.dll` only: no README, no BigBrain, nothing else.
+  mismatch). Bump both without adding a BOM (PowerShell `Set-Content -Encoding utf8` adds one). Zip = `BepInEx/plugins/HandsAreHigh.dll` only: no README, no BigBrain, nothing else.
 - Before `-Install`: the game must not be running (`Get-Process EscapeFromTarkov`); back up the
   installed DLL and Joel's cfg to the scratchpad; hash-compare after.
 - Config changes: run `tools/cfgbind/bind.ps1` on a COPY of Joel's cfg (details in build-and-checks.md).
@@ -52,7 +52,9 @@ dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.
   (WeaponState); `IdlePlayerState.Pickup` ignores its flag (exit only via `LeavePickupState`);
   a Knife is not a Weapon and grenades are never "armed"; the AI root snaps at TrunkRotationLimit 45;
   doors need `DoorOpener.UpdateDoorInteractionStatus` every moving frame; skip the body pose when
-  `_bodyupdated` is false; the game may dispatch input before our Update runs.
+  `_bodyupdated` is false; the game may dispatch input before our Update runs; a trigger press
+  starts a whole burst (hold-fire needs the per-round burst guard in `Suppression.ShotPatch`, not
+  only `TriggerPatch`), and bots' scatter is wider than their look line (`Perception.OnLine` box).
 
 **Hands and inventory**
 - One hands request at a time per bot (token, stale callbacks ignored, abandon only after its
@@ -87,7 +89,12 @@ dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.
   (`SurrenderRegistry.Any`, `Restraint.Any`, ...). No LINQ, closures, boxing, string building or
   `FindObjectsOfType` on per-frame paths; NonAlloc physics; heavy path/spot searches through
   `Perception.TakeHeavy`; logs only on events (never per frame), detail lines behind Log/Verbose
-  switches. No Profile run exists yet: don't claim measured costs.
+  switches. Measured (Profile, 0.28.x raids): ~0.05-0.15% of frame time; heap flat. The ~80-95 ms
+  frame every ~10 s is one game GC (present with the mod idle): not ours. Our big single frames are
+  event-driven (raid-start prewarm ~20 ms; a surrender with custody): split them across frames (the
+  captor decision runs a frame after the surrender, `Captors.TickDue`) rather than adding budgets.
+  Profiler detail sections (`Perf.Sec` Kit/Start/Decide) are timed inside others and never summed;
+  spike lines say when a GC ran in that frame. Claim a cost as measured only from a Profile line.
 
 **Config**
 - BepInEx section/key names must not contain `= \ " ' [ ]` (a throw in Awake kills the plugin
@@ -103,6 +110,10 @@ dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.
   first, then the sidearm, a knife only with no gun. Debug keys off by default; Joel has no numpad
   (menu `/` `.` `=`, digits, F). Scenario-only scopes stay scenario-only (e.g. the spawn magazine-check
   suppression). Never delete files from an SPT install unless Joel names the file.
+- Keep-away (`Escape`) avoids the EX-CAPTOR where the man last saw him; the capture spot counts only
+  while the ex-captor is near it (SAIN taking a freed man back to his squad is natural, 2026-11-21).
+- A bot that never registered a surrender may shoot the man (no decision = no protection); a refused
+  surrender may end in a kill logged as a decision. Joel's cfg has Verbose logs on (debug noise).
 
 ## Architecture in one screen
 
@@ -130,6 +141,11 @@ dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.
 - Don't load generated output (`bin/`, `obj/`, `dist/`, `__pycache__`), binaries, whole decompiles or
   unrelated history.
 - Keep related fixes together; no unrelated cleanup or refactors; no behaviour change in a docs task.
+- Live raid watching (Joel asks "watch the logs"): `tail -n 0 -F` the log into `grep -a -E
+  --line-buffered` and `awk '{...; fflush()}'` (never `cut`/`head`: they buffer; `-a`: a new log file
+  can start with a binary byte). Filter to surrenders, phase arrows, decisions, warnings, spikes; skip
+  "no surrender check", "fire +" and repeated "held back at trigger" lines. Changes made mid-raid are
+  built only: install once the game has closed (wait for the process to exit).
 - Validate in proportion: Debug build while editing, the tool for the subsystem you changed, cfg bind
   when settings changed, pack when shipping. Don't rerun passing checks without new changes.
 - Status words are exact: implemented / build passed / simulation passed / verified in raid. Never
