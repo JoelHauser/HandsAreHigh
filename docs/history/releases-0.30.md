@@ -103,3 +103,10 @@ pick-ups) and the COMET read:
 - Released men fetch guns (Escape fetch legs, KeepAway layer): see Escape.cs header. Joel's rules: only
   when his ex-captor can see neither him nor the gun; reach decided by the bot (nerve + personality, 6-40 m).
 - COMET: SainTargetFilter.Postfix drops a protected result (engine/integrations.md, COMET section).
+
+### First raid on 0.30.2 (2026-11-21; verified in raid, log level)
+
+6 natural surrenders, 0 Mercy warnings/errors; all drops answered on the first request (0.58-0.88 s;
+one gun mid-draw, DescribeHands "SpawnOperation"); no "no answer" line. A lone boss (Tagilla) checked 45
+times: "no squad seen this raid (alone from the start), never gives up", also at stress 0.80. The released-
+man gun fetch never triggered (every bot recovered his own gun first): still unrun.
