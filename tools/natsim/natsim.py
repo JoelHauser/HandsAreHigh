@@ -1,4 +1,4 @@
-"""tools/natsim (0.19.0): Monte Carlo of Hands Are High's natural-surrender model (NaturalSurrender.Evaluate) against a
+"""tools/natsim (0.19.0): Monte Carlo of Mercy's natural-surrender model (NaturalSurrender.Evaluate) against a
 crude model of an ordinary firefight with the player. Compares the 0.18.0 defaults with the 0.19.0
 proposal. Not a game simulation: it answers "given the formula and its timing, how often can a bot
 that is being fought ever give up before he dies or the fight ends?"

@@ -5,7 +5,7 @@ Provenance: release notes 0.2.0-0.25.0 (now `docs/history/`), re-checked against
 
 ## Layers and who drives a bot
 
-- Our layers (BigBrain `CustomLayer`, registered in `HandsAreHighPlugin.Awake`): Surrender
+- Our layers (BigBrain `CustomLayer`, registered in `MercyPlugin.Awake`): Surrender
   (`Settings.LayerPriority`, default 95), Captor (`CaptorPriority`, 70), KeepAway (Captor+2 = 72,
   clamped below Surrender), Staging (Surrender+3, scenario bots only). Brains: Assault, CursAssault,
   PMC, PmcBear, PmcUsec; boss/follower brains only when "Bosses and followers can surrender" is on at
@@ -137,3 +137,23 @@ Provenance: release notes 0.2.0-0.25.0 (now `docs/history/`), re-checked against
   .EnemyInfos`, `BotsGroup.MembersCount/Member(i)`, `WeaponManager.HaveBullets`, `Reload.CanReload(false)`,
   `HealthController.GetBodyPartHealth(Common)`; experience `Profile.Info.Level` and
   `BotOwner.Settings._difficulty` (BotDifficulty; Scavs: difficulty only since 0.19.0). [compiled]
+
+## Roles, squads and deaths (0.29.0, Assembly-CSharp 0.16.9)
+
+- `WildSpawnTypeExtension._spawnTypeSettings` marks `pmcBot` (Raiders), `exUsec`, `arenaFighter`,
+  `pmcBEAR/USEC`, `shooterBTR` isBoss AND isFollower, so `IsBossOrFollower()` is true for Raiders: any
+  "boss" filter built on it swallows them. `IsPureBoss()` = isBoss && !isFollower && !sectant (real
+  bosses, plus `bossBoarSniper` whose ScavRoleKey is "ScavRole/Follower", `gifter`, `infectedTagilla`,
+  `bossTest`). Knight's BigPipe/BirdEye and followerZryachiy are isBoss+isFollower (not pure). [code;
+  every value printed by tools/bosstest]
+- Brains: `pmcBot` (and arenaFighterEvent) -> `PmcLayersStrategy`, ShortName "PMC" (in our always-on
+  `Brains` list); `exUsec` -> "ExUsec" (no layer of ours). `StandartBotBrain` switch. [code]
+- `BotsGroup.RemoveAlly` is called from `BotsList.Remove`, on death AND despawn; `MembersCount` can't
+  tell them apart. `BotOwner.Boss` (BotBoss) `.Followers` lists followers; `OnBossDead` exists. [code]
+- `EnemyInfo.HaveSeenPersonal` is set on any sighting (SetVisible, any visible type); `PersonalLastPos`
+  only on `EEnemyPartVisibleType.Visible`, so it can be Vector3.zero while HaveSeenPersonal is true.
+  `EnemyLastPosition` = group's last position (BotsGroup.LoseVision / SetEnemyPos). [code; log 0.29.0:
+  'believes him 450 m' on Labs]
+- `Player.OnDead` invokes `OnPlayerDead`, static `Player.OnPlayerDeadStatic(Player, IPlayer, DamageInfo,
+  EBodyPart)`, then `OnPlayerDeadOrUnspawn`; the dispose/unspawn path invokes only
+  `OnPlayerDeadOrUnspawn`. So `OnPlayerDeadStatic` = died, never "left". Used by `BossSquad`. [code]

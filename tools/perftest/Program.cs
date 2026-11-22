@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 
-namespace HandsAreHigh
+namespace Mercy
 {
     // Shapes copied from SAIN 4.5.1 (decompiled): what SainAdapter / SainTargetFilter read.
     internal sealed class Owner { public string Name = "bot"; }

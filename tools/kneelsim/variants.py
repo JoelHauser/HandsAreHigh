@@ -1,4 +1,4 @@
-# 0.25.0: kneel variants (src/HandsAreHigh/KneelVariant.cs + Kneel.ApplyBody / SolveLeg end pose).
+# 0.25.0: kneel variants (src/Mercy/KneelVariant.cs + Kneel.ApplyBody / SolveLeg end pose).
 # Side view (forward x, up y), one leg, rig sizes from the log ("Kneel rig: thigh 0.456 m, shin
 # 0.460 m, foot 0.155 m"), defaults KneeHeight 0.09, thigh angle 8 (+-2 per-bot), hips forward 0,
 # ToeHeight 0.025, ToeTuck 15 deg. Checks per variant, on flat ground and on the knee/foot steps

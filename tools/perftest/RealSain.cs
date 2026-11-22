@@ -3,7 +3,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.Serialization;
 
-namespace HandsAreHigh
+namespace Mercy
 {
     // `dotnet run -c Release -- sain <SPT root>`: the same members SainAdapter and SainTargetFilter
     // resolve, from the installed SAIN.dll, through FastGetter. Real types are loaded (the game's

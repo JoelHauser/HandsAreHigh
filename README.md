@@ -1,4 +1,4 @@
-# Hands Are High
+# Mercy
 
 An SPT 4.1 mod that lets bots give up. A Scav or PMC who is losing badly can drop the weapon in his hands and put them up, and from then on he is a person in a bad spot, not a statue: he watches you, follows orders (or most of them), and takes his chance the moment you give him one.
 
@@ -25,7 +25,7 @@ It works both ways: bots take prisoners too, from you and from each other.
 
 ## Install
 
-Extract the zip into your SPT folder, so that `HandsAreHigh.dll` ends up in `BepInEx/plugins`. Client only, no server part.
+Extract the zip into your SPT folder, so that `Mercy.dll` ends up in `BepInEx/plugins`. Client only, no server part.
 
 ## Controls
 
@@ -36,7 +36,7 @@ Extract the zip into your SPT folder, so that `HandsAreHigh.dll` ends up in `Bep
 | `1`-`9` | Give that numbered order while the menu is open; `0` closes it. Your hotbar ignores these keys meanwhile |
 | Mouse wheel, `.` / `=` | Move the highlight |
 
-Keys can be rebound in F12 > Hands Are High > 5. Commands and dialogue.
+Keys can be rebound in F12 > Mercy > 5. Commands and dialogue.
 
 ## Compatibility
 

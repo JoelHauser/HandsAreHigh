@@ -1,15 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Offline checks for the 0.20.1 performance pass (no game needed): the compiled readers in
-       src/HandsAreHigh/FastAccess.cs against reflection, on member shapes copied from SAIN 4.5.1.
+       src/Mercy/FastAccess.cs against reflection, on member shapes copied from SAIN 4.5.1.
        Run: dotnet run -c Release (from this folder). Exit code 0 = all pass. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <RootNamespace>HandsAreHigh</RootNamespace>
+    <RootNamespace>Mercy</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="..\..\src\HandsAreHigh\FastAccess.cs" Link="FastAccess.cs" />
+    <Compile Include="..\..\src\Mercy\FastAccess.cs" Link="FastAccess.cs" />
   </ItemGroup>
 </Project>

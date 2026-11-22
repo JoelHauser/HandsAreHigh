@@ -21,7 +21,7 @@
       Do one raid before posting.
 -->
 
-> **Hands Are High lets bots give up.** A Scav or PMC who is losing badly can drop the weapon in his hands and put them up, and from then on he is a person in a bad spot, not a statue. He watches you, does what he is told (or most of it), and takes his chance the moment you give him one.
+> **Mercy lets bots give up.** A Scav or PMC who is losing badly can drop the weapon in his hands and put them up, and from then on he is a person in a bad spot, not a statue. He watches you, does what he is told (or most of it), and takes his chance the moment you give him one.
 >
 > It works both ways: bots take prisoners too, from you and from each other.
 
@@ -75,7 +75,7 @@ The hold-fire applies to that one man only. Every other enemy is fought as norma
 - SPT 4.1.x
 - [BigBrain](https://github.com/DrakiaXYZ/SPT-BigBrain/releases) 1.5.0 or newer
 
-Unzip into your SPT folder, so that `HandsAreHigh.dll` lands in `BepInEx\plugins`. Client only, no server part.
+Unzip into your SPT folder, so that `Mercy.dll` lands in `BepInEx\plugins`. Client only, no server part.
 
 ### Controls
 
@@ -90,7 +90,7 @@ Every key can be rebound in F12 under **5. Commands and dialogue**.
 
 ### Settings
 
-In the F12 menu, under **Hands Are High**, in seven sections:
+In the F12 menu, under **Mercy**, in seven sections:
 
 1. **General** switches the main parts on and off: natural surrenders, PMCs, bots taking prisoners, the order menu, bosses (off by default), and the SAIN and ORBIT options.
 2. **Surrender** controls how readily bots give up.
@@ -120,4 +120,4 @@ The common settings are shown first. Tick **Advanced settings** to see the fine 
 
 ### Uninstall
 
-Delete `BepInEx\plugins\HandsAreHigh.dll`. To remove its settings too, delete `BepInEx\config\com.joelhauser.handsarehigh.cfg`.
+Delete `BepInEx\plugins\Mercy.dll`. To remove its settings too, delete `BepInEx\config\com.mybutthasarash.mercy.cfg`.

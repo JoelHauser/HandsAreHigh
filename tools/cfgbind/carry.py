@@ -5,7 +5,7 @@
 import re, sys, os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-LAYOUT = os.path.join(ROOT, 'src', 'HandsAreHigh', 'Settings.Layout.cs')
+LAYOUT = os.path.join(ROOT, 'src', 'Mercy', 'Settings.Layout.cs')
 
 
 def read(path):

@@ -1,4 +1,4 @@
-# Code map (src/HandsAreHigh, 0.28.6)
+# Code map (src/Mercy, 0.28.6)
 
 Files and the symbols to search for first. Verified against the tree on 2026-11-21; prefer
 `grep -n "SymbolName"` over line numbers. Many files open with a header comment that explains the
@@ -24,7 +24,7 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 ## By subsystem
 
 **Core state and lifecycle**
-- `HandsAreHighPlugin.cs`: Awake: Settings.Bind, layer registration (Brains / BossBrains lists,
+- `MercyPlugin.cs`: Awake: Settings.Bind, layer registration (Brains / BossBrains lists,
   priorities), Harmony PatchAll, `HotReloadTeardown` list (every static cache/registry must be added
   here), `PrepareMethods` JIT warm-up. `PluginVersion` (must equal csproj `<Version>`).
 - `HotReloadTeardown.cs`: ordered teardown + owned components; `Runtime.cs` (`Runtime`, `RuntimeGui`):
@@ -41,7 +41,9 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 - `Dice.cs` (seedable rolls), `Perf.cs` (profiler sections; detail sections Kit/Start/Decide are not summed), `FastAccess.cs` (compiled SAIN readers).
 
 **Natural surrender and decisions**
-- `NaturalSurrender.cs` (`Tick`, `Eligible`, `Injury`, `Experience`, `ClassOf`; header has the model),
+- `NaturalSurrender.cs` (`Tick`, `Eligible`, `Injury`, `Experience`, `ClassOf`/`ClassOfRole` (Raider
+  class 0.29.0), `LoneBossGate`/`LoneBossStress`/`LoneBossChanceFor`; header has the model),
+  `BossSquad.cs` (0.29.0: boss guard roster + confirmed deaths via `Player.OnPlayerDeadStatic`; tools/bosstest),
   `Suppression.cs` (`ShotPatch` near misses, `UnderFirePatch`, decay), `SurrenderStats.cs` (raid
   summaries by source), `StopDemand.cs` (`SayPatch`), `Targeting.cs`.
 - Prisoner decisions in `SurrenderLayer.cs`: `HandsUp`, `DecideOnOpening`, `TakeOpening`,
@@ -126,7 +128,7 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 | Hands, fingers, head, torso pose | engine/animation-and-pose.md | ArmPose, HandsPose, Fingers, Kneel.ApplyHands, Presence | ArmPosePatch order; tools/armsim, fingersim, headsim; Fingers.Restore on exit |
 | Kneel / rise / variants | engine/animation-and-pose.md, engine/ai-and-movement.md (rotation) | Kneel.cs, KneelVariant.cs | HandsPose windows, Facing/TurnDriver, SurrenderLogic.KeepLookOnBody/SteerTo, tools/kneelsim |
 | Turning / facing | engine/ai-and-movement.md (rotation) | Facing, TurnDriver | Presence.Smooth look lead, Kneel.PreTurn, TurnDriver.StopNow on exit |
-| Natural surrender odds | engine/ai-and-movement.md (identity, suppression) | NaturalSurrender, Suppression | SurrenderStats gates, tools/natsim, cfg migration |
+| Natural surrender odds | engine/ai-and-movement.md (identity, suppression, roles) | NaturalSurrender, Suppression, BossSquad | SurrenderStats gates, tools/natsim, tools/bosstest, cfg migration |
 | Prisoner openings / decisions | (code headers) | SurrenderLayer HandsUp..TakeOpening, Decisions | Presence demeanor, Compliance, Kneel posture factor |
 | Release, escape, recovery, hand-off | engine/ai-and-movement.md, engine/inventory-and-hands.md | SurrenderLayer flight/Decide/HandBack, Perception.FleePoint, Escape, ReleaseWatch | Registry hand-back conditions, Restraint.Detach (hostility after release), WeaponState, KeepAway priority, SAIN layer release, mover StopMove ownership, tools/releasesim, escsim, abandonsim |
 | Captor behaviour, endings | engine/ai-and-movement.md | Captors, Encounter, Judgement | Restraint squad rules, Overwatch, CaptorLoot, Orders, ORBIT KeepAwake |
@@ -139,4 +141,4 @@ Pose: ArmPosePatch (postfix Player.VisualPass) -> Kneel.ApplyBody, Presence.Appl
 | Settings / config | testing/build-and-checks.md (config check) | Settings*.cs | Migrate, pack.ps1 name check, Joel's cfg values |
 | SAIN / ORBIT / other mods | engine/integrations.md | SainAdapter, SainTargetFilter, FastAccess, Compat | teardown, version of the installed mod |
 | Performance | (this file: Perf) | Perf.cs, any IsActive / per-frame path | CLAUDE.md "Performance" (measured 0.28.x; GC frames are not ours) |
-| Lifecycle / hot reload | engine/integrations.md (BigBrain) | HotReloadTeardown, HandsAreHighPlugin.Awake, *.Clear/Reset | every new static cache, patch, event hook or layer |
+| Lifecycle / hot reload | engine/integrations.md (BigBrain) | HotReloadTeardown, MercyPlugin.Awake, *.Clear/Reset | every new static cache, patch, event hook or layer |

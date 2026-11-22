@@ -17,8 +17,8 @@ LootingBotsAdapter, Teammates), `HeadFreeLook.cs`, `WeaponState.cs`.
 
 - Custom layers cannot be unregistered; attach at brain activation. Hot reload: empty the
   registries so old layers go inert (see `HotReloadTeardown`). `CustomLayerWrapper.Name()` =
-  `GetName()`; `BrainManager.GetActiveLayerName(BotOwner)` reports our layers ("HandsAreHigh_Surrender",
-  "HandsAreHigh_Captor", "HandsAreHigh_KeepAway"). [code + log]
+  `GetName()`; `BrainManager.GetActiveLayerName(BotOwner)` reports our layers ("Mercy_Surrender",
+  "Mercy_Captor", "Mercy_KeepAway"). [code + log]
 
 ## SAIN 4.5.1 (SPT 4.1.3, EFT 40743; source = installed build)
 

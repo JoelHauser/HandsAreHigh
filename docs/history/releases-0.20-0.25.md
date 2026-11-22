@@ -13,7 +13,7 @@
 in ~2 s, a hand-off to their own AI mid-stride with a logged timeline, F opens and confirms the
 order menu (debug: bot-held men too), three kneel variants. From Joel's pasted 4-part spec + a 5th
 point (kneel variants), his screenshot (stacked fingers behind the head) and the 0.24.0 raid log
-(LogOutput 2026-11-21 02:47, 8 scenarios). Release packed (dist/HandsAreHigh-0.25.0.zip) and
+(LogOutput 2026-11-21 02:47, 8 scenarios). Release packed (dist/Mercy-0.25.0.zip) and
 installed in H:\SPT4.1.X (0.24.0 DLL + cfg backed up in that session's scratchpad, backup-0.24.0).
 UNCOMMITTED. NEVER RUN IN GAME.**
 
@@ -112,7 +112,7 @@ Log decisions, Log kneel, Log escapes, Log encounter endings on; debug keys on.
 **0.24.0 (2026-11-21): open hands, an optional dropped knife, escapes that don't circle back, a
 grenade is not a weapon, self-defence after release, no hostility from timers. From Joel's pasted
 6-part spec, his screenshot (curled fingers) and the 0.23.0 raid log (LogOutput 2026-11-21, 34
-scenario launches). Release packed (dist/HandsAreHigh-0.24.0.zip) and installed in H:\SPT4.1.X
+scenario launches). Release packed (dist/Mercy-0.24.0.zip) and installed in H:\SPT4.1.X
 (0.23.0 DLL backed up in that session's scratchpad, backup-0.23.0). Committed and pushed to main 2026-11-21 (no tag/release). NEVER RUN IN GAME.**
 
 Root causes (evidence: the 0.23.0 log, the 0.16.9 decompile, SAIN 4.5.1 decompile, skeleton.bundle):
@@ -228,7 +228,7 @@ Log decisions, Log loot, Log escapes, Log restraint, Log encounter endings on.
 **0.23.0 (2026-11-21): encounters end on their own; prisoners notice being left; one voice per
 encounter and no silent squad kills; kneeling turns without twisted feet; captors demand gear they
 lack; pick-ups from a spot beside the item. From Joel's pasted 7-part spec and the 0.22.0 raid log
-(LogOutput 2026-11-21 04:58, 5 scenarios). Release packed (dist/HandsAreHigh-0.23.0.zip) and
+(LogOutput 2026-11-21 04:58, 5 scenarios). Release packed (dist/Mercy-0.23.0.zip) and
 installed in H:\SPT4.1.X (0.22.0 DLL backed up in that session's scratchpad, backup-0.22.0). Committed and pushed to main 2026-11-21 (no tag/release). NEVER RUN IN GAME.**
 
 Root causes (evidence: the 04:58 log, code, the 0.16.9 decompile in an earlier scratchpad):
@@ -341,7 +341,7 @@ Log decisions, Log loot, Log encounter endings, Log restraint, Log voice on (Ver
 **0.22.0 (2026-11-20): turns without shoulder lag, captors answer the real shooter (not the
 prisoner), a clearer hands-up pose, seamless hands-up <-> hands-behind-head. From Joel's pasted
 3-part spec + a 4th part (transitions) and the 0.21.0 raid log (LogOutput 22:49) and screenshot.
-Release packed (dist/HandsAreHigh-0.22.0.zip, DLL only) and installed in H:\SPT4.1.X (0.21.0 DLL
+Release packed (dist/Mercy-0.22.0.zip, DLL only) and installed in H:\SPT4.1.X (0.21.0 DLL
 backed up in that session's scratchpad, backup-0.21.0). Committed and pushed to main 2026-11-21 (no
 tag/release). NEVER RUN IN GAME.**
 
@@ -434,7 +434,7 @@ Log decisions, Log incoming fire, Log attention on.
 
 **0.21.0 (2026-11-20): incoming fire breaks a hold-up; released bots go back to their own AI; door
 and wall fixes on our paths; trigger guards fixed (the "friendly" scenarios); kneel look clamp.
-From Joel's pasted 7-part spec. Release packed (dist/HandsAreHigh-0.21.0.zip, DLL only) and
+From Joel's pasted 7-part spec. Release packed (dist/Mercy-0.21.0.zip, DLL only) and
 installed in H:\SPT4.1.X (0.20.1 DLL backed up in that session's scratchpad, backup-0.20.1).
 Committed and pushed to main (no tag/release). NEVER RUN IN GAME.**
 
@@ -540,7 +540,7 @@ Log decisions, Log incoming fire on. Scenario "Incoming fire breaks the hold-up"
    Shot / Registry sections.
 
 **0.20.1 (2026-11-20): performance pass (from Joel's pasted 9-part performance spec). No gameplay,
-balance or config change. Release packed (dist/HandsAreHigh-0.20.1.zip, DLL only) and installed in H:\SPT4.1.X
+balance or config change. Release packed (dist/Mercy-0.20.1.zip, DLL only) and installed in H:\SPT4.1.X
 (0.20.0 DLL backed up in that session's scratchpad, backup-0.20.0). Committed and pushed to main
 (no tag/release). NEVER PROFILED IN GAME: no Profile run exists for any version, so every cost below is by inspection, not measurement.**
 
@@ -605,7 +605,7 @@ Diagnosis from the log + SAIN 4.5.1 decompile; no code change made:
   before anything is changed.
 
 **0.20.0 (2026-11-20): coordinated squad cover during captivity (Overwatch.cs, from Joel's pasted
-6-part spec). Release packed (dist/HandsAreHigh-0.20.0.zip) and installed in H:\SPT4.1.X (0.19.0 DLL
+6-part spec). Release packed (dist/Mercy-0.20.0.zip) and installed in H:\SPT4.1.X (0.19.0 DLL
 backed up in that session's scratchpad, backup-0.19.0). Committed and pushed to main (no tag/release). NEVER RUN IN GAME: a role line
 in the log is not proof the guard protects anyone; only the in-raid checks below are.**
 

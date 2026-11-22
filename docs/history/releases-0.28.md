@@ -531,7 +531,7 @@ searches go through `Perception.TakeHeavy`; statics are cleared on raid change a
 - README: the opening draws in Joel's order (slung gun, sidearm, knife only without a gun); keys
   live in section 5.
 
-Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.1.zip`; installed in H:/SPT4.1.X (hash-verified);
+Build passed (Debug + Release, 0 warnings); packed `dist/Mercy-0.28.1.zip`; installed in H:/SPT4.1.X (hash-verified);
 not run in game.
 
 ## 0.28.2 (2026-11-21): from the first 0.28.1 raid with Profile on (LogOutput 10:40)
@@ -559,7 +559,7 @@ Some spikes include sections that normally cost ~1 us (Menu 2 ms), i.e. a GC lan
   (Arsenal.AssessKit) and Start (SurrenderRegistry.Surrender), shown but not added to totals, to
   find out what the surrender frame costs before changing it.
 
-Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.2.zip`; installed in H:/SPT4.1.X (hash-verified).
+Build passed (Debug + Release, 0 warnings); packed `dist/Mercy-0.28.2.zip`; installed in H:/SPT4.1.X (hash-verified).
 
 ## 0.28.3 (2026-11-21): from the live 0.28.2 raid (LogOutput 11:00, 7 natural surrenders, 0 mod warnings)
 
@@ -598,7 +598,7 @@ Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.2.zip
   leg's flight then avoids the ex-captor only. SAIN taking an unarmed man back to his squad at the
   capture spot, with the captor gone, is left to SAIN.
 
-Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.3.zip`; installed in
+Build passed (Debug + Release, 0 warnings); packed `dist/Mercy-0.28.3.zip`; installed in
 H:/SPT4.1.X (hash-verified; 0.28.2 DLL + cfg in that session scratchpad `backup-0.28.2`); not run.
 
 ## 0.28.4 (2026-11-21): from the live 0.28.3 raid (9 natural surrenders, 2 to bot custody)
@@ -628,7 +628,7 @@ H:/SPT4.1.X (hash-verified; 0.28.2 DLL + cfg in that session scratchpad `backup-
 - Not changed (offered to Joel): bots surrendering mid close-range firefight often die before the
   shooter notices (Тимофей, Саша); a "lull" rule would trade fewer surrenders for more survivors.
 
-Build passed (Debug + Release, 0 warnings); tools/firesim 13/13; packed `dist/HandsAreHigh-0.28.4.zip`
+Build passed (Debug + Release, 0 warnings); tools/firesim 13/13; packed `dist/Mercy-0.28.4.zip`
 and installed in H:/SPT4.1.X (hash-verified; 0.28.3 DLL + cfg in that session scratchpad
 `backup-0.28.3`); not run in game.
 
@@ -645,7 +645,7 @@ and installed in H:/SPT4.1.X (hash-verified; 0.28.3 DLL + cfg in that session sc
   crossfire, resolved by FireBreak (no change made). No opening hide occurred: the hide-time fix is
   still unseen in raid.
 
-Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.5.zip` and installed in
+Build passed (Debug + Release, 0 warnings); packed `dist/Mercy-0.28.5.zip` and installed in
 H:/SPT4.1.X (hash-verified; 0.28.4 DLL + cfg in that session scratchpad `backup-0.28.4`); not run.
 
 ## 0.28.6 (2026-11-21): from the live 0.28.5 raid (7 surrenders, 0 leaks, 0 warnings)
@@ -659,5 +659,5 @@ H:/SPT4.1.X (hash-verified; 0.28.4 DLL + cfg in that session scratchpad `backup-
 - Cosmetic: the take-chance line printed "roll 0.31;  -> takes him prisoner" (double space): fixed.
 - VERIFIED IN RAID (log): opening-hide timing. Толян slipped into cover during an opening and ended
   "Hiding -> Released (in cover)" after 16 s, 23 m away (the 8 s limit would have stopped him short).
-Build passed (Debug + Release, 0 warnings); packed `dist/HandsAreHigh-0.28.6.zip` and installed in
+Build passed (Debug + Release, 0 warnings); packed `dist/Mercy-0.28.6.zip` and installed in
 H:/SPT4.1.X (hash-verified; 0.28.5 DLL + cfg in that session scratchpad `backup-0.28.5`); not run.

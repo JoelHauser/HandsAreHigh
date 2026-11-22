@@ -1,8 +1,8 @@
-# Hands Are High
+# Mercy
 
 SPT 4.1 client mod (BepInEx + BigBrain): a bot can surrender, drop the weapon in his hands and
 put his hands up, then act on his own: break when you give him an opening, retreat when you
-leave, and come back armed later. Bots take prisoners too. Repo https://github.com/JoelHauser/HandsAreHigh.
+leave, and come back armed later. Bots take prisoners too. Repo https://github.com/JoelHauser/Mercy.
 
 Stack: C# (LangVersion latest, net472, `TreatWarningsAsErrors`), Harmony, BepInEx 5, BigBrain 1.5.0
 (only hard dependency), Unity IMGUI; EFT 0.16.9.40743 (SPT 4.1.x, de-obfuscated) at
@@ -26,14 +26,14 @@ game and sends LogOutput.log and screenshots.
 ## Build and package (PowerShell; Bash mangles `H:\` paths)
 
 ```powershell
-dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.X   # compile check
-.\scripts\pack.ps1 -SPTPath H:\SPT4.1.X            # Release + checks + dist\HandsAreHigh-<ver>.zip
+dotnet build src\Mercy\Mercy.csproj -c Debug -p:SPTPath=H:\SPT4.1.X   # compile check
+.\scripts\pack.ps1 -SPTPath H:\SPT4.1.X            # Release + checks + dist\Mercy-<ver>.zip
 .\scripts\pack.ps1 -SPTPath H:\SPT4.1.X -Install   # ...and copy the DLL into the install
 ```
 
 - csproj default `SPTPath` is `C:\HUH` (work laptop): pass it. 0 warnings is required.
-- Version lives twice: csproj `<Version>` and `HandsAreHighPlugin.PluginVersion` (pack.ps1 refuses a
-  mismatch). Bump both without adding a BOM (PowerShell `Set-Content -Encoding utf8` adds one). Zip = `BepInEx/plugins/HandsAreHigh.dll` only: no README, no BigBrain, nothing else.
+- Version lives twice: csproj `<Version>` and `MercyPlugin.PluginVersion` (pack.ps1 refuses a
+  mismatch). Bump both without adding a BOM (PowerShell `Set-Content -Encoding utf8` adds one). Zip = `BepInEx/plugins/Mercy.dll` only: no README, no BigBrain, nothing else.
 - Before `-Install`: the game must not be running (`Get-Process EscapeFromTarkov`); back up the
   installed DLL and Joel's cfg to the scratchpad; hash-compare after.
 - Config changes: run `tools/cfgbind/bind.ps1` on a COPY of Joel's cfg (details in build-and-checks.md).
@@ -75,7 +75,7 @@ dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.
 
 **Lifecycle and hot reload**
 - Every static registry, cache, Harmony patch, event hook, layer flag or component must be cleared in
-  `HandsAreHighPlugin.Awake`'s `HotReloadTeardown` list (and on raid change via `EnsureRaid`/`Clear`).
+  `MercyPlugin.Awake`'s `HotReloadTeardown` list (and on raid change via `EnsureRaid`/`Clear`).
   BigBrain layers can't be unregistered: after teardown old layers must be inert (empty registries).
   New client code ships hot-reload ready from its first commit.
 
@@ -117,7 +117,7 @@ dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.
 
 ## Architecture in one screen
 
-- Entry: `HandsAreHighPlugin.Awake` binds settings, registers layers (Surrender 95, Captor 70,
+- Entry: `MercyPlugin.Awake` binds settings, registers layers (Surrender 95, Captor 70,
   KeepAway 72, Staging 98), patches, teardown. `Runtime.Update` drives the registry, natural checks,
   menu and debug keys every frame.
 - Prisoner: `SurrenderRegistry.Surrender` -> `SurrenderState` -> `SurrenderLayer`/`SurrenderLogic`

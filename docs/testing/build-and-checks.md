@@ -9,12 +9,12 @@ in-raid behaviour (see [in-raid-regression.md](in-raid-regression.md)).
 Bash turns `H:\SPT4.1.X` into `H:SPT4.1.X`; run builds from PowerShell.
 
 ```powershell
-# Release build + version check + config-name check + dist\HandsAreHigh-<ver>.zip
+# Release build + version check + config-name check + dist\Mercy-<ver>.zip
 .\scripts\pack.ps1 -SPTPath H:\SPT4.1.X
 # same, then copy the DLL into H:\SPT4.1.X\BepInEx\plugins
 .\scripts\pack.ps1 -SPTPath H:\SPT4.1.X -Install
 # Debug compile only (fast check while editing)
-dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.X
+dotnet build src\Mercy\Mercy.csproj -c Debug -p:SPTPath=H:\SPT4.1.X
 ```
 
 - The csproj defaults `SPTPath` to `C:\HUH` (work laptop); on the home PC always pass it.
@@ -22,27 +22,27 @@ dotnet build src\HandsAreHigh\HandsAreHigh.csproj -c Debug -p:SPTPath=H:\SPT4.1.
   (BigBrain 1.5.0, compile-only reference; never packed). Not re-run since 2026-11-19.
 - Alternative used once (0.15.0): `dotnet build -c Release -p:DeployToSPT=true -p:SPTPath=...`.
 - `TreatWarningsAsErrors` is on: 0 warnings is required, not a goal.
-- pack.ps1 refuses: csproj `<Version>` != `HandsAreHighPlugin.PluginVersion` (bump BOTH); config
+- pack.ps1 refuses: csproj `<Version>` != `MercyPlugin.PluginVersion` (bump BOTH); config
   section/key names containing `= \ " ' [ ]` or a tab (BepInEx throws in Awake and the whole plugin
   dies with nothing in LogOutput.log; it shipped in 0.0.2-0.1.0 and was caught twice since).
-- Zip contents: `BepInEx/plugins/HandsAreHigh.dll` only (forward-slash entries). No README, no
+- Zip contents: `BepInEx/plugins/Mercy.dll` only (forward-slash entries). No README, no
   BigBrain, nothing else.
 
 ## Before installing into H:\SPT4.1.X
 
 - Check the game is not running (`Get-Process EscapeFromTarkov`): a running game locks the DLL.
   The launcher alone is fine.
-- Back up the installed DLL and `BepInEx\config\com.joelhauser.handsarehigh.cfg` to the session
+- Back up the installed DLL and `BepInEx\config\com.mybutthasarash.mercy.cfg` to the session
   scratchpad (`backup-<old version>`) first.
 - Never delete or overwrite other files in an SPT install. Never write Joel's cfg from a read that
   may have failed (it was blanked once). Let the mod migrate the cfg itself.
-- After install, confirm with a hash compare against `src\HandsAreHigh\bin\Release\HandsAreHigh.dll`.
+- After install, confirm with a hash compare against `src\Mercy\bin\Release\Mercy.dll`.
 
 ## Config check (whenever settings change)
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\cfgbind\bind.ps1 `
-  -Dll src\HandsAreHigh\bin\Release\HandsAreHigh.dll -Spt H:\SPT4.1.X `
+  -Dll src\Mercy\bin\Release\Mercy.dll -Spt H:\SPT4.1.X `
   -Cfg <copy of Joel's cfg> -Work <scratchpad>\cfgbind
 ```
 

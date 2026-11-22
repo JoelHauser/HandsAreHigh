@@ -6,18 +6,18 @@ actually been seen in a raid is tracked in [../CURRENT_STATUS.md](../CURRENT_STA
 
 ## Setup
 
-- F12 > Hands Are High. Section 14 Debug: "Debug keys" on for debug keys and debug menu authority.
+- F12 > Mercy. Section 14 Debug: "Debug keys" on for debug keys and debug menu authority.
   Logs (7. Debugging, advanced, most default on): Log: decisions, kneeling, escapes, encounter endings,
   hold-fire decisions, gear decisions, incoming fire, squad cover; Verbose only when a line says it needs it.
 - Section 17: "Scenario tools" on + a "Scenario menu key" to launch presets (debug sandbox; scenario
   bots are NOT raid evidence: SurrenderStats separates Natural/Demand from Scenario/DebugKey).
 - Log: `H:\SPT4.1.X\BepInEx\LogOutput.log` (overwritten each launch; no timestamps on lines). Our
-  lines start `[Info   :Hands Are High]`. Unity-side exceptions and silent plugin deaths are in
+  lines start `[Info   :Mercy]`. Unity-side exceptions and silent plugin deaths are in
   `%USERPROFILE%\AppData\LocalLow\Battlestate Games\EscapeFromTarkov\Player.log`.
 
 ## Reading a log efficiently
 
-- First: version line (`Hands Are High 0.x.y loaded`), errors (`grep -a "Error\|Exception\|WARNING\|LEAK\|FAIL"`).
+- First: version line (`Mercy 0.x.y loaded`), errors (`grep -a "Error\|Exception\|WARNING\|LEAK\|FAIL"`).
 - Scenario index: `grep -a "Scenario #[0-9]* .*+0.0s \[info\]: launched"`.
 - Follow one bot: every line about him contains his name and, for scenario bots, a tag like `#S3-PMC`
   (`grep -a "#S6-"`). Read his lines in order, not the whole log.

@@ -1,5 +1,5 @@
 # 0.24.0: open hands for the surrender poses. Reads the finger chain from the game's
-# skeleton.bundle (UnityPy), applies the target shapes used by src/HandsAreHigh/Fingers.cs
+# skeleton.bundle (UnityPy), applies the target shapes used by src/Mercy/Fingers.cs
 # (swing of the bind rotation kept, flexion about the bone's local +Z set), and checks:
 #   - every joint flexes palm-ward (0 < flex), none bent backwards (no overextension)
 #   - fingertips stay in front of the palm plane's back side (no tip through the hand)

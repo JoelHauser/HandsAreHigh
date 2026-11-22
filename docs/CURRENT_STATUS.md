@@ -4,26 +4,37 @@ Update this file at every task boundary (replace, don't append a transcript). Us
 exactly: **implemented** / **build passed** / **simulation passed** / **verified in raid** (log or
 Joel's eyes). Release history lives in `docs/history/`.
 
-Last updated: 2026-11-21 (0.28.1: release-quality pass, Forge description in MOD-PAGE.md).
+Last updated: 2026-11-21 (renamed Hands Are High -> Mercy, GUID com.mybutthasarash.mercy; see docs/history/releases-0.29.md).
 
 ## State of the code
 
 | Version | Where | Level |
 |---|---|---|
-| 0.28.6 | main @ a6c0d2f + README e1efe57 (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.28.6.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.5 DLL + cfg in that session scratchpad `backup-0.28.5`) | build passed (Debug + Release, 0 warnings); not run in game |
-| 0.28.5 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.5.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.4 DLL + cfg in that session scratchpad `backup-0.28.4`) | build passed (Debug + Release, 0 warnings); not run in game |
-| 0.28.4 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.4.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.3 DLL + cfg in that session scratchpad `backup-0.28.3`) | build passed (Debug + Release, 0 warnings), simulation passed (tools/firesim 13/13); not run in game |
-| 0.28.3 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.3.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.2 DLL + cfg in that session scratchpad `backup-0.28.2`) | build passed (Debug + Release, 0 warnings); not run in game |
-| 0.28.2 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.2.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.1 DLL + cfg in that session scratchpad `backup-0.28.1`) | build passed (Debug + Release, 0 warnings); not run in game |
-| 0.28.1 | uncommitted on top of main; packed (`dist/HandsAreHigh-0.28.1.zip`), installed in H:\SPT4.1.X 2026-11-21 (hash-verified; 0.28.0 DLL + cfg in that session scratchpad `backup-0.28.0`) | build passed (Debug + Release, 0 warnings); no settings changed; not run in game |
-| 0.28.0 | main @ 988d6e9 (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.28.0.zip`) and installed in H:\SPT4.1.X (hash-verified); 0.27.0 DLL + cfg in that session's scratchpad (`backup-0.27.0`); Joel's cfg not yet migrated (the mod does it at the next launch) | build passed (Debug + Release, 0 warnings), cfg check passed (bind.ps1 + carry.py on a copy of Joel's cfg: 428/428 values carried; merged settings on a synthetic copy); not run in game |
-| 0.27.0 | main @ b84c866 (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.27.0.zip`) and installed in H:\SPT4.1.X; 0.26.0 DLL + cfg in that session's scratchpad (`backup-0.26.0`) | build passed (Debug + Release, 0 warnings), simulation passed (tools/fingersim/lace.py); Joel: "looks better" in game (2026-11-21) |
-| 0.26.0 | main @ 0d1d50e (pushed 2026-11-21, no tag/release); packed (`dist/HandsAreHigh-0.26.0.zip`) and installed in H:\SPT4.1.X; 0.25.0 DLL + cfg backed up in that session's scratchpad (`backup-0.25.0`) | build passed (Debug + Release, 0 warnings), simulation passed (overlap.py, releasesim, abandonsim), ORBIT members checked by reflection on the installed DLL; Joel: "looks better" in game (2026-11-21) |
+| 0.30.0 (Mercy) | UNCOMMITTED on top of main @ a8c9252 (0.29.0 + 0.29.1 + rename + Lighthouse fixes + prone get-up); packed + installed in H:/SPT4.1.X 2026-11-21 (hash-verified, HandsAreHigh.dll removed, cfg migrated); notes docs/history/releases-0.30.md | build passed, tools/bosstest 55/55, cfg bind 439/439 on the renamed DLL; boss gate + natural last-survivor roll verified in raid on 0.29.1 (Lighthouse); 0.30.0 itself not run |
+| 0.29.1 | UNCOMMITTED on top of main; packed (`dist/Mercy-0.29.1.zip`) and installed 2026-11-21 (hash-verified; 0.29.0 DLL + cfg in that session scratchpad `backup-0.29.0`): unset last-seen position fix, trigger-log wording | build passed (Release, 0 warnings), tools/bosstest 52/52; not run in game |
+| 0.29.0 | UNCOMMITTED on top of main; packed (`dist/Mercy-0.29.0.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.6 DLL + cfg in that session scratchpad `backup-0.28.6`). Notes: docs/history/releases-0.29.md | build passed (Debug + Release, 0 warnings), cfg check passed (2 keys added), tools/bosstest 52/52; not run in game |
+| 0.28.6 | main @ a6c0d2f + README e1efe57 (pushed 2026-11-21, no tag/release); packed (`dist/Mercy-0.28.6.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.5 DLL + cfg in that session scratchpad `backup-0.28.5`) | build passed (Debug + Release, 0 warnings); not run in game |
+| 0.28.5 | uncommitted on top of main; packed (`dist/Mercy-0.28.5.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.4 DLL + cfg in that session scratchpad `backup-0.28.4`) | build passed (Debug + Release, 0 warnings); not run in game |
+| 0.28.4 | uncommitted on top of main; packed (`dist/Mercy-0.28.4.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.3 DLL + cfg in that session scratchpad `backup-0.28.3`) | build passed (Debug + Release, 0 warnings), simulation passed (tools/firesim 13/13); not run in game |
+| 0.28.3 | uncommitted on top of main; packed (`dist/Mercy-0.28.3.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.2 DLL + cfg in that session scratchpad `backup-0.28.2`) | build passed (Debug + Release, 0 warnings); not run in game |
+| 0.28.2 | uncommitted on top of main; packed (`dist/Mercy-0.28.2.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.1 DLL + cfg in that session scratchpad `backup-0.28.1`) | build passed (Debug + Release, 0 warnings); not run in game |
+| 0.28.1 | uncommitted on top of main; packed (`dist/Mercy-0.28.1.zip`), installed in H:\SPT4.1.X 2026-11-21 (hash-verified; 0.28.0 DLL + cfg in that session scratchpad `backup-0.28.0`) | build passed (Debug + Release, 0 warnings); no settings changed; not run in game |
+| 0.28.0 | main @ 988d6e9 (pushed 2026-11-21, no tag/release); packed (`dist/Mercy-0.28.0.zip`) and installed in H:\SPT4.1.X (hash-verified); 0.27.0 DLL + cfg in that session's scratchpad (`backup-0.27.0`); Joel's cfg not yet migrated (the mod does it at the next launch) | build passed (Debug + Release, 0 warnings), cfg check passed (bind.ps1 + carry.py on a copy of Joel's cfg: 428/428 values carried; merged settings on a synthetic copy); not run in game |
+| 0.27.0 | main @ b84c866 (pushed 2026-11-21, no tag/release); packed (`dist/Mercy-0.27.0.zip`) and installed in H:\SPT4.1.X; 0.26.0 DLL + cfg in that session's scratchpad (`backup-0.26.0`) | build passed (Debug + Release, 0 warnings), simulation passed (tools/fingersim/lace.py); Joel: "looks better" in game (2026-11-21) |
+| 0.26.0 | main @ 0d1d50e (pushed 2026-11-21, no tag/release); packed (`dist/Mercy-0.26.0.zip`) and installed in H:\SPT4.1.X; 0.25.0 DLL + cfg backed up in that session's scratchpad (`backup-0.25.0`) | build passed (Debug + Release, 0 warnings), simulation passed (overlap.py, releasesim, abandonsim), ORBIT members checked by reflection on the installed DLL; Joel: "looks better" in game (2026-11-21) |
 | 0.25.0 | main @ f2a4d51 (pushed, no tag/release) | ran in one raid: LogOutput 2026-11-21 03:31 (3 player-vs-Scav scenarios) + Joel's screenshot (top glove inside the other sleeve) |
 
 No GitHub release exists for any version. Joel decides commits/pushes.
 
 ## Objective in progress
+
+0.29.0 (installed, unrun): bosses give up only once every guard is confirmed dead (BossSquad), a few
+escalating rolls; Raiders (pmcBot) are their own class with PMC odds, eligible with bosses off (they
+were filed as Boss by the game's isBoss+isFollower table). Labs raid (log): Raider path verified in raid (41 rolls, 1 natural surrender through to hand-back,
+one debug-key prisoner); 0.29.1 fixes the origin last-seen position it exposed. Joel's cfg has `Bosses can surrender` OFF:
+boss behaviour is invisible until he turns it on (restart). In-raid checks: releases-0.29.md.
+
+Earlier (0.28.x):
 
 Performance + release pass driven by raid logs (notes: docs/history/releases-0.28.md, 0.28.1-0.28.6).
 Verified in raid (log level, five raids on 0.28.1-0.28.5): ~40 natural surrenders, cfg migration, our

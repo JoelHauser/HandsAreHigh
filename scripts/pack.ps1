@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Builds Hands Are High, checks its version, packs the release zip, and optionally installs it.
+    Builds Mercy, checks its version, packs the release zip, and optionally installs it.
 
 .DESCRIPTION
     Run this through PowerShell, not Bash: Bash mangles 'C:\HUH' into 'C:HUH'.
@@ -36,8 +36,8 @@ Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $root = Split-Path -Parent $PSScriptRoot
-$project = Join-Path $root 'src\HandsAreHigh\HandsAreHigh.csproj'
-$source = Join-Path $root 'src\HandsAreHigh\HandsAreHighPlugin.cs'
+$project = Join-Path $root 'src\Mercy\Mercy.csproj'
+$source = Join-Path $root 'src\Mercy\MercyPlugin.cs'
 
 if (-not (Test-Path (Join-Path $SPTPath 'BepInEx\core\BepInEx.dll'))) {
     throw "SPTPath '$SPTPath' is not an SPT install root: no BepInEx\core\BepInEx.dll."
@@ -47,7 +47,7 @@ if (-not (Test-Path (Join-Path $SPTPath 'BepInEx\core\BepInEx.dll'))) {
 $csprojVersion = ([xml](Get-Content $project)).Project.PropertyGroup.Version | Where-Object { $_ }
 $sourceVersion = (Select-String -Path $source -Pattern 'PluginVersion\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 if ($csprojVersion -ne $sourceVersion) {
-    throw "Version mismatch: csproj says '$csprojVersion', HandsAreHighPlugin.PluginVersion says '$sourceVersion'."
+    throw "Version mismatch: csproj says '$csprojVersion', MercyPlugin.PluginVersion says '$sourceVersion'."
 }
 $version = $csprojVersion
 Write-Host "Version $version" -ForegroundColor Cyan
@@ -59,7 +59,7 @@ Write-Host "Version $version" -ForegroundColor Cyan
 # written inline in a Bind call too.
 $badChars = '[=\\"''\[\]\t]'
 $bad = @()
-foreach ($settings in Get-ChildItem (Join-Path $root 'src\HandsAreHigh') -Filter 'Settings*.cs') {
+foreach ($settings in Get-ChildItem (Join-Path $root 'src\Mercy') -Filter 'Settings*.cs') {
     $text = Get-Content $settings.FullName -Raw
     foreach ($m in [regex]::Matches($text, 'c\.Bind\(\s*(\w+|"(?:[^"\\]|\\.)*")\s*,\s*"((?:[^"\\]|\\.)*)"')) {
         if ($m.Groups[2].Value -match $badChars) { $bad += $m.Groups[2].Value }
@@ -77,17 +77,17 @@ $buildArgs = @($project, '-c', 'Release', "-p:SPTPath=$SPTPath", '--nologo')
 if ($BigBrainDll) { $buildArgs += "-p:BigBrainDll=$BigBrainDll" }
 dotnet build @buildArgs
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
-$built = Join-Path $root 'src\HandsAreHigh\bin\Release\HandsAreHigh.dll'
+$built = Join-Path $root 'src\Mercy\bin\Release\Mercy.dll'
 
 # ---- zip -------------------------------------------------------------------------
 # The DLL only: Joel's releases never carry a README.
 $entries = [ordered]@{
-    'BepInEx/plugins/HandsAreHigh.dll' = $built
+    'BepInEx/plugins/Mercy.dll' = $built
 }
 
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$zip = Join-Path $dist "HandsAreHigh-$version.zip"
+$zip = Join-Path $dist "Mercy-$version.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 
 $archive = [System.IO.Compression.ZipFile]::Open($zip, [System.IO.Compression.ZipArchiveMode]::Create)

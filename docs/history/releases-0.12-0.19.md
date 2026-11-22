@@ -9,7 +9,7 @@
 
 **0.19.0 (2026-11-20): natural surrender made reachable in ordinary fights, natural-pipeline
 diagnostics, captor pick-up fixed at its source, deliberate decisions about distant dropped weapons,
-SAIN kill steering actually applied, dead code removed. Release packed (dist/HandsAreHigh-0.19.0.zip,
+SAIN kill steering actually applied, dead code removed. Release packed (dist/Mercy-0.19.0.zip,
 DLL only) and installed in H:\SPT4.1.X (0.18.0 DLL backed up in that session's scratchpad).
 Committed and pushed to main (ce5f21c, no tag/release). Superseded in the install by 0.20.0. NEVER RUN IN GAME: no natural surrender and no pick-up animation has been seen yet.**
 
@@ -130,7 +130,7 @@ Log decisions on, Log gear decisions on, Scenario tools may stay on but launch n
 **0.18.0 (2026-11-20): head set from the rig's real axes (sideways gaze / cocked head), the game's
 bot head free-look centred while held, captor lethal intent decided once at custody, SAIN steered
 onto a kill decision, demanded weapons collected, turn-around order bug, pick-up window for the
-prisoner. Release packed (dist/HandsAreHigh-0.18.0.zip, DLL only) and installed in H:\SPT4.1.X (0.17.0
+prisoner. Release packed (dist/Mercy-0.18.0.zip, DLL only) and installed in H:\SPT4.1.X (0.17.0
 DLL backed up in that session's scratchpad). UNCOMMITTED. NEVER RUN IN GAME: nothing below is
 confirmed in a raid.**
 
@@ -232,7 +232,7 @@ Log decisions, judgement, gear decisions on; Log pose diagnostics on for 1-2.
 6. Any captor plan with "turned away": the bot now actually gives Turn around before fetching.
 
 **0.17.0 (2026-11-20): facing/turning via the game's stepping turn, lethal path made reachable and
-watched, committed retreats, compact menu. Packed (dist/HandsAreHigh-0.17.0.zip) and installed in
+watched, committed retreats, compact menu. Packed (dist/Mercy-0.17.0.zip) and installed in
 H:\SPT4.1.X. Committed and pushed to main with 0.16.0/0.16.1 (2026-11-20, no tag/release). NEVER RUN IN
 GAME (0.16.1 was never installed; the 11:21 log is 0.16.0).**
 
@@ -301,7 +301,7 @@ Root causes and what changed:
    closing 0 or a submitting digit never switches your weapon.
 
 **0.16.1 (2026-11-20): facing fix from Joel's screenshot (standing, hands on head, chest twisted,
-head looking away from him). Packed (dist/HandsAreHigh-0.16.1.zip), NOT installed (game was
+head looking away from him). Packed (dist/Mercy-0.16.1.zip), NOT installed (game was
 running); superseded by 0.17.0, which includes it. Unrun.**
 - Standing facing set only the look (SurrenderLogic.Face); the game turns a bot's root only past 45
   deg and then to 45 deg short, so after any big turn he stood with his trunk twisted up to 45 deg
@@ -315,7 +315,7 @@ running); superseded by 0.17.0, which includes it. Unrun.**
 **0.16.0 (2026-11-20, home PC): realism and polish pass: captors take surrendered gear, Turn
 around and Hands on head orders (player and bot captors), head pose fix, partial compliance with
 Drop your weapons, captor judgement (warn / repeat / release / lethal) with explicit decision
-points, staged scenario spawns. Release build packed (dist/HandsAreHigh-0.16.0.zip) and installed in
+points, staged scenario spawns. Release build packed (dist/Mercy-0.16.0.zip) and installed in
 H:\SPT4.1.X 2026-11-20 (0.15.0 DLL backed up in that session's scratchpad). Ran in game 2026-11-20
 (log 11:21, 13 scenarios; findings under 0.17.0).**
 
@@ -534,7 +534,7 @@ Log decisions, Log kneeling, Log attention, Log pose diagnostics on.
 
 **0.14.0 (2026-11-19, home PC): bot-vs-bot identity fix, SAIN target filter, captor walk-up, urgent
 escapes, weapon-recovery preference, head/torso look split, scenario spawn mag check. Built against
-H:\SPT4.1.X, 0 warnings, dist/HandsAreHigh-0.14.0.zip, installed; committed + pushed to main
+H:\SPT4.1.X, 0 warnings, dist/Mercy-0.14.0.zip, installed; committed + pushed to main
 2026-11-19 (no tag/release). Joel sent one screenshot of a kneeling Scav, hands behind head, head
 turned (no comment); no 0.14.0 log reviewed yet, so none of the fixes below is confirmed in game.**
 
@@ -609,12 +609,12 @@ Log decisions + restraint on, Verbose off. Grep `walks up`, `stops walking up`, 
 7. Spawn any scenario: `Scenario spawn: <bot>: no magazine check at spawn (vanilla: first check in
    N s; SAIN: first magazine check in N s ...)`; no mag-check animation; he can shoot, reload, drop
    on surrender at once. Raid bots: unchanged (they still check at spawn).
-8. Combat comparison (Joel): same map/spot, F12 Hands Are High Enabled off vs on with no encounter,
+8. Combat comparison (Joel): same map/spot, F12 Mercy Enabled off vs on with no encounter,
    then after an encounter: bot-vs-bot fights should look the same. Matched Scav and PMC keeps its
    truce by design (both fight YOU); they now ignore each other instead of aiming without firing.
 
 **0.13.1 (2026-11-19, home PC): PMC scenario spawn fix + arm solver rewrite. Built against
-H:\SPT4.1.X, 0 warnings, dist/HandsAreHigh-0.13.1.zip, installed; uncommitted; never run in game.**
+H:\SPT4.1.X, 0 warnings, dist/Mercy-0.13.1.zip, installed; uncommitted; never run in game.**
 
 Scenario spawn NullReferenceException (Joel's log, scenarios #6, #18-#28, every PMC):
 - Trace: `BotProfileClient.CreateProfile` IL_0232-023b `profile_0.GetAllPrefabPaths` on a null
@@ -684,7 +684,7 @@ Debug keys, Overlay, Log kneeling, Verbose logs on (14. Debug). Grep `spawn`, `h
    the head the way they came, brace hand lands flat, no flick; kill him mid-move: vanilla ragdoll.
 
 **0.13.0 (2026-11-19): code complete, reviewed, built against H:\SPT4.1.X with 0 warnings
-(dist/HandsAreHigh-0.13.0.zip), installed in H:\SPT4.1.X; never run in game.** Eight-part request
+(dist/Mercy-0.13.0.zip), installed in H:\SPT4.1.X; never run in game.** Eight-part request
 (kneel spot, rise-to-walk, head attention, interrupted escape, injury-aware kneel, kneeling idle,
 flinch, demeanor). Next: Joel runs the 0.13.0 plan below.
 
@@ -789,12 +789,12 @@ and demeanor at defaults. Grep `kneel:`, `demeanor`, `glances`, `flinches`, `cov
 8. Profile on with 4 held bots (2 kneeling): no `Profile spike:`.
 
 **0.12.0 (kneel styles, rise intents, knee brace, no crouch look), built against `C:\HUH` 2026-11-19
-(dist/HandsAreHigh-0.12.0.zip), 0 warnings; committed and pushed to `main` 2026-11-19 (0.11.0 in the same commit); not installed, never run in game.**
+(dist/Mercy-0.12.0.zip), 0 warnings; committed and pushed to `main` 2026-11-19 (0.11.0 in the same commit); not installed, never run in game.**
 0.5.0-0.12.0 are all unverified in raid. No GitHub release. Preview of the motion (same solver,
 stick figure): https://claude.ai/artifact/BmomFjtD7GVoPCYSgKN5Aj
 
 **0.12.1 (brace rework + transition fixes), built against `C:\HUH` 2026-11-19
-(dist/HandsAreHigh-0.12.1.zip), 0 warnings; committed and pushed to `main` 2026-11-19; not installed, never run in game.**
+(dist/Mercy-0.12.1.zip), 0 warnings; committed and pushed to `main` 2026-11-19; not installed, never run in game.**
 Preview updated to 0.12.1 (same link as above): brace 0.12.1 vs 0.12.0 toggle, speed 1x-1/10x, hand path,
 fingers drawn, brace reach/elbow/wrist readouts. Its standing reference was wrong before (hips 0.93 m over
 ankles 0.08 m = ~44 deg knee bend); now 0.993 m (~8 deg). In game nothing of ours bends a standing bot's

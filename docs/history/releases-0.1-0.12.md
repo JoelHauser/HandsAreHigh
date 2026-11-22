@@ -125,7 +125,7 @@ Debug keys, Overlay, Log kneeling, Kneel gizmos on. Grep `kneel:`.
 6. Bot captor with a Scav: `holds ... plan`, some `ordered Kneel by <PMC>`; on release he rises.
 7. Interrupt tests (Ctrl+Shift+K) at 0.2/0.5/0.9 both ways; Kill mid-rise: ragdoll, no stand.
 
-### 0.11.0 (kneel, hands behind the head; src/HandsAreHigh/Kneel.cs)
+### 0.11.0 (kneel, hands behind the head; src/Mercy/Kneel.cs)
 
 Engine facts checked first (decompile of C:\HUH Assembly-CSharp + skeleton.bundle via UnityPy):
 - No kneel/sit/get-up clip in player_anim_controller (0.10.0 search). So procedural, on top of the
@@ -221,7 +221,7 @@ Debug keys + Overlay on, Log kneeling on, Kneel gizmos on for 1-3. Grep `kneel:`
 7. Menu: Get down / On your feet / Stay (stays down) / Follow (rises, then walks).
 8. Profile on with 4 kneeling bots: no `Profile spike:`; Pose cost per frame a few us per bot.
 
-### 0.10.0 (debug scenario sandbox, src/HandsAreHigh/Scenarios/)
+### 0.10.0 (debug scenario sandbox, src/Mercy/Scenarios/)
 
 F12 > 17. Debug Scenarios: "Scenario tools" (off) + "Scenario menu key" (unbound). Off = Runtime
 never calls into it. Menu: arrows move/change, Enter activates (configurable); InputGuard claims
@@ -285,7 +285,7 @@ Scenario tools on, bind a menu key, Log decisions/restraint on. Grep `Scenario #
 5. Observer override on: participants never target you; off: they do.
 6. Take a scenario gun into your inventory, clean up: reported `IN YOUR INVENTORY`, still yours.
 
-**0.9.0, built on the work laptop against `C:\HUH` 2026-11-19 (dist/HandsAreHigh-0.9.0.zip),
+**0.9.0, built on the work laptop against `C:\HUH` 2026-11-19 (dist/Mercy-0.9.0.zip),
 0 warnings; committed and pushed to `main` 2026-11-19; not installed, never run in game.**
 (0.7.0 + 0.8.0 were one commit before it.) 0.5.0-0.9.0 are all unverified in raid. No GitHub release.
 `C:\HUH` (EFT 0.16.9.40743) has no SAIN, ORBIT, Pit Fireteam or BigBrain (compiled against the
@@ -682,7 +682,7 @@ an older obfuscated decompile (`_E180` names) in other scratchpads is a differen
 
 Run it from PowerShell. H:\SPT4.1.X has BigBrain; on an install without it pass
 `-BigBrainDll <path>\DrakiaXYZ-BigBrain.dll` (BigBrain 1.5.0, never packed in our zip).
-`C:\HUH` is the work-laptop install. Zip = `BepInEx/plugins/HandsAreHigh.dll` only.
+`C:\HUH` is the work-laptop install. Zip = `BepInEx/plugins/Mercy.dll` only.
 pack.ps1 refuses config names containing = \ " ' [ ] (BepInEx throws in Awake and the whole
 plugin dies silently; 0.0.2-0.1.0 shipped that bug). Existing section/key names must not be
 renamed casually: Joel's cfg already holds values for them.
@@ -771,7 +771,7 @@ No debug keys for 1-4 (debug keys off), Verbose logs on for 3.
 
 ## In-game test plan (0.3.0)
 
-F12 > Hands Are High > 14. Debug: **Debug keys** and **Overlay** on, **Override nerve** off
+F12 > Mercy > 14. Debug: **Debug keys** and **Overlay** on, **Override nerve** off
 (the 0.2.0 log had every bot at 0.50). Keys: `[` surrender, `]` opening, Backspace leave,
 Ctrl+Backspace force run, Ctrl+`]` force gun grab. Grep LogOutput.log for `SAIN still had`,
 `Timeline`, `voice`, `opening`, `scramble`, `pressure`, `fire +` (Verbose), `->`.

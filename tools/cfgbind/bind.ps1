@@ -1,9 +1,9 @@
-# Loads a COPY of a Hands Are High cfg through a built HandsAreHigh.dll (Settings.Bind, as the plugin does
+# Loads a COPY of a Mercy cfg through a built Mercy.dll (Settings.Bind, as the plugin does
 # in Awake), twice, and reports keys added / values changed / dropped / changed on the second load.
 # Never point -Cfg at a file you want untouched: it is copied into -Work first.
 # Usage (PowerShell 5.1): powershell -NoProfile -ExecutionPolicy Bypass -File tools\cfgbind\bind.ps1 `
-#   -Dll src\HandsAreHigh\bin\Release\HandsAreHigh.dll -Spt H:\SPT4.1.X `
-#   -Cfg H:\SPT4.1.X\BepInEx\config\com.joelhauser.handsarehigh.cfg -Work <scratchpad>\cfgbind
+#   -Dll src\Mercy\bin\Release\Mercy.dll -Spt H:\SPT4.1.X `
+#   -Cfg H:\SPT4.1.X\BepInEx\config\com.mybutthasarash.mercy.cfg -Work <scratchpad>\cfgbind
 param([string]$Dll, [string]$Spt, [string]$Cfg, [string]$Work)
 $ErrorActionPreference = 'Stop'
 $managed = Join-Path $Spt 'EscapeFromTarkov_Data\Managed'
@@ -31,10 +31,10 @@ function Read-Entries([string]$path) {
 
 function Invoke-Bind([string]$path) {
     $cfg = New-Object BepInEx.Configuration.ConfigFile($path, $true)
-    $plugin = $asm.GetType('HandsAreHigh.HandsAreHighPlugin')
+    $plugin = $asm.GetType('Mercy.MercyPlugin')
     $log = New-Object BepInEx.Logging.ManualLogSource('test')
     $plugin.GetField('Log', [System.Reflection.BindingFlags]'NonPublic,Static').SetValue($null, $log)
-    $settings = $asm.GetType('HandsAreHigh.Settings')
+    $settings = $asm.GetType('Mercy.Settings')
     $argv = New-Object 'object[]' 1; $argv[0] = $cfg.PSObject.BaseObject
     [void]$settings.GetMethod('Bind', [System.Reflection.BindingFlags]'NonPublic,Static').Invoke($null, $argv)
     $cfg.Save()

@@ -43,7 +43,7 @@ Config: new key "Hands behind head: fingers laced" (section 27, default on) take
 
 ### Checks
 
-- Debug + Release builds, 0 warnings; packed dist/HandsAreHigh-0.27.0.zip, installed in H:\SPT4.1.X.
+- Debug + Release builds, 0 warnings; packed dist/Mercy-0.27.0.zip, installed in H:\SPT4.1.X.
 - tools/fingersim/lace.py: CHOSEN PASS (helmet on and off).
 
 ### Needs a raid
