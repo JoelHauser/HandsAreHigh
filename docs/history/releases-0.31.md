@@ -258,3 +258,27 @@ TryToSpawnInZonePatch exception.
 6. Escape: prisoner runs (keep-away), no stop/jump mid-run; ex-captor reacts.
 7. Incoming fire on a held man: surrender breaks as before.
 8. Release: handed back, COMET/SAIN AI resumes (PostCombat cover is COMET's normal behaviour), no lingering hold.
+
+## 0.31.8 (2026-11-22): fixes from the 0.31.7 COMET raid
+
+Fixed:
+- Gun fetch measured its reach in a straight line: Twitch_JACK went for an AKS-74U 6 m away (reach 8 m)
+  whose route was 285 m. A gun whose route is longer than 1.5x his reach (or 2x the straight distance
+  + 2 m, whichever is more) is skipped and noted ("the way round is N m").
+- Fetch and keep-away walks counted time at a door as stalled (the 4 s stall check ran before the
+  door-opener check): a fetch ended "stuck ... at a door". Now the stall clock waits while the game's
+  door opener has him, as the prisoner's own walk does; the legs' 25 s / 20 s limits still bound it.
+  The door opener is asked once per frame (keep-away asked it twice).
+
+Diagnostics (cause open): captor walk-up stalls (3 in the raid, a plain-SAIN Scav too; mover Default,
+0 m/s, each right after the walk order). The game's aim only caps speed (SetAimingSlowdown 0.33) and
+only the door opener pauses the mover, so no fix was guessed: the stall line now adds the mover's
+moving/path/paused flags, distance left, asked/actual speed and speed limit, aiming, pose and door.
+
+Checked, no change: surrender recognition with COMET. Counting refusals as decisions, COMET PMC captors
+recognised 4/4 within 6 m and 6/12 beyond; Scav captors 2/2 and 4/7. COMET never writes EnemyInfo
+visibility (its sight patches steer only).
+
+### In-raid checks
+1. A captor walk-up stall: the new detail after "stuck (...": read it before changing anything.
+2. A released unarmed man skipping a gun "the way round is N m", or fetching through a door.

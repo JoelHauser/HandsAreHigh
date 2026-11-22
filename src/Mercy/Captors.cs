@@ -1014,7 +1014,24 @@ namespace Mercy
             try { layer = DrakiaXYZ.BigBrain.Brains.BrainManager.GetActiveLayerName(cs.Owner) ?? "?"; } catch { }
             try { mover = cs.Owner?.Mover?.CurrentState.ToString() ?? "none"; } catch { }
             try { Vector3 v = cs.Bot.Velocity; v.y = 0f; speed = v.magnitude; } catch { }
-            return $"stuck (under 0.5 m in {ApproachStuck:0.0} s; active layer {layer}, mover {mover}, {speed:0.0} m/s)";
+            // 0.31.8: the 0.31.7 COMET raid had 3 stalls with the mover in Default at 0 m/s (a plain-SAIN
+            // Scav too); each began right after the walk order, with the gun raise started after it.
+            // The game's aim only caps speed (MovementContext.SetAimingSlowdown 0.33), so the cause is
+            // open: what the mover and body report at the event (BotMover/MovementContext, 0.16.9).
+            string detail = "";
+            try
+            {
+                BotMover m = cs.Owner?.Mover;
+                Player p = cs.Bot;
+                MovementContext mc = p?.MovementContext;
+                detail = $"; mover moving {(m != null && m.IsMoving ? "yes" : "no")}, path {(m != null && m.HasPathAndNoComplete ? "yes" : "no")}, " +
+                    $"paused {(m != null && m.Pause ? "yes" : "no")}, {(m != null ? m.DistDestination : -1f):0.0} m left, " +
+                    $"speed asked {(m != null ? m.DestMoveSpeed : -1f):0.00} / body {(p != null ? p.Speed : -1f):0.00} (limit {(mc != null ? mc.StateSpeedLimit : -1f):0.00}), " +
+                    $"aiming {(p?.HandsController != null && p.HandsController.IsAiming ? "yes" : "no")}, pose {(p != null ? p.PoseLevel : -1f):0.00}, " +
+                    $"near a door {(cs.Owner?.DoorOpener != null && cs.Owner.DoorOpener.NearDoor ? "yes" : "no")}";
+            }
+            catch { }
+            return $"stuck (under 0.5 m in {ApproachStuck:0.0} s; active layer {layer}, mover {mover}, {speed:0.0} m/s{detail})";
         }
 
         private static void Approach(CaptorState cs, SurrenderState s, float now, ThreatLevel t, bool sees)

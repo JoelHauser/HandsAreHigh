@@ -4,13 +4,14 @@ Update this file at every task boundary (replace, don't append a transcript). Us
 exactly: **implemented** / **build passed** / **simulation passed** / **verified in raid** (log or
 Joel's eyes). Release history lives in `docs/history/`.
 
-Last updated: 2026-11-22 (0.31.7 COMET 1.0.0 compatibility; see docs/history/releases-0.31.md).
+Last updated: 2026-11-22 (0.31.8 fixes from the COMET raid; see docs/history/releases-0.31.md).
 
 ## State of the code
 
 | Version | Where | Level |
 |---|---|---|
-| 0.31.7 | main (committed 2026-11-22, not pushed); packed + installed 2026-11-22 (hash-verified; 0.31.6 DLL + cfg in that session scratchpad `backup-0.31.6`) | build passed; COMET 1.0.0 compatibility: CometAdapter keeps COMET movement recovery off bots a Mercy layer drives (lookup replayed on installed COMET.dll); notes releases-0.31.md, docs/engine/integrations.md; verified in raid with COMET 1.0.0 (log, 2026-11-22): COMET escape runs and captor walk-ups uninterrupted, 0 leaks/errors |
+| 0.31.8 | main (committed + pushed 2026-11-22, no tag/release); packed + installed 2026-11-22 (hash-verified; 0.31.7 DLL + cfg in that session scratchpad `backup-0.31.7`) | build passed; gun fetch route-length rule, door waits in fetch/keep-away stall clocks, captor walk-up stall diagnostics; COMET recognition checked (no change); not run in game |
+| 0.31.7 | main @ da7051d (pushed 2026-11-22, no tag/release); packed + installed 2026-11-22 (hash-verified; 0.31.6 DLL + cfg in that session scratchpad `backup-0.31.6`) | build passed; COMET 1.0.0 compatibility: CometAdapter keeps COMET movement recovery off bots a Mercy layer drives (lookup replayed on installed COMET.dll); notes releases-0.31.md, docs/engine/integrations.md; verified in raid with COMET 1.0.0 (log, 2026-11-22): COMET escape runs and captor walk-ups uninterrupted, 0 leaks/errors |
 | 0.31.6 | main @ 09373e7 (pushed 2026-11-22, no tag/release; 0.31.4 + 0.31.5 included); packed + installed 2026-11-22 (hash-verified; 0.31.5 DLL + cfg in that session scratchpad `backup-0.31.5`) | build passed; fetch empty-hands root cause, meds/stim wait, bolt route next frame, opening checks capped; 0.31.5 captor aim + ignored surrender + truce verified in raid; 0.31.6 not run in game |
 | 0.31.5 | UNCOMMITTED on top of main @ b405669 (with 0.31.4); packed + installed 2026-11-22 (hash-verified; 0.31.4 DLL + cfg in that session scratchpad `backup-0.31.4`) | build passed, cfg bind 441 -> 445, FleePoint equivalence sim 20,000/20,000; captor aim (threat-timed), route search best-first, menu prewarm, Draw timer; not run in game |
 | 0.31.4 | UNCOMMITTED on top of main @ b405669; packed + installed 2026-11-22 (hash-verified; 0.31.3 DLL + cfg in that session scratchpad `backup-0.31.3`) | build passed; fixes from the 0.31.3 Customs test raid (late gun dropped, hide wait, fetch hands-wait cap, give-up diagnostics); 0.31.1-0.31.3 fixes verified in raid; not run in game |

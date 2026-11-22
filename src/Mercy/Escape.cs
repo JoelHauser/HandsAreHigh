@@ -287,6 +287,16 @@ namespace Mercy
                 FetchNote(e, $"a {name} {d:0} m away, no route ({np}): leaves it");
                 return false;
             }
+            // 0.31.8: his reach is a walk, not a straight line. The 0.31.7 raid: Twitch_JACK went for an
+            // AKS-74U 6 m away (reach 8 m) whose route was 285 m round (the gun behind a wall), and the leg
+            // ended stuck at a door. The way there may be longer than the line, not much longer than his reach.
+            float walk = Captors.PathLength(path);
+            if (walk > Mathf.Max(e.FetchRange * 1.5f, 2f * d + 2f))
+            {
+                (e.FetchSkip ?? (e.FetchSkip = new List<Item>(2))).Add(gun);
+                FetchNote(e, $"a {name} {d:0} m away, but the way round is {walk:0} m (his reach {e.FetchRange:0} m): leaves it");
+                return false;
+            }
             if (Perception.Alive(e.Captor) && Perception.RoutePassesNear(path, e.ThreatAt, 8f)) { FetchNote(e, $"a {name} {d:0} m away, but the way passes his ex-captor: not now"); return false; }
             e.Fetch = true;
             e.Active = true;
@@ -448,6 +458,8 @@ namespace Mercy
             }
             if (Perception.Flat(me.Position, _dest) < 1.5f) { Escape.EndLeg(me, "got there"); return; }
             if (now - _since > 20f) { Escape.EndLeg(me, "20 s on the way"); return; }
+            // 0.31.8: the stall clock waits while the door opener has him (see RunFetch); 20 s still bounds it.
+            if (_moving && DoorBusy()) { _progressFrom = me.Position; _progressAt = now; BotOwner.Sprint(false); return; }
             if ((me.Position - _progressFrom).sqrMagnitude > 1f) { _progressFrom = me.Position; _progressAt = now; }
             else if (now - _progressAt > 4f) { Escape.EndLeg(me, StuckWhy(me)); return; }
 
@@ -463,7 +475,6 @@ namespace Mercy
             bool sprint = _sprint;
             BotOwner.SetPose(1f);
             BotOwner.SetTargetMoveSpeed(1f);
-            if (_moving && DoorBusy()) { BotOwner.Sprint(false); return; }
             if (!_moving || now >= _nextPath)
             {
                 _nextPath = now + 3f;
@@ -522,12 +533,15 @@ namespace Mercy
                 MercyPlugin.Try("fetch pick-up", () => Arsenal.PickUp(me, gun, ok => OnPicked(me, gun, ok, token)));
                 return;
             }
+            // 0.31.8: while the game's door opener has him, the stall clock waits (as the prisoner's own walk,
+            // SurrenderLogic.MoveTo). Before, time at a door counted: the 0.31.7 raid ended a fetch "stuck ...
+            // at a door" after 4 s. The leg's own time limit still bounds a door that never opens.
+            if (_moving && DoorBusy()) { _progressFrom = me.Position; _progressAt = now; BotOwner.Sprint(false); return; }
             if ((me.Position - _progressFrom).sqrMagnitude > 1f) { _progressFrom = me.Position; _progressAt = now; }
             else if (_moving && now - _progressAt > 4f) { Escape.FetchSkip(me, gun); Escape.EndLeg(me, StuckWhy(me)); return; }
             BotOwner.SetPose(1f);
             BotOwner.SetTargetMoveSpeed(1f);
             BotOwner.Sprint(false);
-            if (_moving && DoorBusy()) return;
             if (!_moving || now >= _nextPath)
             {
                 _nextPath = now + 3f;
