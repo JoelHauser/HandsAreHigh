@@ -20,10 +20,11 @@
       lineup.jpg (four strips stacked), orders.jpg, prisoner.jpg, squad.jpg, roadblock.jpg
     Not on the page: docs/images/cover.jpg, the painted grid cover (scripts/make_cover.py), for
     socials or a gallery; holding.jpg / captors.jpg (make_art.py stills) are retired.
-    dist/Mercy-teaser.mp4      32 s 1080p teaser, silent: add a music bed when uploading to YouTube
+    dist/Mercy-teaser.mp4      32 s 1080p teaser, silent
   Images are served from the repository, so they show once pushed to main.
-  Once the teaser is on YouTube: add "## See it in action" with the link on its own line, after
-  "What happens" (the Forge embeds it).
+  Video: https://youtu.be/k9EUDdaMcZw ("See it in action"). The Forge shows YouTube's own thumbnail
+  (i.ytimg.com/vi/<id>/hqdefault.jpg) with a play button and loads the player on click; set
+  docs/images/hero.jpg (1280x720) as the video's custom thumbnail in YouTube Studio.
 
   Short-description field:
     "Bots can give up. A beaten Scav or PMC drops his gun and raises his hands, then waits for his chance. Give him orders, take him prisoner, or watch bots take each other."
@@ -59,6 +60,10 @@
 - **Walk away and he gets clear.** He waits until he's sure you're gone, then keeps his distance, goes back for his own gun when it's safe, picks up one lying nearby, or hides.
 
 ![A bot with his hands behind his head in front of a burning warehouse](https://raw.githubusercontent.com/JoelHauser/Mercy/main/docs/images/orders.jpg)
+
+## See it in action
+
+https://youtu.be/k9EUDdaMcZw
 
 ## When a bot takes the surrender
 
