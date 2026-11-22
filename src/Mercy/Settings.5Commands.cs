@@ -18,6 +18,8 @@ namespace Mercy
         internal static ConfigEntry<bool> WheelSelect;
         internal static ConfigEntry<float> MenuScale;
         internal static ConfigEntry<bool> Hints;
+        internal static ConfigEntry<bool> HideUi;
+        internal static ConfigEntry<KeyboardShortcut> HideUiKey;
         internal static ConfigEntry<bool> DemandEnabled;
         internal static ConfigEntry<KeyboardShortcut> DemandKey;
         internal static ConfigEntry<bool> KneelEnabled;
@@ -77,37 +79,41 @@ namespace Mercy
             NumberKeysChoice = c.Bind(S5, "Number keys", NumberKeysMode.Numpad,
                 Text("While the menu is open, 1-9 give the numbered order and 0 closes it; the hotbar ignores those keys meanwhile. Numpad: the numpad works too. Off: no number keys.", false));
             WheelSelect = c.Bind(S5, "Mouse wheel selects", true,
-                Text("While the menu is open the mouse wheel moves the highlight (and doesn't change your walking speed).", false));
+                Text("While the menu is open the mouse wheel moves the highlight (and doesn't change your walking speed).", true));
             MenuScale = c.Bind(S5, "Menu size", 1f,
                 Range("On top of the automatic scaling to your screen height.", 0.6f, 2f, false));
             Hints = c.Bind(S5, "On-screen hints", true,
                 Text("A small prompt when you can give orders, and debug confirmations.", false));
+            HideUi = c.Bind(S5, "Hide all Mercy UI", false,
+                Text("For screenshots and recording: nothing of Mercy's is drawn (hints, overlay, scenario menu and panel), and the order menu is off, so your interact key works as normal next to prisoners. Debug and scenario keys still work. Toggle it in a raid with the key below.", false));
+            HideUiKey = c.Bind(S5, "Hide all Mercy UI key", new KeyboardShortcut(KeyCode.Insert),
+                Text("Switches Hide all Mercy UI on and off.", false));
             DemandEnabled = c.Bind(S5, "Stop demand", false,
                 Text("Saying the game's Stop line to a bot under your crosshair asks him to surrender: it brings his surrender check forward and adds pressure; it doesn't make him comply.", false));
             DemandKey = c.Bind(S5, "Shout Stop key", KeyboardShortcut.Empty,
                 Text("Optional. Makes your character say the Stop line; counts as the same demand.", false));
             KneelEnabled = c.Bind(S5, "Kneel on Get down", true,
-                Text("Get down puts him on both knees with his hands behind his head; On your feet brings him back up. Off (or where the ground doesn't allow it): a crouch with hands up.", false));
+                Text("Get down puts him on both knees with his hands behind his head; On your feet brings him back up. Off (or where the ground doesn't allow it): a crouch with hands up.", true));
             HandsOnHeadOrder = c.Bind(S5, "Hands on head order", true,
-                Text("The menu offers Hands on head (and Hands up to undo it). A man still holding something drops it first.", false));
+                Text("The menu offers Hands on head (and Hands up to undo it). A man still holding something drops it first.", true));
             TurnOrder = c.Bind(S5, "Turn around order", true,
-                Text("The menu offers Turn around: he turns his back to whoever gave the order and stays that way.", false));
+                Text("The menu offers Turn around: he turns his back to whoever gave the order and stays that way.", true));
             KitOrder = c.Bind(S5, "Kit order", true,
-                Text("The menu offers the order to drop his kit.", false));
+                Text("The menu offers the order to drop his kit.", true));
             ArmourOrder = c.Bind(S5, "Armour order", true,
-                Text("The menu offers the order to drop his armour.", false));
+                Text("The menu offers the order to drop his armour.", true));
             FollowOrder = c.Bind(S5, "Follow order", true,
-                Text("The menu offers Follow me.", false));
+                Text("The menu offers Follow me.", true));
             PartialCompliance = c.Bind(S5, "Prisoners may keep a weapon", true,
-                Text("Drop your weapons covers every gun and his knife. Each time he decides whether to give up all of them or quietly keep one (a sidearm or knife first). Off: he always drops everything.", false));
+                Text("Drop your weapons covers every gun and his knife. Each time he decides whether to give up all of them or quietly keep one (a sidearm or knife first). Off: he always drops everything.", true));
             BotVoice = c.Bind(S5, "Bot voice lines", true,
                 Text("Held bots use the game's own lines (hold fire, roger, negative...).", false));
             Chatter = c.Bind(S5, "Talk while held", true,
-                Text("A held bot sometimes speaks on his own (mutters, asks for help) and replies to what you do. Lines his voice lacks are skipped.", false));
+                Text("A held bot sometimes speaks on his own (mutters, asks for help) and replies to what you do. Lines his voice lacks are skipped.", true));
             Acknowledge = c.Bind(S5, "Answer orders out loud", true,
-                Text("He answers an order (roger, going; negative if he can't) after a short, varied delay.", false));
+                Text("He answers an order (roger, going; negative if he can't) after a short, varied delay.", true));
             DefiantRemarks = c.Bind(S5, "Defiant remarks", true,
-                Text("Bold bots sometimes insult you instead. Only Scav voices have such lines.", false));
+                Text("Bold bots sometimes insult you instead. Only Scav voices have such lines.", true));
             CaptorSpeech = c.Bind(S5, "Captors speak", true,
                 Text("Bot captors talk: surrender demands, orders, warnings, hand-overs, in their own voice. The order applies either way.", false));
             CommandSpeech = c.Bind(S5, "Speak your orders", false,

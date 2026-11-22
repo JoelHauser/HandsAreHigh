@@ -219,13 +219,13 @@ namespace Mercy
                 // The usual exits (no human target, far away): no message is built unless
                 // Verbose logs are on.
                 EnemyInfo goal = owner.Memory?.GoalEnemy;
-                if (goal == null) { SurrenderStats.Gate(NaturalGate.NoTarget); if (Verbose(bot)) Blocked(bot, "no enemy targeted"); return; }
+                if (goal == null) { SurrenderStats.Gate(NaturalGate.NoTarget); if (LogBlock(bot, h, NaturalGate.NoTarget)) Blocked(bot, "no enemy targeted"); return; }
                 Player foe = Perception.PlayerOf(goal.Person);
-                if (foe == null || !Perception.Alive(foe)) { SurrenderStats.Gate(NaturalGate.TargetNotLiving); if (Verbose(bot)) Blocked(bot, "his target isn't a living player"); return; }
+                if (foe == null || !Perception.Alive(foe)) { SurrenderStats.Gate(NaturalGate.TargetNotLiving); if (LogBlock(bot, h, NaturalGate.TargetNotLiving)) Blocked(bot, "his target isn't a living player"); return; }
                 if (foe.IsAI)
                 {
                     string no = BotFoeBlocked(bot, foe);
-                    if (no != null) { SurrenderStats.Gate(NaturalGate.BotTarget); if (Verbose(bot)) Blocked(bot, no); return; }
+                    if (no != null) { SurrenderStats.Gate(NaturalGate.BotTarget); if (LogBlock(bot, h, NaturalGate.BotTarget)) Blocked(bot, no); return; }
                 }
                 enemy = foe;
                 seenNow = goal.IsVisible;
@@ -238,7 +238,7 @@ namespace Mercy
                 if (!seenNow && since > Settings.SeenWithin.Value && !(fire && goal.HaveSeen && since < Settings.EnemyMemory.Value))
                 {
                     SurrenderStats.Gate(NaturalGate.NotPerceived);
-                    if (Verbose(bot)) Blocked(bot, $"hasn't seen {Restraint.Name(foe)} for {since:0} s and isn't under fire");
+                    if (LogBlock(bot, h, NaturalGate.NotPerceived)) Blocked(bot, $"hasn't seen {Restraint.Name(foe)} for {since:0} s and isn't under fire");
                     return;
                 }
             }
@@ -419,7 +419,20 @@ namespace Mercy
         // Why a bot isn't even considered (Verbose logs only: in a long fight between bots
         // this fired every few seconds per bot).
         // Debug scenario participants: every check is logged (and so reaches the scenario timeline).
-        private static bool Verbose(Player bot) => Settings.VerboseLogs.Value || Scenarios.Watching(bot);
+
+        // 0.31.0: with Verbose logs on (not a scenario bot), the same gate for the same bot is logged
+        // once a minute, not every check: the 0.30.2 raid wrote ~5,000 identical "no surrender
+        // check" lines (two thirds of all Mercy lines), each one a log write on the main thread.
+        private static bool LogBlock(Player bot, BotHistory h, NaturalGate gate)
+        {
+            if (Scenarios.Watching(bot)) return true;
+            if (!Settings.VerboseLogs.Value) return false;
+            float now = Time.time;
+            if (h.LastBlockGate == (int)gate && now < h.LastBlockLogAt + 60f) return false;
+            h.LastBlockGate = (int)gate;
+            h.LastBlockLogAt = now;
+            return true;
+        }
 
         private static void Blocked(Player bot, string why) =>
             MercyPlugin.Log.LogInfo($"{Restraint.Name(bot)} ({bot.Profile?.Info?.Settings?.Role}): no surrender check: {why}");

@@ -76,25 +76,25 @@ namespace Mercy
             PmcChance = c.Bind(S2, "PMC base chance", 0.12f,
                 Range("How readily PMCs give up: about a third of a Scav's odds.", 0f, 1f, false));
             BossChance = c.Bind(S2, "Boss base chance", 0.03f,
-                Range("Followers (and Rogues); only with Bosses can surrender on (section 1). Bosses themselves use the last survivor settings below.", 0f, 1f, false));
+                Range("Boss followers; only with Bosses can surrender on (section 1). Bosses themselves use the last survivor settings below.", 0f, 1f, true));
             LoneBossSurrender = c.Bind(S2, "Boss last survivor can surrender", true,
-                Text("A boss never gives up while any of his guards may still be alive (far away, asleep or despawned counts as alive). Once every guard is confirmed dead he may consider it. A boss who spawned alone never does. Needs Bosses can surrender on (section 1).", false));
+                Text("A boss never gives up while any of his guards may still be alive (far away, asleep or despawned counts as alive). Once every guard is confirmed dead he may consider it. A boss who spawned alone never does. Needs Bosses can surrender on (section 1).", true));
             LoneBossChance = c.Bind(S2, "Boss last survivor chance", 0.3f,
-                Range("Highest chance of a lone boss giving up, at full stress (badly hurt, pinned down, out of ammo); nerve, personality and experience lower it. He weighs it at most 3 times per raid, each time only if he is clearly worse off than when he last refused.", 0f, 1f, false));
+                Range("Highest chance of a lone boss giving up, at full stress (badly hurt, pinned down, out of ammo); nerve, personality and experience lower it. He weighs it at most 3 times per raid, each time only if he is clearly worse off than when he last refused.", 0f, 1f, true));
             BotSurrenderScale = c.Bind(S2, "Chance against bots", 0.85f,
-                Range("Multiplies the chance of giving up when the threat is a bot instead of you (you: 1).", 0f, 2f, false));
+                Range("Multiplies the chance of giving up when the threat is a bot instead of you (you: 1).", 0f, 2f, true));
             RequiredFactors = c.Bind(S2, "Reasons needed", 2,
-                IntRange("How many separate reasons must apply at once (injury, ammo, fire, being outnumbered, losing his squad). Severe injury, being pinned down or a Stop demand count on their own.", 1, 5, false));
+                IntRange("How many separate reasons must apply at once (injury, ammo, fire, being outnumbered, losing his squad). Severe injury, being pinned down or a Stop demand count on their own.", 1, 5, true));
             SurrenderCooldown = c.Bind(S2, "Cooldown after a surrender (s)", 30f,
                 Range("Once he is fighting again, how long before he can give up again.", 0f, 300f, false));
             BoltWhenShot = c.Bind(S2, "Bolt when shot", true,
                 Text("Hit while his hands are up, by anyone: he runs.", false));
             HitGrace = c.Bind(S2, "Hits ignored after giving up (s)", 2f,
-                Range("A man hit this soon after dropping his gun was shot by someone who hadn't seen his hands go up yet: he stays down instead of bolting. Later hits still make him run.", 0f, 6f, false));
+                Range("A man hit this soon after dropping his gun was shot by someone who hadn't seen his hands go up yet: he stays down instead of bolting. Later hits still make him run.", 0f, 6f, true));
             FastHolster = c.Bind(S2, "Fast weapon drop", true,
-                Text("Empties his hands with the game's quick holster before throwing the gun. Off: the normal holster animation.", false));
+                Text("Empties his hands with the game's quick holster before throwing the gun. Off: the normal holster animation.", true));
             FinishReloadInstantly = c.Bind(S2, "Cut a reload short", true,
-                Text("A reload in progress would hold up the drop. On: it is finished at once (as the game does for bots) and the gun drops. Off: he finishes the reload first.", false));
+                Text("A reload in progress would hold up the drop. On: it is finished at once (as the game does for bots) and the gun drops. Off: he finishes the reload first.", true));
             NerveMin = c.Bind(S2, "Nerve min", 0f,
                 Range("Each bot rolls his nerve once per raid between min and max. High nerve: slower to give up, quicker to try something.", 0f, 1f, true));
             NerveMax = c.Bind(S2, "Nerve max", 1f,

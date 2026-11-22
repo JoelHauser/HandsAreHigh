@@ -3,3 +3,6 @@ obj/
 dist/
 *.user
 .vs/
+__pycache__/
+# raw screenshots for the page art (~90 MB): kept local; scripts/make_*.py read them
+art/screens/

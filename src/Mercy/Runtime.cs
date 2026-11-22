@@ -21,7 +21,8 @@ namespace Mercy
         {
             if (_gui == null) _gui = GetComponent<RuntimeGui>();
             if (_gui == null) return;
-            bool need = inRaid && (SurrenderRegistry.Any || OrderMenu.HasNote || ScenarioUi.NeedsGui);
+            // 0.31.2: Hide all Mercy UI (screenshots): the drawing component is off, nothing is drawn.
+            bool need = inRaid && !Settings.HideUi.Value && (SurrenderRegistry.Any || OrderMenu.HasNote || ScenarioUi.NeedsGui);
             if (_gui.enabled != need) _gui.enabled = need;
         }
 
@@ -31,6 +32,11 @@ namespace Mercy
             // Latches end on key release even if nothing else runs; ownership lapses by itself.
             InputGuard.Tick();
             bool inRaid = SurrenderRegistry.InRaid;
+            if (inRaid && Settings.HideUiKey.Value.IsDown())
+            {
+                Settings.HideUi.Value = !Settings.HideUi.Value;
+                MercyPlugin.Log.LogInfo($"Mercy UI {(Settings.HideUi.Value ? "hidden" : "shown")} (Hide all Mercy UI key)");
+            }
             ToggleGui(inRaid);
             if (!inRaid)
             {

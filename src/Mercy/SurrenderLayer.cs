@@ -1392,7 +1392,10 @@ namespace Mercy
 
             Vector3 hidePoint = Vector3.zero;
             if (dist < Settings.EscapeMinDistance.Value * 0.5f) log.Append("hide: you're right there; ");
-            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.CoverRadius.Value, true, out hidePoint)) log.Append("hide: no hidden spot near; ");
+            // 0.31.0: only "is there one" here (first hidden, reachable spot); the full cover search
+            // (up to PathCandidates path solves) runs in Hiding on a frame with heavy budget. It cost
+            // 4-8 ms in the frame of every opening in the 0.30.2 raid (Profile spike, Layer).
+            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.CoverRadius.Value, true, out hidePoint, anyOnly: true)) log.Append("hide: no hidden spot near; ");
             else Add(options, log, "hide", Settings.HideWeight.Value * (1.3f - nerve) * flee * (s.LegsBad ? 1.5f : 1f) * (kneeling ? 0.8f : 1f));
 
             if (options.Count == 0)
@@ -1421,10 +1424,12 @@ namespace Mercy
             else if (chosen.Name == "hide")
             {
                 BeginHide(s, ThreatPos(s, captor), "slips into cover during an opening");
-                s.HideSearchPending = false;   // already found one
+                // The best spot is searched next (Hiding); the one found above is the fallback, so a
+                // search that rolls no better candidates still sends him to cover.
+                s.HideSearchPending = true;
+                s.HideFallback = hidePoint;
+                s.HasHideFallback = true;
                 s.TargetPoint = hidePoint;
-                s.HideMoving = true;
-                SetHideTime(s);
                 MarkKneelEscape(s, "hide");
             }
             else if (Arsenal.Draw(s, BotOwner, false))
@@ -2327,6 +2332,7 @@ namespace Mercy
             s.HideFromFire = fromFire;
             if (!fromFire) s.ThreatAt = s.CaptorLastSeen;
             s.HideUntil = Time.time + Settings.FireCoverSeconds.Value;
+            s.HasHideFallback = false;
             s.SetPhase(Phase.Hiding, why);
             // The cover search (up to PathCandidates path solves) runs from Hiding on a frame
             // with heavy-search budget, usually this one or the next.
@@ -2357,6 +2363,8 @@ namespace Mercy
                 bool found = s.HideFromFire
                     ? Perception.CoverPoint(Me, s.ThreatAt, Settings.FireCoverRadius.Value, null, out s.TargetPoint, out _)
                     : Perception.RetreatPoint(Me, s.ThreatAt, Settings.CoverRadius.Value, true, out s.TargetPoint);
+                if (!found && s.HasHideFallback && !s.HideFromFire) { s.TargetPoint = s.HideFallback; found = true; }
+                s.HasHideFallback = false;
                 if (!found)
                 {
                     EndHide(s, $"no reachable cover within {(s.HideFromFire ? Settings.FireCoverRadius.Value : Settings.CoverRadius.Value):0} m");

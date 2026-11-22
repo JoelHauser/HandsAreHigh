@@ -17,6 +17,8 @@ namespace Mercy
         internal int SquadPeak;
         internal int SquadSeen;
         internal float SquadLossTime = -1000f;
+        internal int LastBlockGate = -1;        // 0.31.0: Verbose "no surrender check" dedupe (NaturalSurrender.LogBlock)
+        internal float LastBlockLogAt = -1000f;
 
         // 0.29.0, bosses only (BossSquad.cs): everyone ever seen in his squad this raid (ids and
         // players, parallel; null until his first check), and his last-survivor rolls (a few per
@@ -417,6 +419,7 @@ namespace Mercy
                 s.Bot.AIData?.BotOwner?.ShootData?.EndShoot();
                 (s.Bot.HandsController as Player.FirearmController)?.SetTriggerPressed(false);
             });
+            EndAutoFire(s);
 
             MercyPlugin.Try("drop weapon in hands", () =>
             {
@@ -503,6 +506,21 @@ namespace Mercy
                 $"weapon ready {Rel(s.TDrawReady)} (game draw animation), handed to the AI {Rel(Time.realtimeSinceStartup)}");
             s.TDecided = -1f;
             s.TDrawAsked = -1f;
+        }
+
+        // 0.31.1: an automatic still in its fire operation takes no hide. FireOperationBase.HideWeapon
+        // only stores the hide (_plannedAction) for the end of the current fire cycle, and with an
+        // empty gun that end never came: ILikeLooting's empty RPK-16 sat in AutomaticFireOperation
+        // through 3 drop requests, twice, and he was handed back armed ("drop failed", 2026-11-22).
+        // The game's own AutomaticFireOperation.FastForward is SwitchToIdling (trigger up, idle
+        // pose, operation finished, no shot), so the hide asked straight after runs from Idling.
+        // Automatic fire only: FireOperation.FastForward fires a shot that hasn't gone yet.
+        private static void EndAutoFire(SurrenderState s)
+        {
+            if (!(s.Bot?.HandsController is Player.FirearmController fc)) return;
+            if (!(fc.CurrentOperation is Player.FirearmController.AutomaticFireOperation)) return;
+            MercyPlugin.Log.LogInfo($"{s.Name}: hands still in automatic fire ({Arsenal.DescribeHands(s.Bot)}); ended so the gun can drop");
+            MercyPlugin.Try("end automatic fire", () => fc.FastForwardCurrentState());
         }
 
         internal static void CutReload(SurrenderState s)

@@ -4,12 +4,16 @@ Update this file at every task boundary (replace, don't append a transcript). Us
 exactly: **implemented** / **build passed** / **simulation passed** / **verified in raid** (log or
 Joel's eyes). Release history lives in `docs/history/`.
 
-Last updated: 2026-11-21 (renamed Hands Are High -> Mercy, GUID com.mybutthasarash.mercy; see docs/history/releases-0.29.md).
+Last updated: 2026-11-22 (0.31.0 release-quality pass; see docs/history/releases-0.31.md).
 
 ## State of the code
 
 | Version | Where | Level |
 |---|---|---|
+| 0.31.3 | UNCOMMITTED on top of main @ 77dd8bc; packed + installed 2026-11-22 (hash-verified; 0.31.2 DLL + cfg in that session scratchpad `backup-0.31.2`) | build passed; order menu off while Hide all Mercy UI is on (0.31.2 let an invisible menu take F near prisoners); not run in game |
+| 0.31.2 | UNCOMMITTED on top of main @ 77dd8bc; packed + installed 2026-11-22 (hash-verified; 0.31.1 DLL + cfg in that session scratchpad `backup-0.31.1`) | build passed, cfg bind 439 -> 441 (2 keys added); Hide all Mercy UI setting + Insert key; not run in game |
+| 0.31.1 | UNCOMMITTED on top of main @ 77dd8bc; packed + installed 2026-11-22 (hash-verified; 0.31.0 DLL + cfg in that session scratchpad `backup-0.31.0`) | build passed; empty automatic fast-forwarded out of AutomaticFireOperation before the drop; released men no longer get a weapon change while healing (WeaponState.MaybeChange); not run in game |
+| 0.31.0 | UNCOMMITTED on top of main @ 77dd8bc; packed (`dist/Mercy-0.31.0.zip`) + installed in H:/SPT4.1.X 2026-11-22 (hash-verified; 0.30.2 DLL + cfg in that session scratchpad `backup-0.30.2`); notes docs/history/releases-0.31.md | build passed (Debug + Release, 0 warnings), cfg bind 439/439 unchanged; opening hide search deferred, Verbose skip-log dedupe, F12 103 -> 50 visible; not run in game |
 | 0.30.2 | main @ 8a60172 (pushed 2026-11-21, no tag/release); packed + installed 2026-11-21 (hash-verified); notes docs/history/releases-0.30.md | build passed, tools/bosstest 55/55; 0.30.1 loose-gun pick-ups, area lock and calm-hide Decide verified in raid; 0.30.2 (drop trigger fix, released-man gun fetch, COMET target fix) not run |
 | 0.30.0 (Mercy) | UNCOMMITTED on top of main @ a8c9252 (0.29.0 + 0.29.1 + rename + Lighthouse fixes + prone get-up); packed + installed in H:/SPT4.1.X 2026-11-21 (hash-verified, HandsAreHigh.dll removed, cfg migrated); notes docs/history/releases-0.30.md | build passed, tools/bosstest 55/55, cfg bind 439/439 on the renamed DLL; boss gate + natural last-survivor roll verified in raid on 0.29.1 (Lighthouse); 0.30.0 itself not run |
 | 0.29.1 | UNCOMMITTED on top of main; packed (`dist/Mercy-0.29.1.zip`) and installed 2026-11-21 (hash-verified; 0.29.0 DLL + cfg in that session scratchpad `backup-0.29.0`): unset last-seen position fix, trigger-log wording | build passed (Release, 0 warnings), tools/bosstest 52/52; not run in game |
@@ -28,6 +32,12 @@ Last updated: 2026-11-21 (renamed Hands Are High -> Mercy, GUID com.mybutthasara
 No GitHub release exists for any version. Joel decides commits/pushes.
 
 ## Objective in progress
+
+0.31.0 (installed, unrun): release-quality pass from the 0.30.2 Profile log. Opening frames cost 4-8 ms
+(full cover search to see if "hide" was possible): now an availability check, full search deferred to
+Hiding. Verbose "no surrender check" repeats once a minute per bot per reason (~5,000 lines/raid). F12
+shows 50 settings by default (was 103), no key renamed. Checks: releases-0.31.md "In-raid checks".
+Open: one captor walk-up stuck 2.5 s with the mover idle (recovered on retry, cause unknown).
 
 0.29.0 (installed, unrun): bosses give up only once every guard is confirmed dead (BossSquad), a few
 escalating rolls; Raiders (pmcBot) are their own class with PMC odds, eligible with bosses off (they

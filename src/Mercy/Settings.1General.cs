@@ -41,7 +41,7 @@ namespace Mercy
             OrdersEnabled = c.Bind(S1, "Order menu", true,
                 Text("Look at a held bot up close and press the menu key to give orders (section 5).", false));
             IncludeBosses = c.Bind(S1, "Bosses can surrender (restart)", false,
-                Text("Off: bosses and their followers never surrender. On: followers can, far more reluctantly than PMCs, and a boss only once his whole squad is dead (Boss settings in section 2). Raiders don't need this. Needs a game restart.", false));
+                Text("Off: bosses and their followers never surrender. On: followers can, far more reluctantly than PMCs, and a boss only once his whole squad is dead (Boss settings in section 2, under Show advanced). Raiders don't need this. Needs a game restart.", false));
             SainPersonality = c.Bind(S1, "SAIN: use personality", true,
                 Text("Cowards and Timmys give up sooner and run more; Chads and GigaChads hold out and fight more. No effect without SAIN.", true));
             SainSuppression = c.Bind(S1, "SAIN: use suppression", true,

@@ -73,6 +73,11 @@ namespace Mercy
                 // Ours (held, fleeing, drawing): our layer owns his hands; a change here would be a
                 // second hands operation on top of ours.
                 if (SurrenderRegistry.HoldsBot(o.GetPlayer) || Escape.KeepAway(o.GetPlayer)) return;
+                // 0.31.1: only from empty hands or a knife. "Disarmed" is any non-firearm controller, so a
+                // released man healing (meds in hands) whose AI asked for a reload got a weapon change on
+                // top of the meds: the busy-hands glitch Joel saw on healing bots (2026-11-22).
+                Player.AbstractHandsController hc = o.GetPlayer?.HandsController;
+                if (!(hc is Player.EmptyHandsController) && !(hc is Player.BaseKnifeController)) return;
                 if (Arsenal.UsableGun(o.GetPlayer) == null) return;
                 wm.Selector.TryChangeWeapon(ignoreDistance: true);
             }

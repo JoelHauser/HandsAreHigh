@@ -97,41 +97,41 @@ namespace Mercy
             IgnoreChance = c.Bind(S3, "Ignore chance", 0.2f,
                 Range("Base chance a bot ignores a surrender, rolled once before he decides anything else.", 0f, 1f, false));
             IgnoreInfluence = c.Bind(S3, "Ignore: personality and situation", 1f,
-                Range("0: every bot uses the plain ignore chance. 1: full influence. Bold or timid bots, a bot busy with another threat, far away or unable to guard ignore more; careful ones, looters, rivals and men with valuable kit get more attention. Never a man who hurt him.", 0f, 1f, false));
+                Range("0: every bot uses the plain ignore chance. 1: full influence. Bold or timid bots, a bot busy with another threat, far away or unable to guard ignore more; careful ones, looters, rivals and men with valuable kit get more attention. Never a man who hurt him.", 0f, 1f, true));
             IgnoreTruceSeconds = c.Bind(S3, "Truce after an ignored surrender (s)", 30f,
-                Range("After an ignored surrender the man and that bot (and the squadmates who held fire) don't fire at each other for this long, armed or not, so a target left over from the fight can't start a firefight. Ends at once if either hits the other. 0: no truce.", 0f, 180f, false));
+                Range("After an ignored surrender the man and that bot (and the squadmates who held fire) don't fire at each other for this long, armed or not, so a target left over from the fight can't start a firefight. Ends at once if either hits the other. 0: no truce.", 0f, 180f, true));
             MaxAiEncounters = c.Bind(S3, "Bot-held prisoners at once", 4,
-                IntRange("Across the map. Further surrenders to bots are spared or refused instead of taken.", 0, 16, false));
+                IntRange("Across the map. Further surrenders to bots are spared or refused instead of taken.", 0, 16, true));
             HoldMin = c.Bind(S3, "Hold time min (s)", 25f,
-                Range("How long a bot keeps a prisoner before letting him go (or earlier, by his plan). Never indefinite.", 5f, 300f, false));
+                Range("How long a bot keeps a prisoner before letting him go (or earlier, by his plan). Never indefinite.", 5f, 300f, true));
             HoldMax = c.Bind(S3, "Hold time max (s)", 70f,
-                Range("Upper end of the hold time.", 5f, 600f, false));
+                Range("Upper end of the hold time.", 5f, 600f, true));
             AlliedCaptors = c.Bind(S3, "Your allies make bots surrender", true,
                 Text("Bots on your side can make a bot give up and hold fire, but never guard him themselves; you can take over their prisoner with the order menu.", false));
             NaturalEndings = c.Bind(S3, "Captors end encounters on their own", true,
-                Text("Once done with a prisoner (disarmed, gear taken), a bot decides what next: tell him to go, walk away, or leave a squadmate to watch him. Off: every encounter waits for the hold time and ends with a Leave order.", false));
+                Text("Once done with a prisoner (disarmed, gear taken), a bot decides what next: tell him to go, walk away, or leave a squadmate to watch him. Off: every encounter waits for the hold time and ends with a Leave order.", true));
             GuardStaysBehind = c.Bind(S3, "Squadmate may stay behind", true,
-                Text("A captor walking away may hand his prisoner to the squadmate covering him; the squad moves on and the guard follows a little later.", false));
+                Text("A captor walking away may hand his prisoner to the squadmate covering him; the squad moves on and the guard follows a little later.", true));
             CaptorLooting = c.Bind(S3, "Captors take dropped gear", true,
                 Text("A bot captor weighs what his prisoner dropped (value, gaps in his own kit, room, safety, his nature) and may take some, all or nothing. Real inventory moves only.", false));
             GearDemands = c.Bind(S3, "Captors demand gear", true,
                 Text("A captor without body armour, a rig or a backpack may order his prisoner to drop one that fits him and is worth having, then picks it up.", false));
             CaptorKneelChance = c.Bind(S3, "Kneel order chance", 0.4f,
-                Range("Chance a captor's plan orders his prisoner onto his knees (needs Kneel on Get down, section 5).", 0f, 1f, false));
+                Range("Chance a captor's plan orders his prisoner onto his knees (needs Kneel on Get down, section 5).", 0f, 1f, true));
             CaptorHandsOnHeadChance = c.Bind(S3, "Hands on head order chance", 0.35f,
-                Range("Chance a captor's plan includes Hands on head once the prisoner is disarmed.", 0f, 1f, false));
+                Range("Chance a captor's plan includes Hands on head once the prisoner is disarmed.", 0f, 1f, true));
             CaptorTurnChance = c.Bind(S3, "Turn around order chance", 0.3f,
-                Range("Chance a captor's plan includes Turn around (before he takes the prisoner's gear, or to keep him looking away).", 0f, 1f, false));
+                Range("Chance a captor's plan includes Turn around (before he takes the prisoner's gear, or to keep him looking away).", 0f, 1f, true));
             CaptorCloseChance = c.Bind(S3, "Close in chance", 0.55f,
-                Range("Chance (once per custody) a captor walks closer to a disarmed prisoner to give orders and control him. Only with nothing threatening him; stops on any threat.", 0f, 1f, false));
+                Range("Chance (once per custody) a captor walks closer to a disarmed prisoner to give orders and control him. Only with nothing threatening him; stops on any threat.", 0f, 1f, true));
             LethalIntent = c.Bind(S3, "Lethal intent chance", 0.25f,
                 Range("Base chance, decided once when a bot takes custody, that he means to shoot the man when he is done with him, even if he complies. More for aggressive personalities and rivals, less for timid ones.", 0f, 1f, false));
             BoltLethal = c.Bind(S3, "Fire at a runner chance", 0.3f,
                 Range("Base chance a captor opens fire on a prisoner who runs from custody unarmed instead of letting him go. A man going for a weapon is always fought.", 0f, 1f, false));
             SquadRestraint = c.Bind(S3, "Squad holds fire", true,
-                Text("When a bot takes, spares or ignores a prisoner, his nearby squadmates hold their fire at that man too. Every other enemy is fought as normal.", false));
+                Text("When a bot takes, spares or ignores a prisoner, his nearby squadmates hold their fire at that man too. Every other enemy is fought as normal.", true));
             ObserverRestraint = c.Bind(S3, "Other bots may spare him", true,
-                Text("Bots outside the captor's squad who see a man with his hands up decide for themselves: hold fire, ignore him for another threat, let him leave, or fight.", false));
+                Text("Bots outside the captor's squad who see a man with his hands up decide for themselves: hold fire, ignore him for another threat, let him leave, or fight.", true));
             SquadCover = c.Bind(S3, "Squadmate covers the captor", true,
                 Text("One free squadmate takes a spot to the side and covers the prisoner while the captor works. Never one of your allies.", false));
             AcceptRange = c.Bind(S3, "Guard range (m)", 20f,

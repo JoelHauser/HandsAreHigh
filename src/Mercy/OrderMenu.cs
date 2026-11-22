@@ -113,7 +113,10 @@ namespace Mercy
 
         internal void Update(Player me)
         {
-            if (!Settings.Enabled.Value || !Settings.OrdersEnabled.Value || me == null || !Perception.Alive(me))
+            // 0.31.3: Hide all Mercy UI means no order menu either: an invisible menu (and the hover claim
+            // that keeps the interact key from the game) took Joel's F presses near prisoners with no
+            // prompt on screen (0.31.2, 2026-11-22). Hidden: closed, F is the game's.
+            if (!Settings.Enabled.Value || !Settings.OrdersEnabled.Value || Settings.HideUi.Value || me == null || !Perception.Alive(me))
             {
                 Close(null, NoteKind.Info);
                 _hover = null;

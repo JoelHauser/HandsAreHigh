@@ -110,35 +110,35 @@ namespace Mercy
         private static void BindAnimations(ConfigFile c)
         {
             FaceCaptor = c.Bind(S6, "Face the captor", true,
-                Text("Turns to face whoever holds him.", false));
+                Text("Turns to face whoever holds him.", true));
             Stance = c.Bind(S6, "Stance with hands up", 1f,
                 Range("1 = standing, 0 = full crouch.", 0f, 1f, false));
             HandsBehindHeadStyle = c.Bind(S6, "Hands behind head", HandsStyle.Laced,
                 Text("Laced: fingers interlaced. OneOverTheOther: one hand over the other. SideBySide: palms side by side, fingers meeting.", false));
             OpenHands = c.Bind(S6, "Open hands", 1f,
-                Range("How far the fingers open while the hands are up. 0: the game's own gripping curl.", 0f, 1f, false));
+                Range("How far the fingers open while the hands are up. 0: the game's own gripping curl.", 0f, 1f, true));
             KneelVariants = c.Bind(S6, "Kneel variants", true,
                 Text("Men kneel upright, settled back on their heels, or forward and tense, chosen from who they are and how they feel. Off: everyone kneels upright.", false));
             KneelBrace = c.Bind(S6, "Brace on the knee when rising", true,
-                Text("The front hand pushes on the front thigh while he rises over that leg.", false));
+                Text("The front hand pushes on the front thigh while he rises over that leg.", true));
             KneelReposition = c.Bind(S6, "Step to a spot with room", true,
-                Text("No room to kneel where he stands: he looks round for a spot that fits and walks there with his hands up first.", false));
+                Text("No room to kneel where he stands: he looks round for a spot that fits and walks there with his hands up first.", true));
             KneelFallbackCrouch = c.Bind(S6, "Crouch when kneeling is impossible", false,
-                Text("Where kneeling isn't possible: on, he crouches with his hands up; off, he stays standing. Either way the reason is logged.", false));
+                Text("Where kneeling isn't possible: on, he crouches with his hands up; off, he stays standing. Either way the reason is logged.", true));
             TurnSteps = c.Bind(S6, "Turn with stepping feet", true,
-                Text("Big turns use the game's standing-turn animation (the feet step). Off: always a pivot.", false));
+                Text("Big turns use the game's standing-turn animation (the feet step). Off: always a pivot.", true));
             Wiggle = c.Bind(S6, "Wiggle", true,
                 Text("Now and then a held bot leans left and right with his hands up (the friendly wiggle).", false));
             Defiant = c.Bind(S6, "Middle finger", true,
                 Text("A held bot may flip you off once with his left hand while the right stays up. Only a gesture: no fight, no draw.", false));
             DemeanorEnabled = c.Bind(S6, "Demeanor styles", true,
-                Text("Each held bot carries himself one of four ways (resigned, frightened, cautious, defiant), shaping how he kneels, looks, fidgets and speaks. Never changes what he decides.", false));
+                Text("Each held bot carries himself one of four ways (resigned, frightened, cautious, defiant), shaping how he kneels, looks, fidgets and speaks. Never changes what he decides.", true));
             HeadMovement = c.Bind(S6, "Head movement", true,
                 Text("Held bots watch their captor and now and then glance at what they know about: their gun, where fire came from, a way out.", false));
             KneelIdle = c.Bind(S6, "Kneeling idle movement", true,
-                Text("While he kneels: an occasional small weight shift and settling of the elbows.", false));
+                Text("While he kneels: an occasional small weight shift and settling of the elbows.", true));
             Flinch = c.Bind(S6, "Flinch at near misses", true,
-                Text("A round passing close to a held bot's head makes him duck and hunch for half a second.", false));
+                Text("A round passing close to a held bot's head makes him duck and hunch for half a second.", true));
             UpperArmRaise = c.Bind(S6, "Arms: upper arm raise (deg)", 22f,
                 Range("Elbow height: 0 = level with the shoulder, positive = above.", -40f, 80f, true));
             UpperArmForward = c.Bind(S6, "Arms: upper arm forward (deg)", 20f,

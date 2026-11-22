@@ -88,25 +88,25 @@ namespace Mercy
         private static void BindEscape(ConfigFile c)
         {
             PrisonerNoticesAbandon = c.Bind(S4, "Notices being left", true,
-                Text("A held man whose bot captor walks away, and whom nobody else covers, notices it, lowers his hands and leaves or goes for a gun. Off: he reacts as if his captor vanished (run, hide or draw).", false));
+                Text("A held man whose bot captor walks away, and whom nobody else covers, notices it, lowers his hands and leaves or goes for a gun. Off: he reacts as if his captor vanished (run, hide or draw).", true));
             IgnoredRecoverRange = c.Bind(S4, "Fetch his gun after being ignored (m)", 15f,
-                Range("Ignored by the bot he gave up to, a man walks back for his dropped gun if it lies within this walking distance, is reachable and nobody has him covered; otherwise he moves to safety. 0: never.", 0f, 40f, false));
+                Range("Ignored by the bot he gave up to, a man walks back for his dropped gun if it lies within this walking distance, is reachable and nobody has him covered; otherwise he moves to safety. 0: never.", 0f, 40f, true));
             RecoverOwnWeapon = c.Bind(S4, "Go back for his own gun", true,
                 Text("After getting away, he returns for his dropped gun if it is still there and you weren't near it.", false));
             ScavengeWeapons = c.Bind(S4, "Look for another gun", true,
-                Text("Loose guns and guns on bodies.", false));
+                Text("After getting away unarmed, he may go for a loose gun or one on a body nearby.", false));
             HighNerveKnife = c.Bind(S4, "Fight with a knife", true,
                 Text("High-nerve bots with no gun to find come back with their knife.", false));
             BreakChance = c.Bind(S4, "Break chance", 0.15f,
-                Range("When you give him an opening: the chance per roll that he acts (scaled by nerve).", 0f, 1f, false));
+                Range("When you give him an opening (look away, reload, step out of sight): the chance each time he weighs it that he acts. Scaled by his nerve.", 0f, 1f, false));
             FireBreaks = c.Bind(S4, "Incoming fire breaks a hold-up", true,
                 Text("A hit or near miss on a prisoner or his bot captor from anyone outside the hold-up ends it: the captor fights, the prisoner gets to safety. A human captor keeps control.", false));
             DefendWhenFleeing = c.Bind(S4, "Fight back when fleeing", true,
-                Text("A man getting away who comes under fire and carries a usable gun may draw it instead of running for cover. Off: cover only.", false));
+                Text("A man getting away who comes under fire and carries a usable gun may draw it instead of running for cover. Off: cover only.", true));
             QuickHandBack = c.Bind(S4, "Quick hand-back to his own AI", true,
-                Text("A man let go or left behind is handed to his own AI (SAIN, ORBIT, the game) as soon as he is on his feet and on his way. Off: he flees in legs and regroups first.", false));
+                Text("A man let go or left behind is handed to his own AI (SAIN, ORBIT, the game) as soon as he is on his feet and on his way. Off: he flees in legs and regroups first.", true));
             LocalReactions = c.Bind(S4, "Runs when another prisoner is shot", true,
-                Text("A held bot who sees another one shot runs.", false));
+                Text("A held bot who sees another one shot runs.", true));
             OpeningDelay = c.Bind(S4, "Opening: must last (s)", 1.5f,
                 Range("For gradual openings (you look away, he loses sight of you) he waits this long on top of his reaction time. Clear ones (reloading, inventory, gun away) only take his reaction time.", 0f, 10f, true));
             BreakInterval = c.Bind(S4, "Opening: roll every (s)", 1f,

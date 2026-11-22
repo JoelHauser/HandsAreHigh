@@ -82,17 +82,17 @@ namespace Mercy
         private static void BindDebugging(ConfigFile c)
         {
             DebugKeys = c.Bind(S7, "Debug keys", false,
-                Text("Turns on the debug keys in this section. Each acts only on the bot under your crosshair.", false));
+                Text("Turns on the debug keys in this section (the keys are listed under Show advanced). Each acts only on the bot under your crosshair.", false));
             SurrenderKey = c.Bind(S7, "Key: surrender", new KeyboardShortcut(KeyCode.LeftBracket),
-                Text("The bot under your crosshair surrenders.", false));
+                Text("The bot under your crosshair surrenders.", true));
             OpeningKey = c.Bind(S7, "Key: give an opening", new KeyboardShortcut(KeyCode.RightBracket),
-                Text("The held bot under your crosshair treats you as not covering him for a few seconds; his own rolls decide what he does.", false));
+                Text("The held bot under your crosshair treats you as not covering him for a few seconds; his own rolls decide what he does.", true));
             LeaveKey = c.Bind(S7, "Key: pretend you left", new KeyboardShortcut(KeyCode.Backspace),
-                Text("The held bot under your crosshair acts as if you walked off.", false));
+                Text("The held bot under your crosshair acts as if you walked off.", true));
             SurrenderToBotKey = c.Bind(S7, "Key: surrender to his enemy", new KeyboardShortcut(KeyCode.LeftBracket, KeyCode.LeftControl),
-                Text("The bot under your crosshair gives up to the bot he is fighting, and that bot decides what to do.", false));
+                Text("The bot under your crosshair gives up to the bot he is fighting, and that bot decides what to do.", true));
             IgnoreKey = c.Bind(S7, "Key: captor ignores him", new KeyboardShortcut(KeyCode.M, KeyCode.LeftControl),
-                Text("The bot the held man under your crosshair gave up to ignores the surrender now (the roll skipped; everything after is real).", false));
+                Text("The bot the held man under your crosshair gave up to ignores the surrender now (the roll skipped; everything after is real).", true));
             Overlay = c.Bind(S7, "Overlay", false,
                 Text("Lists every held bot: phase, order, nerve, arms.", false));
             ScenariosEnabled = c.Bind(S7, "Scenario tools", false,

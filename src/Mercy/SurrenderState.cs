@@ -463,6 +463,8 @@ namespace Mercy
         internal Vector3 DropReachableFrom;
         internal float NextScavengeScan;    // after an empty weapon search, don't search again before
         internal bool HideSearchPending;    // GoHide deferred its cover search to a frame with budget
+        internal Vector3 HideFallback;      // 0.31.0: an opening hide's first-found spot, used if the full search finds none
+        internal bool HasHideFallback;
         internal object SainComponent;      // SAIN BotComponent, cached for ReleaseLayer
         internal float SettledAt = -1f;
         internal bool SettledSampled;
