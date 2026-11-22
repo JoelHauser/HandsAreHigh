@@ -79,3 +79,26 @@ LootingBotsAdapter, Teammates), `HeadFreeLook.cs`, `WeaponState.cs`.
 ## Other installed mods that mattered once
 
 - `HandsAreNotBusy.dll` is also installed in H:\SPT4.1.X (another author's; not referenced by us).
+
+## COMET 1.0.0 RC1 (Chazut, github.com/Chazut/COMET @ 28af156; read 2026-11-21, not installed or run)
+
+SAIN add-on (hard dependency SAIN 4.5.1, SPT 4.1.6) that replaces SAIN combat decisions for PMCs and
+AI Player Scavs (BotEligibility: pmcUSEC/pmcBEAR, or assault with MainProfileNickname / "Scav (Player)").
+Ordinary Scavs, bosses, Raiders keep SAIN. No surrender/hands-up feature of its own. [code]
+- Layers: CrossfireLayer 21, PostCombatLayer 21, MagazineRecoveryLayer 20 on PMC/PmcUsec/PmcBear/Assault/
+  ExUsec/Knight/BigPipe/BirdEye. Ours (Surrender 95, KeepAway 72, Captor 70) outrank them. [code]
+- Most features are Harmony patches on SAIN internals, gated on `BotComponent.SAINLayersActive`
+  (SAINActivationClass: toggled every ManualUpdate from `ActiveLayer != None`, SAIN.dll 4.5.1 decompile).
+  We clear ActiveLayer while holding a bot (SainAdapter.ReleaseLayer), so the gated ones (WeaponReturn
+  incl. TryChangeToSlot/TryChangeWeapon/TryChangeToMain prefixes, PistolSwap, ReloadTiming, QuickReload,
+  MedicalChoice, TacticalDevices) skip our prisoners. [code; inference for runtime order]
+- Not gated on SAIN layers but harmless to a held bot: HandsRecovery (only clears a stuck
+  WeaponManager.Reload.Reloading flag when no native reload runs), WeaponSync (refreshes
+  UpdateWeaponsList / UpdateFirearmsController after inventory changes: our drops and pick-ups),
+  GrenadeChoice (filters SAIN's own throw choice), Surgery* (CancelCurrent on interruption). [code]
+- Target choice: COMET prefixes SAINEnemyController.SelectEnemy (inside ChooseEnemy) and keeps its
+  cached pick while it is in `EnemyController.Enemies` (ThreatUsable), which our Visible/Known list
+  filtering doesn't touch -> a captor could keep his prisoner as target. Fixed on our side in 0.30.2:
+  SainTargetFilter.Postfix drops a blocked result (and _goalEnemy); counter ResultDropped. [code]
+- Needs a raid with COMET installed: prisoner hands while held (no draw), captor target switch after a
+  surrender, released men under COMET's PostCombat layer, Raid Review events.

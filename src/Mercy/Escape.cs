@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using DrakiaXYZ.BigBrain.Brains;
 using EFT;
+using EFT.InventoryLogic;
 using UnityEngine;
 
 namespace Mercy
@@ -25,6 +26,14 @@ namespace Mercy
     //            FleePoint, the same route rules as an escape), then hands him back. At most "Keep
     //            away legs" per release. Logged with the layer and target that brought him back.
     //   Armed    a usable gun: his AI's return is its own decision (logged once, not prevented).
+    //   Fetch    0.30.2 (Joel): neither SAIN nor the game's AI ever picks a gun up, so a man handed
+    //            back unarmed walked past guns for the rest of the raid. While remembered, unarmed and
+    //            not under fire, every 2 s: the nearest loose gun (ground or body) within his own reach
+    //            (FetchRangeFor: nerve and personality, 6-40 m) that he can see, can walk to, and that
+    //            his ex-captor can see neither him nor (Joel: "not in your sight"). The KeepAway layer
+    //            walks him there, picks it up (Arsenal.PickUp) and has his selector draw it; his own AI
+    //            then has an armed man. Ends the moment his ex-captor can see him, fire comes in or a gun
+    //            is in his hands. At most 2 fetches per release; guns he couldn't get are skipped.
     //
     // Bounded: at most 16 entries, one sample per entry per second, one route search per leg on a
     // frame with heavy-search budget. No inventory walk per frame (Arsenal.Usable is cached 4 s).
@@ -47,6 +56,14 @@ namespace Mercy
             // A leg in progress (KeepAwayLogic).
             internal bool Active;
             internal string Why;
+            // 0.30.2: a gun fetch (the leg is a walk to a gun, not away).
+            internal bool Fetch;
+            internal Item FetchGun;
+            internal Vector3 FetchAt;
+            internal float NextFetchLook, FetchRange;
+            internal int FetchTries;
+            internal List<Item> FetchSkip;
+            internal string FetchNote;
         }
 
         private static readonly Dictionary<Player, Entry> Entries = new Dictionary<Player, Entry>();
@@ -177,6 +194,7 @@ namespace Mercy
             e.Samples++;
             CheckObjective(e, now, always: false);
             if (e.Active) return;
+            if (TryStartFetch(e, now)) return;
 
             float radius = Settings.KeepAwayRadius.Value;
             bool closing = e.Samples >= 4 && e.Dist[3] - d >= 3f;
@@ -217,6 +235,87 @@ namespace Mercy
                 MercyPlugin.Log.LogInfo($"{e.Name}: keeps away, leg {e.Legs} of at most {Settings.KeepAwayLegs.Value} ({e.Why})");
         }
 
+        // ---- 0.30.2: a gun on the way (see the header) ---------------------------------------
+
+        // How far he goes out of his way for a gun: his own nerve and personality (a brave man walks
+        // further, a coward stays near), 20 m for an average man, 6-40 m.
+        private static float FetchRangeFor(Player p, BotHistory h)
+        {
+            float pers = SainAdapter.Multiplier(SurrenderRegistry.PersonalityOf(p, h));
+            return Mathf.Clamp(20f * (0.5f + h.Nerve) / Mathf.Max(0.3f, pers), 6f, 40f);
+        }
+
+        // His ex-captor (alive, within 100 m) has a clear line to him or to the gun.
+        private static bool CaptorWatches(Entry e, Player p, Vector3 gunAt)
+        {
+            Player c = e.Captor;
+            if (!Perception.Alive(c)) return false;
+            Vector3 eye = Perception.Eye(c);
+            bool nearMe = (c.Position - p.Position).sqrMagnitude < 100f * 100f;
+            bool nearGun = (c.Position - gunAt).sqrMagnitude < 100f * 100f;
+            return (nearMe && Perception.LineClear(eye, Perception.Eye(p))) ||
+                   (nearGun && Perception.LineClear(eye, gunAt + Vector3.up * 0.3f));
+        }
+
+        private static void FetchNote(Entry e, string what)
+        {
+            if (e.FetchNote == what) return;
+            e.FetchNote = what;
+            if (Settings.LogEscape.Value) MercyPlugin.Log.LogInfo($"{e.Name}: {what}");
+        }
+
+        private static bool TryStartFetch(Entry e, float now)
+        {
+            if (now < e.NextFetchLook || e.FetchTries >= 2 || !Settings.ScavengeWeapons.Value) return false;
+            e.NextFetchLook = now + 2f;
+            Player p = e.Bot;
+            if (Arsenal.GunInHands(p) || Arsenal.UsableGun(p) != null) return false;
+            BotHistory h = SurrenderRegistry.HistoryOf(p);
+            BotOwner o = p.AIData?.BotOwner;
+            if (now - h.FireAt < 4f || (o?.Memory != null && o.Memory.IsUnderFire)) return false;
+            if (e.FetchRange <= 0f) e.FetchRange = FetchRangeFor(p, h);
+            if (!Perception.TakeHeavy()) { e.NextFetchLook = now + 0.25f; return false; }
+            Item gun = Arsenal.FindWeapon(p, p.Position, 0f, e.FetchRange, e.FetchSkip, out Vector3 at);
+            if (gun == null) return false;
+            string name = gun.ShortName.Localized();
+            float d = Perception.Flat(p.Position, at);
+            if (!Perception.LineClear(Perception.Eye(p), at + Vector3.up * 0.3f)) { FetchNote(e, $"a {name} {d:0} m away, out of his sight: not now"); return false; }
+            if (CaptorWatches(e, p, at)) { FetchNote(e, $"a {name} {d:0} m away, but {Restraint.Name(e.Captor)} would see him: waits"); return false; }
+            if (!Perception.PathTo(p.Position, at, out Vector3[] path, out string np))
+            {
+                (e.FetchSkip ?? (e.FetchSkip = new List<Item>(2))).Add(gun);
+                FetchNote(e, $"a {name} {d:0} m away, no route ({np}): leaves it");
+                return false;
+            }
+            if (Perception.Alive(e.Captor) && Perception.RoutePassesNear(path, e.ThreatAt, 8f)) { FetchNote(e, $"a {name} {d:0} m away, but the way passes his ex-captor: not now"); return false; }
+            e.Fetch = true;
+            e.Active = true;
+            e.FetchGun = gun;
+            e.FetchAt = at;
+            e.FetchTries++;
+            e.Why = $"fetches a {name} {d:0} m away (his reach {e.FetchRange:0} m)";
+            if (Settings.LogEscape.Value) MercyPlugin.Log.LogInfo($"{e.Name}: unarmed, out of his ex-captor's sight: {e.Why}");
+            return true;
+        }
+
+        internal static bool Fetching(Player p, out Item gun, out Vector3 at)
+        {
+            gun = null; at = Vector3.zero;
+            if (Entries.Count == 0 || p == null || !Entries.TryGetValue(p, out Entry e) || !e.Active || !e.Fetch) return false;
+            gun = e.FetchGun; at = e.FetchAt;
+            return true;
+        }
+
+        internal static bool FetchWatched(Player p) =>
+            p != null && Entries.TryGetValue(p, out Entry e) && CaptorWatches(e, p, e.FetchAt);
+
+        // A gun he couldn't get (gone, refused): not tried again this release.
+        internal static void FetchSkip(Player p, Item gun)
+        {
+            if (p == null || gun == null || !Entries.TryGetValue(p, out Entry e)) return;
+            (e.FetchSkip ?? (e.FetchSkip = new List<Item>(2))).Add(gun);
+        }
+
         // KeepAwayLayer.IsActive: one dictionary lookup while anyone is remembered.
         internal static bool KeepAway(Player p) =>
             Entries.Count > 0 && p != null && Entries.TryGetValue(p, out Entry e) && e.Active;
@@ -241,6 +340,15 @@ namespace Mercy
             if (p == null || !Entries.TryGetValue(p, out Entry e) || !e.Active) return;
             e.Active = false;
             e.Samples = 0;   // a fresh 3 s window before another leg
+            if (e.Fetch)
+            {
+                e.Fetch = false;
+                e.FetchNote = null;
+                e.NextFetchLook = Time.time + 2f;
+                if (Settings.LogEscape.Value)
+                    MercyPlugin.Log.LogInfo($"{e.Name}: gun fetch ends ({how}); {Arsenal.DescribeArmed(p)}; back to his own AI");
+                return;
+            }
             if (Settings.LogEscape.Value)
                 MercyPlugin.Log.LogInfo($"{e.Name}: keep-away leg {e.Legs} ends ({how}): {Perception.Flat(p.Position, e.HeldAt):0} m from where he was held, {Perception.Flat(p.Position, e.ThreatAt):0} m from where he last saw his captor; back to his own AI");
         }
@@ -278,6 +386,10 @@ namespace Mercy
         private bool _have, _moving, _sprint;
         private float _since, _nextPath, _progressAt, _nextSprintCheck;
         private Vector3 _progressFrom;
+        // 0.30.2: a gun fetch's pick-up (one transaction at a time; its callback may be stale).
+        private bool _pickAsked;
+        private float _pickAt, _nextWatchCheck;
+        private int _pickToken;
 
         public KeepAwayLogic(BotOwner botOwner) : base(botOwner) { }
 
@@ -288,6 +400,7 @@ namespace Mercy
             _have = false; _moving = false; _sprint = false;
             _since = Time.time;
             _nextSprintCheck = 0f;
+            _pickAsked = false; _nextWatchCheck = 0f; _pickToken++;
             BotOwner.ShootData?.EndShoot();
         }
 
@@ -315,6 +428,7 @@ namespace Mercy
             if (now - h.FireAt < 1.5f || (BotOwner.Memory != null && BotOwner.Memory.IsUnderFire)) { Escape.EndLeg(me, "under fire: his own AI defends him"); return; }
             if (me.HandsController is Player.FirearmController) { Escape.EndLeg(me, "a gun in his hands: his own AI decides"); return; }
             SainAdapter.ReleaseLayer(BotOwner, h);
+            if (Escape.Fetching(me, out Item gun, out Vector3 gunAt)) { RunFetch(me, gun, gunAt, now); return; }
             if (!Escape.Target(me, out Vector3 heldAt, out Vector3 threat, out Vector3 vel, out _)) return;
             if (!_have)
             {
@@ -365,6 +479,77 @@ namespace Mercy
             }
             BotOwner.Steering.LookToMovingDirection();
             BotOwner.Sprint(sprint);
+        }
+
+        // 0.30.2: the walk to a gun, the pick-up and the draw. Ends when his ex-captor can see him, the
+        // gun is gone, it takes too long, or (the caller) fire comes in / a gun is in his hands.
+        private void RunFetch(Player me, Item gun, Vector3 at, float now)
+        {
+            if (now - _since > 25f) { Escape.EndLeg(me, "25 s and not there"); return; }
+            if (_pickAsked)
+            {
+                if (now - _pickAt > 6f) { Escape.FetchSkip(me, gun); Escape.EndLeg(me, "the pick-up didn't finish"); }
+                return;
+            }
+            if (now >= _nextWatchCheck)
+            {
+                _nextWatchCheck = now + 0.5f;
+                if (Escape.FetchWatched(me)) { Escape.EndLeg(me, "his ex-captor can see him: leaves it for now"); return; }
+            }
+            if (Perception.Flat(me.Position, at) < 1.3f)
+            {
+                if (_moving) { BotOwner.StopMove(); _moving = false; }
+                if (!Arsenal.Locate(gun, at, 2f, out _)) { Escape.FetchSkip(me, gun); Escape.EndLeg(me, "the gun isn't there any more"); return; }
+                Item inHands = me.HandsController?.Item;
+                if (inHands != null && !Arsenal.IsMelee(inHands)) return;   // meds or a grenade in hands: wait
+                _pickAsked = true;
+                _pickAt = now;
+                int token = ++_pickToken;
+                MercyPlugin.Try("fetch pick-up", () => Arsenal.PickUp(me, gun, ok => OnPicked(me, gun, ok, token)));
+                return;
+            }
+            if ((me.Position - _progressFrom).sqrMagnitude > 1f) { _progressFrom = me.Position; _progressAt = now; }
+            else if (_moving && now - _progressAt > 4f) { Escape.FetchSkip(me, gun); Escape.EndLeg(me, StuckWhy(me)); return; }
+            BotOwner.SetPose(1f);
+            BotOwner.SetTargetMoveSpeed(1f);
+            BotOwner.Sprint(false);
+            if (_moving && DoorBusy()) return;
+            if (!_moving || now >= _nextPath)
+            {
+                _nextPath = now + 3f;
+                if (!Perception.PathTo(me.Position, at, out Vector3[] corners, out string why))
+                {
+                    Escape.FetchSkip(me, gun);
+                    Escape.EndLeg(me, $"no route to the gun ({why})");
+                    return;
+                }
+                if (!_moving) { Relink(me); _progressFrom = me.Position; _progressAt = now; }
+                _moving = true;
+                BotOwner.MovementResume();
+                BotOwner.Mover.GoToByWay(corners, 0.5f);
+            }
+            BotOwner.Steering.LookToMovingDirection();
+        }
+
+        private void OnPicked(Player me, Item gun, bool ok, int token)
+        {
+            if (token != _pickToken || !Perception.Alive(me)) return;   // a later leg, or he is gone
+            if (!ok || !Arsenal.Carries(me, gun))
+            {
+                Escape.FetchSkip(me, gun);
+                Escape.EndLeg(me, "the game refused the pick-up");
+                return;
+            }
+            BotWeaponSelector sel = BotOwner.WeaponManager?.Selector;
+            EquipmentSlot? slot = Arsenal.UsableGun(me) ?? Arsenal.GunOnBody(me);
+            if (sel == null || slot == null) { Escape.EndLeg(me, $"picked up the {gun.ShortName.Localized()}; nothing to draw"); return; }
+            MercyPlugin.Try("fetch draw", () =>
+            {
+                sel.UpdateWeaponsList();
+                if (!sel.TryChangeToSlot(slot.Value, true, r => { }))
+                    Escape.EndLeg(me, $"picked up the {gun.ShortName.Localized()}; the game refused the draw (his own AI may)");
+            });
+            // The leg ends when the gun is in his hands (Run: "a gun in his hands"), or at 25 s.
         }
 
         // 0.28.3: the live 0.28.2 raid had a leg "stuck" with a complete 27 m path and no word on why

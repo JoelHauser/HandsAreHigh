@@ -1049,6 +1049,14 @@ namespace Mercy
             {
                 Player shooter = __instance._player;
                 if (shooter == null || !shooter.IsAI) return;
+                // 0.30.2: a man whose drop is still pending doesn't fire (SAIN drives him until our
+                // layer's first update; a held trigger kept the game from answering the hide: Knight,
+                // Lighthouse 2026-11-21, "no answer to the hands change in 2.0 s", hands empty at 3.8 s).
+                if (SurrenderRegistry.Any && SurrenderRegistry.TryGet(shooter, out SurrenderState held) && held.DropPending)
+                {
+                    pressed = false;
+                    return;
+                }
                 // While anyone is surrendered, every AI press is timed (one dictionary write per
                 // press) so a hit right after a decision can be told from a new attack.
                 if (Truce.Active && Truce.AimedAtPartner(shooter, out Player partner))

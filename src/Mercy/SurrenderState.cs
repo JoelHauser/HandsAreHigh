@@ -51,6 +51,10 @@ namespace Mercy
         internal float DropSince;
         internal Item DroppedWeapon;    // the gun he dropped, to come back for
         internal Vector3 DropPosition;
+        // 0.30.1: a loose gun near him that isn't his (e.g. one a player put down) adopted as the gun
+        // he could go for, when he has none of his own (SurrenderLogic.LookForLooseGun).
+        internal bool GunNotHis;
+        internal float NextGunLook;
 
         // Drop timeline (Time.realtimeSinceStartup), logged once his arms are fully up, so the
         // game's own holster/throw latency can be told apart from our timers.

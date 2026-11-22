@@ -409,6 +409,15 @@ namespace Mercy
             s.DropAttempts++;
             if (s.TDropRequested < 0f) s.TDropRequested = Time.realtimeSinceStartup;
 
+            // 0.30.2: stop the firing first. The drop is asked the moment he gives up, while SAIN still
+            // drives him (our layer starts on his next brain update); a trigger held through the hide
+            // left Knight's first drop unanswered for 2 s (Lighthouse 2026-11-21).
+            MercyPlugin.Try("stop firing before the drop", () =>
+            {
+                s.Bot.AIData?.BotOwner?.ShootData?.EndShoot();
+                (s.Bot.HandsController as Player.FirearmController)?.SetTriggerPressed(false);
+            });
+
             MercyPlugin.Try("drop weapon in hands", () =>
             {
                 Item dropped = Arsenal.EmptyHands(s.Bot,

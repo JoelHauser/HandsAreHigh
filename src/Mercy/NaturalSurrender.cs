@@ -336,6 +336,9 @@ namespace Mercy
             // every few seconds for every bot in a fight); a roll is always logged.
             if (!eligible && !(Settings.VerboseLogs.Value && pressure >= LogFloor) && !Scenarios.Watching(bot)) return;
 
+            // 0.30.1: name who is keeping a boss from qualifying (only built when the line is logged).
+            if (h.SquadBoss && !eligible && gate.Contains("not confirmed dead")) gate += $" [{BossSquad.Unconfirmed(h, bot)}]";
+
             WildSpawnType role = bot.Profile.Info.Settings.Role;
             string personality = SurrenderRegistry.PersonalityOf(bot, h);
             float persMult = SainAdapter.Multiplier(personality);

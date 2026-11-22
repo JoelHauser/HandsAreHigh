@@ -73,9 +73,12 @@ namespace Mercy
             string what = hc.Item?.ShortName?.Localized() ?? hc.GetType().Name;
             if (hc is Player.FirearmController fc)
             {
-                if (fc.IsInReloadOperation()) return $"reloading {what}";
-                if (fc.IsTriggerPressed) return $"firing {what}";
-                return $"holding {what}";
+                // 0.30.2: the firearm's own operation, for unanswered drops (Lighthouse 2026-11-21: two
+                // first drops ignored for 2 s, one by a bot that wasn't fighting).
+                string op = fc.CurrentOperation?.GetType().Name ?? "no operation";
+                if (fc.IsInReloadOperation()) return $"reloading {what}, {op}";
+                if (fc.IsTriggerPressed) return $"firing {what}, {op}";
+                return $"holding {what}, {op}";
             }
             return $"{hc.GetType().Name} ({what})";
         }
@@ -519,7 +522,10 @@ namespace Mercy
         private static InteractableObject OwnerOfCollider(Collider c)
         {
             int id = c.GetInstanceID();
-            if (OwnerOf.TryGetValue(id, out InteractableObject io) && io != null) return io;
+            // 0.30.1: a cached "no owner" is an answer too. Doors, walls and props on the Interactive
+            // layer have none; they were looked up again (GetComponentInParent) on every sweep: the
+            // 0.30.0 Lighthouse log had a 47 ms frame on a released man's weapon sweep.
+            if (OwnerOf.TryGetValue(id, out InteractableObject io)) return io;
             io = c.GetComponentInParent<InteractableObject>();
             if (OwnerOf.Count >= MaxCache) OwnerOf.Clear();   // bounded; rebuilt as needed
             OwnerOf[id] = io;
@@ -560,6 +566,14 @@ namespace Mercy
         // Nearest gun on the ground or on a body, not too close to the threat and not
         // already claimed by another surrendered bot or in the skip list.
         internal static Item FindWeapon(Player bot, Vector3 threat, float avoidRadius, float radius,
+            ICollection<Item> skip, out Vector3 at)
+        {
+            long t0 = Perf.Begin();   // 0.30.1: detail section (inside Layer)
+            try { return FindWeaponInner(bot, threat, avoidRadius, radius, skip, out at); }
+            finally { Perf.End(Perf.Sec.Scavenge, t0); }
+        }
+
+        private static Item FindWeaponInner(Player bot, Vector3 threat, float avoidRadius, float radius,
             ICollection<Item> skip, out Vector3 at)
         {
             at = Vector3.zero;

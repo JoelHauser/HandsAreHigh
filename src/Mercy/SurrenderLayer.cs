@@ -54,15 +54,57 @@ namespace Mercy
         private float _pose = -1f;
         private float _getUpAt;      // 0.30.0: next time a prone get-up may be asked (the stand takes ~1 s)
 
+        // 0.30.1: the 0.30.0 Lighthouse raid had Zryachiy still prone after every try (once a second).
+        // MovementContext.IsInPronePose's setter returns early for UsedSimplifiedSkeleton (fixed when
+        // the player is created) and otherwise applies at once for AI (no CanStandAt check), so the
+        // state right after the call says which it was: refused (still prone now) or laid down again
+        // later. Tries stop after MaxGetUps (one line per try was a log line a second).
+        // Every 2 s while he has no gun of his own to go for: the nearest loose gun (ground or a body,
+        // not claimed by another held man, not one he failed to get) within the scramble range becomes
+        // "the gun he could go for": the opening, under-fire and left-behind decisions, the walk,
+        // pick-up and draw then treat it as they treat his own. A small sphere (scramble range,
+        // default 10 m) through the heavy-work budget.
+        private void LookForLooseGun(SurrenderState s)
+        {
+            s.NextGunLook = Time.time + 2f;
+            if (!Settings.ScavengeWeapons.Value) return;
+            if (!Perception.TakeHeavy()) { s.NextGunLook = Time.time + 0.25f; return; }
+            Item found = Arsenal.FindWeapon(Me, Me.Position, 0f, Settings.ScrambleRange.Value, s.Skip, out Vector3 at);
+            if (found == null) return;
+            if (found == s.DroppedWeapon)
+            {
+                // His own (or the adopted) gun, believed gone, is lying right there: he sees it again.
+                if (s.GunGone) { s.GunGone = false; s.DropPosition = at; MercyPlugin.Log.LogInfo($"{s.Name}: sees the {found.ShortName.Localized()} is still there, {Perception.Flat(Me.Position, at):0.0} m from him"); }
+                return;
+            }
+            s.DroppedWeapon = found;
+            s.DropPosition = at;
+            s.GunGone = false;
+            s.GunNotHis = true;
+            MercyPlugin.Log.LogInfo($"{s.Name}: notices a {found.ShortName.Localized()} lying {Perception.Flat(Me.Position, at):0.0} m from him (not his own): a gun he could go for");
+        }
+
+        // 0.30.1: "his" for the gun he dropped, "the" for one he adopted (LookForLooseGun).
+        private static string His(SurrenderState s) => s.GunNotHis ? "the" : "his";
+
+        private const int MaxGetUps = 4;
+        private int _getUps;
+
         private void GetUpFromProne(SurrenderState s)
         {
             BotLay lay = BotOwner.BotLay;
-            if (lay == null) return;
+            if (lay == null || _getUps >= MaxGetUps) return;
+            _getUps++;
             _getUpAt = Time.time + 1f;
             lay.IsLay = false;
             _pose = -1f;   // the game just set pose 0.4: our next SetPose(1) must be sent, not skipped
             if (!Kneel.LegsLocked(s)) SetPose(1f);
-            MercyPlugin.Log.LogInfo($"{s.Name}: was prone when he gave up; gets to his feet ({s.Phase})");
+            bool still = Me.IsInPronePose;
+            string after = still
+                ? $"the game refused: still prone right after (simplified skeleton {Me.UsedSimplifiedSkeleton}, pose {Me.PoseLevel:0.00})"
+                : _getUps > 1 ? "standing again (something laid him down after the last try)" : "up";
+            MercyPlugin.Log.LogInfo($"{s.Name}: was prone when he gave up; gets to his feet ({s.Phase}, try {_getUps} of {MaxGetUps}): {after}" +
+                (still && _getUps >= MaxGetUps ? "; no more tries for this bot" : ""));
         }
 
         public override void Update(CustomLayer.ActionData data)
@@ -86,6 +128,7 @@ namespace Mercy
             // cleared (the registry's hand-back does it too), so a brain without SAIN doesn't keep
             // walking an outdated destination of ours.
             _pose = -1f;
+            _getUps = 0;   // 0.30.1: a later surrender gets its own get-up tries
             if (_s != null && _s.Moving && !_s.HandBackMoving) { BotOwner.StopMove(); _s.Moving = false; }
             base.Stop();
         }
@@ -124,6 +167,12 @@ namespace Mercy
             // own get-up (DoProne(false), pose 0.4; Assembly-CSharp 0.16.9). While our layer runs,
             // BotLay's own checks don't, so he isn't laid down again while held.
             if (Me.IsInPronePose && Time.time >= _getUpAt) GetUpFromProne(s);
+
+            // 0.30.1 (Joel): a gun lying near a held man counts as one he could go for, not only the
+            // one he dropped (Lighthouse: cultists who came without guns ignored guns put down for them).
+            if (s.Phase == Phase.HandsUp && Time.time >= s.NextGunLook &&
+                (s.DroppedWeapon == null || s.GunGone || s.Skip.Contains(s.DroppedWeapon)))
+                LookForLooseGun(s);
 
             if (s.Phase != Phase.HandsUp) Stamp(s);
             switch (s.Phase)
@@ -655,6 +704,10 @@ namespace Mercy
         private void NoticeGunGone(SurrenderState s, Player captor)
         {
             if (s.GunGone || s.DroppedWeapon == null) return;
+            // 0.30.1: not while his own gun is still leaving his hands (the Lighthouse log: "sees his
+            // Saiga-12K is gone" logged before "gun on the ground +605 ms": checked mid-drop, believed
+            // gone for good). Only once the game has thrown it (TThrown) and it has had a second to land.
+            if (!s.GunNotHis && (s.TThrown < 0f || Time.realtimeSinceStartup - s.TThrown < 1f)) return;
             if (!Perception.LineClear(Perception.Eye(Me), s.DropPosition + Vector3.up * 0.3f)) return;
             if (Arsenal.StillThere(s.DroppedWeapon, s.DropPosition)) return;
             s.GunGone = true;
@@ -958,7 +1011,7 @@ namespace Mercy
         {
             Item gun = s.DroppedWeapon;
             if (gun == null) return false;
-            string what = $"his {gun.ShortName.Localized()} at his feet";
+            string what = $"{His(s)} {gun.ShortName.Localized()} at his feet";
             float d = Perception.Flat(Me.Position, s.DropPosition);
             Vector3 at = s.DropPosition;
             string no = null;
@@ -1720,7 +1773,7 @@ namespace Mercy
             s.GraceUntil = Time.time + ScrambleGrace;
             s.CaptorLastSeen = captorPos;
             Voice.Say(s, VoiceEvent.Break);
-            s.SetPhase(Phase.Recovering, $"scrambles for his {s.DroppedWeapon.ShortName.Localized()} ({why})");
+            s.SetPhase(Phase.Recovering, $"scrambles for {His(s)} {s.DroppedWeapon.ShortName.Localized()} ({why})");
             s.Scrambling = true;
         }
 
@@ -1953,6 +2006,17 @@ namespace Mercy
             return Perception.Alive(c) && Perception.LineClear(Perception.Eye(c), Perception.Chest(Me));
         }
 
+        // 0.30.1: every way a hide ends. From fire: straight to his own AI (Decide would send him back
+        // to cover: a loop). Calm: Decide first (draw a kept gun, fetch a safe one, else the hand-back).
+        // The 0.30.1 Lighthouse log: a Scav "out of sight of the threat already" was handed back with
+        // his own Saiga at his feet.
+        private void EndHide(SurrenderState s, string why)
+        {
+            if (s.HideFromFire) { HandBack(s, why); return; }
+            if (Settings.LogDecisions.Value) MercyPlugin.Log.LogInfo($"{s.Name}: hide ends ({why}): a gun before his own AI?");
+            Decide(s);
+        }
+
         private void EndFlight(SurrenderState s, string why)
         {
             if (!Settings.LogDecisions.Value || s.FleeSince < 0f) return;
@@ -2036,8 +2100,15 @@ namespace Mercy
             // 0.17.0: fled from captivity: no going back into that area for a gun until the commitment
             // runs out (no escape, linger, recapture loop). Weapons he carries stay options (above).
             float lockUntil = Mathf.Max(s.FleeLockUntil, s.HeldSet && s.FleeSince > 0f ? s.FleeSince + Settings.EscapeMemory.Value : 0f);
-            bool committed = s.HeldSet && Time.time < lockUntil;
+            // 0.30.1: only an escape makes the capture area off limits. Let go, left behind or ignored
+            // (CalmFlight), the captor chose to leave him; guns near where he last saw his captor are
+            // still refused below (AvoidRadius / ScavengeAvoid).
+            // Also (Joel's keep-away rule, 2026-11-21): the capture area only counts while his ex-captor was
+            // last seen near it; the 0.30.1 Lighthouse log had a Scav refuse his Saiga "where he was held"
+            // with his captor 168 m away.
             float area = Mathf.Max(Settings.FleeDistance.Value, Settings.KeepAwayRadius.Value);
+            bool captorNearArea = s.HeldSet && Perception.Flat(s.CaptorLastSeen, s.HeldAt) < area;
+            bool committed = s.HeldSet && Time.time < lockUntil && !s.CalmFlight && captorNearArea;
             bool ownInArea = committed && s.DroppedWeapon != null && Perception.Flat(s.DropPosition, s.HeldAt) < area;
             // 0.21.0: two tries at a gun after getting away, then his own AI (no endless fetching).
             bool fetch = s.RecoverTries < 2;
@@ -2053,14 +2124,14 @@ namespace Mercy
                 else if (Vector3.Distance(s.DropPosition, s.CaptorLastSeen) <= Settings.AvoidRadius.Value) refuse = $"{Vector3.Distance(s.DropPosition, s.CaptorLastSeen):0} m from where he last saw his captor";
                 else if (!Perception.PathTo(Me.Position, s.DropPosition, out Vector3[] gunPath, out string noPath)) refuse = $"no route ({noPath})";
                 else if (Perception.RoutePassesNear(gunPath, s.CaptorLastSeen, 8f)) refuse = "the way there passes where he last saw his captor";
-                if (refuse != null) Escape.LogRefusal(s, $"his {s.DroppedWeapon.ShortName.Localized()}", refuse);
+                if (refuse != null) Escape.LogRefusal(s, $"{His(s)} {s.DroppedWeapon.ShortName.Localized()}", refuse);
             }
             if (s.DroppedWeapon != null && refuse == null)
             {
                 s.TargetWeapon = s.DroppedWeapon;
                 s.TargetPoint = s.DropPosition;
                 s.RecoverTries++;
-                s.SetPhase(Phase.Recovering, "going back for his own gun");
+                s.SetPhase(Phase.Recovering, s.GunNotHis ? $"going back for the {s.DroppedWeapon.ShortName.Localized()}" : "going back for his own gun");
                 return;
             }
 
@@ -2288,7 +2359,7 @@ namespace Mercy
                     : Perception.RetreatPoint(Me, s.ThreatAt, Settings.CoverRadius.Value, true, out s.TargetPoint);
                 if (!found)
                 {
-                    HandBack(s, $"no reachable cover within {(s.HideFromFire ? Settings.FireCoverRadius.Value : Settings.CoverRadius.Value):0} m");
+                    EndHide(s, $"no reachable cover within {(s.HideFromFire ? Settings.FireCoverRadius.Value : Settings.CoverRadius.Value):0} m");
                     return;
                 }
                 s.HideMoving = true;
@@ -2298,20 +2369,35 @@ namespace Mercy
             }
             if (!s.HideMoving)
             {
-                HandBack(s, "out of sight of the threat already");
+                EndHide(s, "out of sight of the threat already");
                 return;
             }
             if (!MoveTo(s, s.TargetPoint, sprint: s.HideUrgent))
             {
-                HandBack(s, "no route to cover");
+                EndHide(s, "no route to cover");
                 return;
             }
             if (!check) return;
             if (SpottedAgain(s)) return;
-            if (!s.HideFromFire && QuickClear(s, out string quick)) { HandBack(s, $"on his way to cover, {quick}: his own AI takes over"); return; }
-            if (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value)) { HandBack(s, s.HideFromFire ? "in cover from the fire" : "in cover"); return; }
-            if (Stalled(s)) { HandBack(s, "stuck on the way to cover"); return; }
-            if (Time.time > s.HideUntil && !Kneel.LegsLocked(s)) HandBack(s, $"{Time.time - s.PhaseSince:0} s on the way to cover, {Perception.Flat(Me.Position, s.TargetPoint):0} m short");
+            // 0.30.1: a calm hide ending (not cover from fire) goes through Decide like a retreat does:
+            // a kept gun drawn, or a safe gun nearby fetched, before his own AI gets him (the 0.30.0
+            // Lighthouse raid: unarmed cultists handed back here walked past guns Joel left for them).
+            // Decide's own exit is the hand-back; under fire it sends him to cover (HideFromFire), whose
+            // endings below hand back directly, so this can't loop.
+            if (!s.HideFromFire && QuickClear(s, out string quick))
+            {
+                if (!s.QuickEnded) EndFlight(s, $"on his way to cover, {quick}: his own AI takes over");
+                s.QuickEnded = true;
+                Decide(s);
+                return;
+            }
+            if (Arrived(s.TargetPoint, Settings.ArrivalTolerance.Value))
+            {
+                EndHide(s, s.HideFromFire ? "in cover from the fire" : "in cover");
+                return;
+            }
+            if (Stalled(s)) { EndHide(s, "stuck on the way to cover"); return; }
+            if (Time.time > s.HideUntil && !Kneel.LegsLocked(s)) EndHide(s, $"{Time.time - s.PhaseSince:0} s on the way to cover, {Perception.Flat(Me.Position, s.TargetPoint):0} m short");
         }
 
         // A human player close by aims straight at him for a moment: hands go up again.

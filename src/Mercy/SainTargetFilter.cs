@@ -48,6 +48,7 @@ namespace Mercy
         private static FastGetter<object> _goalRead;
         private static FastGetter<string> _enemyIdRead;
         internal static int Filtered;     // times a prisoner was kept out of SAIN's choice
+        internal static int ResultDropped; // 0.30.2: times SAIN's (or COMET's) pick itself was a protected man
 
         private sealed class Removed
         {
@@ -57,7 +58,7 @@ namespace Mercy
 
         internal static void Reset()
         {
-            _tried = false; Filtered = 0; Patched = false;
+            _tried = false; Filtered = 0; ResultDropped = 0; Patched = false;
             _ownerRead = null; _visibleRead = null; _knownRead = null; _goalRead = null; _enemyIdRead = null;
         }
 
@@ -130,7 +131,9 @@ namespace Mercy
                     if (r == null) r = new Removed();
                 }
                 if (r != null) Filtered++;
-                __state = r;
+                // 0.30.2: a restraining bot always gets the result check (Postfix), even with nothing
+                // removed from the lists this time.
+                __state = (object)r ?? Restraining;
             }
             catch { __state = null; }
             finally { Perf.End(Perf.Sec.SainFilter, t0); }
@@ -149,9 +152,17 @@ namespace Mercy
             }
         }
 
+        // 0.30.2 (COMET compatibility): the result itself is checked, not only the candidate lists.
+        // COMET (Chazut, 1.0.0 RC1) replaces SAIN's SelectEnemy (called inside ChooseEnemy) and keeps
+        // its last pick while it is still in EnemyController.Enemies (ThreatIntegration.ThreatUsable),
+        // a table our list filtering doesn't touch: a captor's last target, now his prisoner, would
+        // stay his target. A blocked result is dropped (and _goalEnemy cleared); COMET sees the change
+        // and re-selects from the filtered lists, plain SAIN simply has no target this tick.
+        private static readonly object Restraining = new object();
+
         private static void Postfix(object __instance, object __state, ref object __result)
         {
-            if (!(__state is Removed) && !Judgement.Watching) return;
+            if (__state == null && !Judgement.Watching) return;
             long t0 = Perf.Begin();
             if (__state is Removed r)
             {
@@ -159,6 +170,20 @@ namespace Mercy
                 {
                     Put(_visibleRead.Get(__instance), r.Visible);
                     Put(_knownRead.Get(__instance), r.Known);
+                }
+                catch { }
+            }
+            if (__state != null && __result != null)
+            {
+                try
+                {
+                    Player self = _ownerRead.Get(__instance)?.GetPlayer;
+                    if (Blocked(self, __result))
+                    {
+                        __result = null;
+                        _goal.SetValue(__instance, null);
+                        ResultDropped++;
+                    }
                 }
                 catch { }
             }

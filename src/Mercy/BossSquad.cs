@@ -77,6 +77,24 @@ namespace Mercy
 
         internal static int RosterSize(BotHistory h) => h.GuardIds?.Count ?? 0;
 
+        // 0.30.1: who is keeping him from qualifying (the 0.30.0 Lighthouse log showed his roster grow
+        // from 2 to 4 with no way to tell who joined). Only built when a gate line is logged.
+        internal static string Unconfirmed(BotHistory h, Player boss)
+        {
+            if (h.GuardIds == null) return "";
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < h.GuardIds.Count; i++)
+            {
+                Player p = h.Guards[i];
+                if (ConfirmedDead(h.GuardIds[i], p)) continue;
+                if (sb.Length > 0) sb.Append(", ");
+                if (p == null) { sb.Append("one no longer in the raid (despawned or left)"); continue; }
+                bool inGroup = boss.AIData?.BotOwner?.BotsGroup?.Contains(p.AIData?.BotOwner) == true;
+                sb.Append($"{Restraint.Name(p)} ({p.Profile?.Info?.Settings?.Role}, alive, {UnityEngine.Vector3.Distance(p.Position, boss.Position):0} m{(inGroup ? "" : ", left his group")}{(SurrenderRegistry.HoldsBot(p) ? ", a prisoner" : "")})");
+            }
+            return sb.ToString();
+        }
+
         private static bool ConfirmedDead(string id, Player p)
         {
             if (Dead.Contains(id)) return true;

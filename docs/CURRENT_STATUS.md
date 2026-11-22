@@ -10,6 +10,7 @@ Last updated: 2026-11-21 (renamed Hands Are High -> Mercy, GUID com.mybutthasara
 
 | Version | Where | Level |
 |---|---|---|
+| 0.30.2 | UNCOMMITTED on top of main @ 9b72f7c (0.30.1 + 0.30.2); packed + installed 2026-11-21 (hash-verified); notes docs/history/releases-0.30.md | build passed, tools/bosstest 55/55; 0.30.1 loose-gun pick-ups, area lock and calm-hide Decide verified in raid; 0.30.2 (drop trigger fix, released-man gun fetch, COMET target fix) not run |
 | 0.30.0 (Mercy) | UNCOMMITTED on top of main @ a8c9252 (0.29.0 + 0.29.1 + rename + Lighthouse fixes + prone get-up); packed + installed in H:/SPT4.1.X 2026-11-21 (hash-verified, HandsAreHigh.dll removed, cfg migrated); notes docs/history/releases-0.30.md | build passed, tools/bosstest 55/55, cfg bind 439/439 on the renamed DLL; boss gate + natural last-survivor roll verified in raid on 0.29.1 (Lighthouse); 0.30.0 itself not run |
 | 0.29.1 | UNCOMMITTED on top of main; packed (`dist/Mercy-0.29.1.zip`) and installed 2026-11-21 (hash-verified; 0.29.0 DLL + cfg in that session scratchpad `backup-0.29.0`): unset last-seen position fix, trigger-log wording | build passed (Release, 0 warnings), tools/bosstest 52/52; not run in game |
 | 0.29.0 | UNCOMMITTED on top of main; packed (`dist/Mercy-0.29.0.zip`) and installed in H:/SPT4.1.X 2026-11-21 (hash-verified; 0.28.6 DLL + cfg in that session scratchpad `backup-0.28.6`). Notes: docs/history/releases-0.29.md | build passed (Debug + Release, 0 warnings), cfg check passed (2 keys added), tools/bosstest 52/52; not run in game |
