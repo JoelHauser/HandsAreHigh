@@ -64,24 +64,24 @@
 
 ![A bot captor covers his prisoner, kneeling with his hands behind his head](https://raw.githubusercontent.com/JoelHauser/Mercy/main/docs/images/prisoner.jpg)
 
-A man can give up to a hostile bot, not only to you. That bot makes his own call:
+A bot can give up to another bot, not only to you. That bot makes his own call:
 
 | The bot... | What you'll see |
 |---|---|
 | **Takes him prisoner** | Covers him, gives orders, walks up to control him, collects the guns and gear he wants, then ends it his own way: lets him go, walks off, or leaves a squadmate on guard |
-| **Spares him** | Holds his fire and leaves the man be |
+| **Spares him** | Holds his fire and leaves him be |
 | **Ignores him** | Not worth the time. The prisoner soon notices, lowers his hands and gets his gun back if he safely can; the two leave each other alone for a while |
 | **Keeps fighting** | The usual way a fight ends |
 
-His squad goes along with the decision, and one squadmate may take an angle to cover the captor. Other bots who find a man with his hands up decide for themselves. Not every captor is merciful: some never meant to let him walk, and a prisoner who runs may be shot in the back.
+His squad goes along with the decision, and one squadmate may take an angle to cover the captor. Other bots who come across a bot with his hands up decide for themselves. Not every captor is merciful: some never meant to let him walk, and a prisoner who runs may be shot in the back.
 
-![A bot squad closes in on a man with his hands up in a field](https://raw.githubusercontent.com/JoelHauser/Mercy/main/docs/images/squad.jpg)
+![A bot squad closes in on a bot with his hands up in a field](https://raw.githubusercontent.com/JoelHauser/Mercy/main/docs/images/squad.jpg)
 
-The hold-fire is for that one man. Every other enemy is fought as normal, a bot won't fire through a man he spared, and a prisoner who picks up a gun is fair game again.
+The hold-fire is for that one prisoner. Every other enemy is fought as normal, a bot won't fire through a prisoner he spared, and a prisoner who picks up a gun is fair game again.
 
 ## The idea
 
-Nobody in Norvinsk wants to die for a backpack. Most fights still end the usual way, but now and then the man across the room has had enough, and what happens next is up to you, or to whoever got there first.
+Nobody in Norvinsk wants to die for a backpack. Most fights still end the usual way, but now and then the guy across the room has had enough, and what happens next is up to you, or to whoever got there first.
 
 ![A Scav on his knees with his hands up at a roadblock](https://raw.githubusercontent.com/JoelHauser/Mercy/main/docs/images/roadblock.jpg)
 
