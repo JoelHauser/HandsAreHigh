@@ -12,10 +12,12 @@
     - a YouTube link on a line of its own embeds a player.
 
   Art: scripts/make_art.py, from Joel's screenshots in art/screens (debug overlays cropped away).
-    docs/images/hero.jpg       header: the sunset close-up (1280x720)
+    docs/images/logo.png       header: the MERCY wordmark, transparent (scripts/make_logo.py from
+                               art/logo-source.png). Cream letters: made for the dark theme, faint on a light one.
+    docs/images/hero.jpg       the sunset close-up with MERCY over it (off the page since the logo)
     docs/images/thumbnail.png  square, for the Forge thumbnail (cropped 1:1)
     Section images, Joel's own framed shots (art/screens/page), resized only: scripts/make_page_images.py
-      lineup.jpg (four strips stacked), orders.jpg, prisoner.jpg, roadblock.jpg
+      lineup.jpg (four strips stacked), orders.jpg, prisoner.jpg, squad.jpg, roadblock.jpg
     Not on the page: docs/images/cover.jpg, the painted grid cover (scripts/make_cover.py), for
     socials or a gallery; holding.jpg / captors.jpg (make_art.py stills) are retired.
     dist/Mercy-teaser.mp4      32 s 1080p teaser, silent: add a music bed when uploading to YouTube
@@ -27,12 +29,12 @@
     "Bots can give up. A beaten Scav or PMC drops his gun and raises his hands, then waits for his chance. Give him orders, take him prisoner, or watch bots take each other."
 
   Confirm before posting:
-    - Version on the Forge (code is 0.31.0, not yet run in a raid; no GitHub release exists).
+    - Version on the Forge (code is 0.31.3 on main, not yet run in a raid; no GitHub release exists).
     - Links for SAIN, ORBIT, Looting Bots and Pit Fireteam (only BigBrain is linked).
     - Licence, and the Forge's "custom AI disclosure" field.
 -->
 
-![Mercy: a masked bot with his hands up in a forest at sunset](https://raw.githubusercontent.com/JoelHauser/Mercy/main/docs/images/hero.jpg)
+![MERCY](https://raw.githubusercontent.com/JoelHauser/Mercy/main/docs/images/logo.png)
 
 > **What this mod does:** it lets bots surrender.
 >
@@ -72,6 +74,8 @@ A man can give up to a hostile bot, not only to you. That bot makes his own call
 | **Keeps fighting** | The usual way a fight ends |
 
 His squad goes along with the decision, and one squadmate may take an angle to cover the captor. Other bots who find a man with his hands up decide for themselves. Not every captor is merciful: some never meant to let him walk, and a prisoner who runs may be shot in the back.
+
+![A bot squad closes in on a man with his hands up in a field](https://raw.githubusercontent.com/JoelHauser/Mercy/main/docs/images/squad.jpg)
 
 The hold-fire is for that one man. Every other enemy is fought as normal, a bot won't fire through a man he spared, and a prisoner who picks up a gun is fair game again.
 

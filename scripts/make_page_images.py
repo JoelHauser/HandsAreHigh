@@ -43,3 +43,4 @@ if __name__ == "__main__":
     save(fit(load(18)), "orders.jpg")      # hands behind his head, warehouse fire
     save(fit(load(12)), "prisoner.jpg")    # bot captor and his kneeling prisoner
     save(fit(load(17)), "roadblock.jpg")   # kneeling at the roadblock
+    save(fit(load(20)), "squad.jpg")       # a squad closes in on a man with his hands up
