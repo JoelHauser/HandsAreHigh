@@ -80,25 +80,49 @@ LootingBotsAdapter, Teammates), `HeadFreeLook.cs`, `WeaponState.cs`.
 
 - `HandsAreNotBusy.dll` is also installed in H:\SPT4.1.X (another author's; not referenced by us).
 
-## COMET 1.0.0 RC1 (Chazut, github.com/Chazut/COMET @ 28af156; read 2026-11-21, not installed or run)
+## COMET 1.0.0 (Chazut, github.com/Chazut/COMET tag 1.0.0 = 9e85438; read 2026-11-22)
 
-SAIN add-on (hard dependency SAIN 4.5.1, SPT 4.1.6) that replaces SAIN combat decisions for PMCs and
-AI Player Scavs (BotEligibility: pmcUSEC/pmcBEAR, or assault with MainProfileNickname / "Scav (Player)").
-Ordinary Scavs, bosses, Raiders keep SAIN. No surrender/hands-up feature of its own. [code]
-- Layers: CrossfireLayer 21, PostCombatLayer 21, MagazineRecoveryLayer 20 on PMC/PmcUsec/PmcBear/Assault/
-  ExUsec/Knight/BigPipe/BirdEye. Ours (Surrender 95, KeepAway 72, Captor 70) outrank them. [code]
-- Most features are Harmony patches on SAIN internals, gated on `BotComponent.SAINLayersActive`
-  (SAINActivationClass: toggled every ManualUpdate from `ActiveLayer != None`, SAIN.dll 4.5.1 decompile).
-  We clear ActiveLayer while holding a bot (SainAdapter.ReleaseLayer), so the gated ones (WeaponReturn
-  incl. TryChangeToSlot/TryChangeWeapon/TryChangeToMain prefixes, PistolSwap, ReloadTiming, QuickReload,
-  MedicalChoice, TacticalDevices) skip our prisoners. [code; inference for runtime order]
-- Not gated on SAIN layers but harmless to a held bot: HandsRecovery (only clears a stuck
-  WeaponManager.Reload.Reloading flag when no native reload runs), WeaponSync (refreshes
-  UpdateWeaponsList / UpdateFirearmsController after inventory changes: our drops and pick-ups),
-  GrenadeChoice (filters SAIN's own throw choice), Surgery* (CancelCurrent on interruption). [code]
-- Target choice: COMET prefixes SAINEnemyController.SelectEnemy (inside ChooseEnemy) and keeps its
-  cached pick while it is in `EnemyController.Enemies` (ThreatUsable), which our Visible/Known list
-  filtering doesn't touch -> a captor could keep his prisoner as target. Fixed on our side in 0.30.2:
-  SainTargetFilter.Postfix drops a blocked result (and _goalEnemy); counter ResultDropped. [code]
-- Needs a raid with COMET installed: prisoner hands while held (no draw), captor target switch after a
-  surrender, released men under COMET's PostCombat layer, Raid Review events.
+Installed in H:\SPT4.1.X (COMET.dll + Comet.Server.dll hash-identical to the release zip), not yet run
+in a raid with Mercy. Requires SAIN 4.5.1 (`BepInDependency me.sol.sain 4.5.1`, refuses a modified SAIN)
+and SPT ~4.1.0 (server mod range; README: 4.1.6). Installed: SPT 4.1.6, SAIN 4.5.1, ORBIT 3.2.1 (soft
+dependency of COMET, its Ghost API = ORBIT sleep). Pit Fireteam is not installed: not checked.
+Applies to PMCs and AI player scavs only (BotEligibility: pmcUSEC/pmcBEAR, or assault with
+MainProfileNickname / " (" nickname); ordinary Scavs, bosses, Raiders keep plain SAIN. No surrender
+feature of its own. [code]
+
+- Layers unchanged from RC1: Crossfire 21, PostCombat 21, MagazineRecovery 20. Ours (Surrender 95,
+  KeepAway 72, Captor 70) outrank them. COMET classifies our layers as owner "other" (ControlHandoff)
+  and releases its own paths when one takes over. [code]
+- Target choice changed since RC1: SelectEnemy is now a transpiler (A07 threat pick routed through
+  SAIN's CheckShallDogFight) and CheckShallDogFight gets a close-fight retarget (CloseFightRetarget).
+  Both run inside ChooseEnemy over the lists our SainTargetFilter prefix has already filtered; COMET's
+  ThreatAccepted postfix on ChooseEnemy releases its pick whenever the result isn't it, so our
+  Postfix nulling a protected result works in either postfix order. A held SAIN `_lastDogFightTarget`
+  can still return the prisoner; the result check drops it (native SAIN has the same field). [code]
+- Weapon logic (WeaponReturn prefixes on TryChangeToSlot/TryChangeWeapon/TryChangeToMain/ManualUpdate/
+  ShallChangeIfNoAmmo, PistolSwap) is gated on SAINLayersActive (off while we hold a bot). For
+  released men with SAIN back: AuthorizeWeaponSwitch only acts on COMET's own requests (Intent set);
+  ChooseWeaponFallback returns to native when the hands hold no firearm (frame null), which is the
+  only case WeaponState.MaybeChange calls TryChangeWeapon (empty hands or knife). [code]
+- Shared patch targets: BotWeaponManager.HaveBullets (both postfixes only turn true into false:
+  order-free); BotMemory.SetUnderFire (COMET's Priority.First prefix skips the original only for a
+  destroyed/replaced bot or source; our postfix still runs). [code]
+- Confirmed conflict, fixed in 0.31.7: movement recovery C06 (MovementRecoveryAdapter) samples every
+  COMET bot incl. "external-mover" (BotMover, which our layers drive with GoToByWay) and after 0.6 m
+  without progress asks vault (1 s), RecalcWay (3 s), jump (5 s), teleport (8 s, off by default),
+  Mover.Stop (14 s). Its pauses (prone, meds, busy hands, doors, shooting) don't cover a walking
+  prisoner/captor. CometAdapter (Compat.cs) postfixes `Plugin.MovementRecoveryScope(BotComponent)`
+  to false while the bot's active layer starts with "Mercy_" (live read: every exit path hands back),
+  gated on SurrenderRegistry/Captors/Escape/Scenarios activity. COMET's own out-of-scope branch
+  (EndMovementRecovery) resets its tracking. Lookup replayed on the installed DLLs (reflection-only
+  load): all members found. [code; verified in raid 2026-11-22: two COMET escape runs and two COMET captor
+  walk-ups with no recovery action]
+- COMET's own firing (TacticalSteeringFire.TryShoot) comes from its layers (outranked) or adapters
+  gated on SAINLayersActive, and aims at SAIN's GoalEnemy (filtered); the trigger guard stays the last
+  line. ImpactReaction/ExplosionAwareness add the shooter as an enemy on a hit, as the game's GetHit
+  does. MagazineRecovery only picks up magazines the bot itself dropped. PostCombat 1.0 seeks cover
+  after combat even without a remembered threat (NeedsCover = !Protected): a released man under it
+  after KeepAway ends is COMET's normal AI. [code]
+- Needs a raid with COMET: the "COMET 1.0.0 found" log line, prisoner hands while held, captor target
+  switch after a surrender, a walking prisoner/captor never vaulting or stopped by COMET, released men
+  under PostCombat, Raid Review events.

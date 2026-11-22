@@ -213,3 +213,48 @@ BotStimulators callback NRE when meds are dropped mid-use (ContinuousHealing pat
 Raid Review "WebSocket closed; this raid recording is incomplete"; TransparentSights missing config.json.
 
 Build passed (Release, 0 warnings); packed dist/Mercy-0.31.6.zip. No settings changed since 0.31.5.
+
+## 0.31.7 (2026-11-22): COMET 1.0.0 compatibility
+
+COMET 1.0.0 (tag 1.0.0 = 9e85438, SAIN 4.5.1, SPT 4.1.6) re-checked against Mercy at source level;
+details and the full overlap list in docs/engine/integrations.md.
+
+Fixed:
+- COMET's movement recovery (C06) also "unsticks" bots driven by the game's mover, which our layers
+  use: a walking prisoner or captor that stalled 0.6 m could get a vault/jump attempt (1 s, 5 s), a
+  repath (3 s) and our route stopped (14 s) on top of our own stall retries. CometAdapter (Compat.cs)
+  takes a bot out of C06's scope only while a Mercy_ layer is his active layer; COMET resets its
+  tracking and resumes as soon as our layer lets go. No COMET installed: nothing patched, nothing logged.
+
+Checked, no change needed: target choice (1.0's SelectEnemy transpiler + close-fight retarget run inside
+the filtered ChooseEnemy; our result check covers both postfix orders), weapon switch/fallback (native
+path for empty hands), HaveBullets and SetUnderFire (order-free), COMET layers (outranked), firing.
+
+Build passed (Debug + Release, 0 warnings); COMET lookup replayed on the installed COMET.dll/SAIN.dll
+(reflection-only: all members found); packed dist/Mercy-0.31.7.zip; installed (hash-verified). Not run in
+game. No settings changed.
+
+### Raid on 0.31.7 with COMET 1.0.0 (2026-11-22, log watched live; copy in that session scratchpad raid-0.31.7-comet)
+
+Verified in raid: "COMET 1.0.0 found" at raid start; 23 hands-up, 8 custodies, 0 restraint leaks, 0 Mercy
+warnings/errors. COMET PMC prisoners (MoonMoon_TTV, Nappaw, Zmrzka, snowythefox811, Twitch_JACK): drops on
+one request (mid-heal waits incl. the 8 s cap, mid-bolt, mid-draw), orders Stay/HandsOnHead obeyed, scrambles,
+hand-backs ~1.2 s to SAIN/COMET Post-combat/ORBIT/Exfiltration. COMET captors: custody, walk-ups (12 m, 30 m)
+arrived, loot pick-up, kill decisions carried out (target steering works with COMET's 1.0 SelectEnemy).
+COMET-bot escape runs 44 m and 75 m with no stop/vault. Not seen: a captor releasing a prisoner alive.
+
+Found (Mercy, not COMET): captor walk-up stalls 2.5 s with the mover idle (3x, also on a plain-SAIN Scav)
+whenever the captor's gun raise started after the walk order; gun fetch took a gun 6 m away whose path was
+285 m (stopped at a door). Open: 5 of 6 early surrenders to COMET PMCs went unanswered (13-33 m).
+Other mods: COMET C08 SquadSiege NRE (suspended itself), COMET H01 medical timeout, BotPlacementSystem
+TryToSpawnInZonePatch exception.
+
+### In-raid checks with COMET
+1. LogOutput: "COMET 1.0.0 found: its movement recovery leaves a bot alone while a Mercy layer drives him".
+2. PMC natural surrender (a fight with PMCs or player scavs): drop, hands up, no draw while held.
+3. Bot-vs-bot capture (PMC captor): captor's target switches off the prisoner; walk-up without vaults/jumps.
+4. Captor's squad: squadmates hold fire at the prisoner, still fight you.
+5. Captor loot: walk to the gun, pick-up, no busy hands.
+6. Escape: prisoner runs (keep-away), no stop/jump mid-run; ex-captor reacts.
+7. Incoming fire on a held man: surrender breaks as before.
+8. Release: handed back, COMET/SAIN AI resumes (PostCombat cover is COMET's normal behaviour), no lingering hold.

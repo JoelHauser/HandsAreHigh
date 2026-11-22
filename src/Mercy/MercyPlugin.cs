@@ -17,7 +17,7 @@ namespace Mercy
     {
         public const string PluginGuid = "com.mybutthasarash.mercy";
         public const string PluginName = "Mercy";
-        public const string PluginVersion = "0.31.6";
+        public const string PluginVersion = "0.31.7";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").
@@ -99,6 +99,7 @@ namespace Mercy
             _teardown.Add(SainAdapter.Reset);
             _teardown.Add(OrbitObjectives.Reset);   // 0.26.0: cached ORBIT members dropped
             _teardown.Add(OrbitAdapter.Reset);      // every ORBIT sleep block we set is lifted
+            _teardown.Add(CometAdapter.Reset);      // 0.31.7: re-resolved by a reloaded assembly
             _teardown.Add(CaptorVoice.Clear);
             _teardown.Add(OrderMenu.ClearNotes);
             _teardown.Add(Runtime.Menu.Reset);      // closes the menu; InputGuard.Reset: nothing blocked

@@ -95,6 +95,91 @@ namespace Mercy
         }
     }
 
+    // 0.31.7: COMET (Chazut, optional, found by reflection; read at github.com/Chazut/COMET tag 1.0.0
+    // = 9e85438, COMET.dll 1.0.0 against SAIN 4.5.1; members checked with Cecil on the shipped DLL):
+    //   private bool Comet.Client.Plugin.MovementRecoveryScope(SAIN.Components.BotComponent)
+    // COMET's movement recovery (C06) samples every PMC / AI player scav, also when SAIN is not
+    // driving him ("external-mover": the game's BotMover, which is what our layers walk with,
+    // GoToByWay). After 0.6 m without progress it asks for a vault at 1 s, RecalcWay at 3 s, a
+    // jump at 5 s, a teleport at 8 s (if a player turned it on) and stops the mover at 14 s. None of
+    // that knows a Mercy layer owns him: a hands-up prisoner held up by a captor in his way, or a
+    // walk-up we are already retrying, would get a second recovery owner (vault/jump under the
+    // hands-up pose, our route stopped). While one of our layers is his active layer, and only
+    // then, the scope reads false: COMET's own out-of-scope path (EndMovementRecovery) resets its
+    // tracking, and the next sample after our layer lets go starts clean. Nothing else of COMET is
+    // touched; its layers, targeting and weapon logic are already out of the way (see
+    // docs/engine/integrations.md). Any member missing: not patched, one log line.
+    internal static class CometAdapter
+    {
+        private static bool _tried;
+        internal static bool Patched;
+        private static FastGetter<BotOwner> _ownerRead;
+
+        internal static void TryPatch()
+        {
+            if (_tried) return;
+            _tried = true;
+            try
+            {
+                Assembly comet = null, sain = null;
+                foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    string n = a.GetName().Name;
+                    if (n == "COMET") comet = a;
+                    else if (n == "SAIN") sain = a;
+                }
+                if (comet == null) return;   // not installed: nothing to do, nothing logged
+                Type plugin = comet.GetType("Comet.Client.Plugin", false);
+                Type bot = sain?.GetType("SAIN.Components.BotComponent", false);
+                MethodInfo scope = plugin != null && bot != null
+                    ? plugin.GetMethod("MovementRecoveryScope", BindingFlags.Instance | BindingFlags.NonPublic, null, new[] { bot }, null)
+                    : null;
+                PropertyInfo owner = bot != null ? HarmonyLib.AccessTools.Property(bot, "BotOwner") : null;
+                _ownerRead = FastGetter<BotOwner>.For(owner);
+                string version = comet.GetName().Version?.ToString(3) ?? "?";
+                if (scope == null || scope.ReturnType != typeof(bool) || _ownerRead == null || MercyPlugin.Harmony == null)
+                {
+                    MercyPlugin.Log.LogWarning($"COMET {version} found, but its movement recovery didn't match 1.0.0 (different version?): " +
+                        "it may also try to unstick bots our layers are walking");
+                    return;
+                }
+                MercyPlugin.Harmony.Patch(scope, postfix: new HarmonyLib.HarmonyMethod(typeof(CometAdapter), nameof(ScopePostfix)));
+                Patched = true;
+                MercyPlugin.Log.LogInfo($"COMET {version} found: its movement recovery leaves a bot alone while a Mercy layer drives him");
+            }
+            catch (Exception e)
+            {
+                MercyPlugin.Log.LogWarning($"COMET movement recovery not adjusted: {e.Message}");
+            }
+        }
+
+        // Runs for every COMET bot every frame (its enrollment check) and on every recovery sample:
+        // four reads while nobody is held, guarded, running from a captor or staged.
+        private static void ScopePostfix(object __0, ref bool __result)
+        {
+            if (!__result) return;
+            if (!SurrenderRegistry.Any && !Captors.Any && Escape.Count == 0 && !Scenarios.Any) return;
+            BotOwner o;
+            try { o = _ownerRead.Get(__0); } catch { return; }
+            if (Ours(o)) __result = false;
+        }
+
+        // One of our layers (Mercy_Surrender, Mercy_Captor, Mercy_KeepAway, Mercy_Staged) is his active one.
+        internal static bool Ours(BotOwner o)
+        {
+            string layer;
+            try { layer = o?.Brain?.ActiveLayerName(); } catch { return false; }
+            return layer != null && layer.StartsWith("Mercy_", StringComparison.Ordinal);
+        }
+
+        internal static void Reset()
+        {
+            _tried = false;
+            Patched = false;
+            _ownerRead = null;
+        }
+    }
+
     // 0.26.0: ORBIT's objective for a released man. ORBIT keeps the objective it had before the
     // capture; handed back, he walked straight back to it (0.25.0 raid, #1: handed back 9 m away
     // walking off, 3 s later "drifting back ... layer OrbitBrainLayer"; three keep-away legs, each

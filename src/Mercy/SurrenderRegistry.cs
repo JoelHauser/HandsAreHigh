@@ -146,6 +146,7 @@ namespace Mercy
             if (world != null) MercyPlugin.Try("prewarm", SainAdapter.Prewarm);
             if (world != null) MercyPlugin.Try("menu prewarm", Runtime.Menu.Prewarm);   // 0.31.4
             if (world != null) MercyPlugin.Try("prewarm orbit", OrbitAdapter.Prewarm);
+            if (world != null) MercyPlugin.Try("comet", CometAdapter.TryPatch);   // 0.31.7
             if (world != null) MercyPlugin.Try("prewarm orbit objectives", OrbitObjectives.Prewarm);
             if (world != null) MercyPlugin.Try("prewarm looting bots", () => { bool _ = LootingBotsAdapter.Present; });
         }
