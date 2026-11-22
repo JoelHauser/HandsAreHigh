@@ -127,7 +127,7 @@ Only the everyday settings are shown. Tick **Advanced settings** for the fine tu
 
 - **SAIN**: built and tested alongside it. A bot's SAIN personality shapes his choices, and SAIN steps aside while he is held.
 - **ORBIT**: built and tested alongside it. Encounters stay awake, and a released prisoner isn't walked straight back to where he was caught.
-- **COMET**: tested alongside COMET 1.0.0. COMET won't drag a prisoner or his captor off to "unstick" them while they stand their ground during a surrender.
+- **COMET**: tested alongside it. Works together without issues.
 - **Looting Bots, Pit Fireteam**: supported, not yet tested in a raid.
 - **Questing Bots** and other AI mods: not tested.
 - **Fika**: not supported.
