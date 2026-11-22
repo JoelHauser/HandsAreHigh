@@ -4,12 +4,13 @@ Update this file at every task boundary (replace, don't append a transcript). Us
 exactly: **implemented** / **build passed** / **simulation passed** / **verified in raid** (log or
 Joel's eyes). Release history lives in `docs/history/`.
 
-Last updated: 2026-11-22 (0.31.8 fixes from the COMET raid; see docs/history/releases-0.31.md).
+Last updated: 2026-11-22 (1.0.0 released on GitHub: 0.31.8 code, version bump only; see docs/history/releases-1.0.md).
 
 ## State of the code
 
 | Version | Where | Level |
 |---|---|---|
+| 1.0.0 | main, tag v1.0.0, GitHub release (Latest) 2026-11-22; packed + installed 2026-11-22 (hash-verified; 0.31.8 DLL + cfg in that session scratchpad `backup-0.31.8`) | 0.31.8 code with the version bumped; 0.31.8 verified in raid (log, 2026-11-22, COMET 1.0.0 on): 8 natural surrenders, 3 bot custodies, 1 clean walk-up (8.5 m), 1 straight-line gun fetch, 0 Mercy/COMET warnings, 0 leaks. Still unseen: the walk-up `stuck (...)` detail (no stall happened) and the fetch detour/door paths |
 | 0.31.8 | main (committed + pushed 2026-11-22, no tag/release); packed + installed 2026-11-22 (hash-verified; 0.31.7 DLL + cfg in that session scratchpad `backup-0.31.7`) | build passed; gun fetch route-length rule, door waits in fetch/keep-away stall clocks, captor walk-up stall diagnostics; COMET recognition checked (no change); not run in game |
 | 0.31.7 | main @ da7051d (pushed 2026-11-22, no tag/release); packed + installed 2026-11-22 (hash-verified; 0.31.6 DLL + cfg in that session scratchpad `backup-0.31.6`) | build passed; COMET 1.0.0 compatibility: CometAdapter keeps COMET movement recovery off bots a Mercy layer drives (lookup replayed on installed COMET.dll); notes releases-0.31.md, docs/engine/integrations.md; verified in raid with COMET 1.0.0 (log, 2026-11-22): COMET escape runs and captor walk-ups uninterrupted, 0 leaks/errors |
 | 0.31.6 | main @ 09373e7 (pushed 2026-11-22, no tag/release; 0.31.4 + 0.31.5 included); packed + installed 2026-11-22 (hash-verified; 0.31.5 DLL + cfg in that session scratchpad `backup-0.31.5`) | build passed; fetch empty-hands root cause, meds/stim wait, bolt route next frame, opening checks capped; 0.31.5 captor aim + ignored surrender + truce verified in raid; 0.31.6 not run in game |

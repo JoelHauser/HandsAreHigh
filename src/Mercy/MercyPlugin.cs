@@ -17,7 +17,7 @@ namespace Mercy
     {
         public const string PluginGuid = "com.mybutthasarash.mercy";
         public const string PluginName = "Mercy";
-        public const string PluginVersion = "0.31.8";
+        public const string PluginVersion = "1.0.0";
 
         // Brain names, as SAIN lists them: Scavs (Assault, CursAssault) and PMCs
         // (PmcBear, PmcUsec, plus SPT's "PMC").

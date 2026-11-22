@@ -29,7 +29,7 @@
     "Bots can give up. A beaten Scav or PMC drops his gun and raises his hands, then waits for his chance. Give him orders, take him prisoner, or watch bots take each other."
 
   Confirm before posting:
-    - Version on the Forge (code is 0.31.3 on main, not yet run in a raid; no GitHub release exists).
+    - Version on the Forge: 1.0.0 (GitHub release v1.0.0, Mercy-1.0.0.zip).
     - Links for SAIN, ORBIT, Looting Bots and Pit Fireteam (only BigBrain is linked).
     - Licence, and the Forge's "custom AI disclosure" field.
 -->
@@ -127,6 +127,7 @@ Only the everyday settings are shown. Tick **Advanced settings** for the fine tu
 
 - **SAIN**: built and tested alongside it. A bot's SAIN personality shapes his choices, and SAIN steps aside while he is held.
 - **ORBIT**: built and tested alongside it. Encounters stay awake, and a released prisoner isn't walked straight back to where he was caught.
+- **COMET**: tested in raids with COMET 1.0.0. Its movement recovery leaves a bot alone while Mercy has him.
 - **Looting Bots, Pit Fireteam**: supported, not yet tested in a raid.
 - **Questing Bots** and other AI mods: not tested.
 - **Fika**: not supported.
