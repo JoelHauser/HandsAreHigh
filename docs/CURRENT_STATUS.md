@@ -10,7 +10,7 @@ Last updated: 2026-11-22 (0.31.0 release-quality pass; see docs/history/releases
 
 | Version | Where | Level |
 |---|---|---|
-| 0.31.3 | UNCOMMITTED on top of main @ 77dd8bc; packed + installed 2026-11-22 (hash-verified; 0.31.2 DLL + cfg in that session scratchpad `backup-0.31.2`) | build passed; order menu off while Hide all Mercy UI is on (0.31.2 let an invisible menu take F near prisoners); not run in game |
+| 0.31.3 | main @ fc9d47e (pushed 2026-11-22, no tag/release; 0.31.0-0.31.2 included); packed + installed 2026-11-22 (hash-verified; 0.31.2 DLL + cfg in that session scratchpad `backup-0.31.2`) | build passed; order menu off while Hide all Mercy UI is on (0.31.2 let an invisible menu take F near prisoners); not run in game |
 | 0.31.2 | UNCOMMITTED on top of main @ 77dd8bc; packed + installed 2026-11-22 (hash-verified; 0.31.1 DLL + cfg in that session scratchpad `backup-0.31.1`) | build passed, cfg bind 439 -> 441 (2 keys added); Hide all Mercy UI setting + Insert key; not run in game |
 | 0.31.1 | UNCOMMITTED on top of main @ 77dd8bc; packed + installed 2026-11-22 (hash-verified; 0.31.0 DLL + cfg in that session scratchpad `backup-0.31.0`) | build passed; empty automatic fast-forwarded out of AutomaticFireOperation before the drop; released men no longer get a weapon change while healing (WeaponState.MaybeChange); not run in game |
 | 0.31.0 | UNCOMMITTED on top of main @ 77dd8bc; packed (`dist/Mercy-0.31.0.zip`) + installed in H:/SPT4.1.X 2026-11-22 (hash-verified; 0.30.2 DLL + cfg in that session scratchpad `backup-0.30.2`); notes docs/history/releases-0.31.md | build passed (Debug + Release, 0 warnings), cfg bind 439/439 unchanged; opening hide search deferred, Verbose skip-log dedupe, F12 103 -> 50 visible; not run in game |
