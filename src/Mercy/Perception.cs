@@ -181,7 +181,9 @@ namespace Mercy
         // reachable candidate instead of path-solving every better-scoring one: the 0.28.1 raid had a
         // 16.8 ms frame from an opening's run + hide searches together (two full searches, up to
         // PathCandidates path solves each).
-        internal static bool RetreatPoint(Player bot, Vector3 threat, float distance, bool hiddenOnly, out Vector3 point, bool anyOnly = false)
+        // maxSolves (0.31.6): give up after this many path solves failed (availability checks: TakeOpening's
+        // "can he run / hide", 1-4 ms frames on the 0.31.5 raid when the first spots were unreachable).
+        internal static bool RetreatPoint(Player bot, Vector3 threat, float distance, bool hiddenOnly, out Vector3 point, bool anyOnly = false, int maxSolves = int.MaxValue)
         {
             point = bot.Position;
             Vector3 away = bot.Position - threat;
@@ -193,6 +195,7 @@ namespace Mercy
             float bestScore = float.MinValue;
             bool found = false;
             int tries = Settings.PathCandidates.Value;
+            int solves = 0;
 
             for (int i = 0; i < tries; i++)
             {
@@ -205,6 +208,8 @@ namespace Mercy
                 if (hiddenOnly && !hidden) continue;
                 float score = (hidden ? 100f : 0f) + Vector3.Distance(hit.position, threat) - Mathf.Abs(angle) * 0.1f;
                 if (score <= bestScore) continue;
+                if (solves >= maxSolves) break;
+                solves++;
                 if (!Reachable(bot.Position, hit.position)) continue;
 
                 bestScore = score;
@@ -268,7 +273,15 @@ namespace Mercy
             int tries = Mathf.RoundToInt(Settings.PathCandidates.Value * 1.5f);
             float best = float.MinValue, bestLeg = float.MinValue;
             Vector3 legPoint = me;
-            int noMesh = 0, noPath = 0, pastThreat = 0, crossesHim = 0, sameWay = 0, hiddenN = 0;
+            int noMesh = 0, noPath = 0, pastThreat = 0, crossesHim = 0, sameWay = 0, hiddenN = 0, pruned = 0;
+            // 0.31.4: two passes. First every candidate (the same random draws as before, in the same
+            // order) gets its cheap tests: NavMesh sample, concealment, separation, and an upper bound on
+            // its score with the route length at its floor (the straight line: a route is never shorter).
+            // Then routes are solved best bound first, and a candidate whose bound can't beat the best
+            // found is skipped. The chosen spot is the same; most of the ~18 path solves (3.8-4.9 ms in
+            // one frame per bolt in the 0.31.3 raid) are no longer made.
+            if (FleeBuf.Length < tries) { FleeBuf = new FleeCand[tries]; FleeOrder = new int[tries]; }
+            int n = 0;
             for (int i = 0; i < tries; i++)
             {
                 float angle = Dice.Range(-80f, 80f);
@@ -277,32 +290,53 @@ namespace Mercy
                 Vector3 candidate = me + Quaternion.Euler(0f, angle, 0f) * dir * dist;
                 if (!NavMesh.SamplePosition(candidate, out NavMeshHit hit, 6f, NavMesh.AllAreas)) { noMesh++; continue; }
                 Vector3 c = hit.position;
-                if (!PathTo(me, c, out Vector3[] corners, out _)) { noPath++; continue; }
+                bool hidden = !LineClear(threatEye, c + Vector3.up * 1.2f);
+                float sep = Flat(c, heldAt);
+                float fromThreat = walking ? Mathf.Min(Flat(c, threat), Flat(c, ahead)) : Flat(c, threat);
+                float cheap = (hidden ? 30f : 0f) + sep + 0.5f * fromThreat;
+                bool way = false;
+                if (walking && nearHim)
+                {
+                    Vector3 go = c - me; go.y = 0f;
+                    if (go.sqrMagnitude > 1f && Vector3.Angle(go, threatVel) < 35f) { cheap -= 25f; way = true; }
+                }
+                bool isLeg = sep < radius;
+                if (isLeg && sep < here + 8f) continue;   // neither out of the area nor a useful leg (as before: never chosen)
+                float bound = cheap - 0.35f * Flat(me, c) + (isLeg && hidden ? 40f : 0f) + 0.5f;   // +0.5: the path start may snap a little nearer
+                FleeBuf[n] = new FleeCand { Point = c, Cheap = cheap, Bound = bound, Hidden = hidden, Leg = isLeg, SameWay = way };
+                FleeOrder[n] = n;
+                n++;
+            }
+            // Best bound first: out-of-area spots before legs (a leg is only used when none exists).
+            for (int i = 1; i < n; i++)
+            {
+                int k = FleeOrder[i], j = i - 1;
+                while (j >= 0 && Before(FleeBuf[k], FleeBuf[FleeOrder[j]])) { FleeOrder[j + 1] = FleeOrder[j]; j--; }
+                FleeOrder[j + 1] = k;
+            }
+            for (int o = 0; o < n; o++)
+            {
+                FleeCand f = FleeBuf[FleeOrder[o]];
+                if (f.Leg ? (best > float.MinValue || f.Bound <= bestLeg) : f.Bound <= best) { pruned++; continue; }
+                if (!PathTo(me, f.Point, out Vector3[] corners, out _)) { noPath++; continue; }
                 if (PassesNear(corners, threat, 8f)) { pastThreat++; continue; }
                 if (walking && PassesNearSegment(corners, threat, ahead, 6f)) { crossesHim++; continue; }
                 float len = 0f;
                 for (int k = 1; k < corners.Length; k++) len += Vector3.Distance(corners[k - 1], corners[k]);
-                bool hidden = !LineClear(threatEye, c + Vector3.up * 1.2f);
-                if (hidden) hiddenN++;
-                float sep = Flat(c, heldAt);
-                float fromThreat = walking ? Mathf.Min(Flat(c, threat), Flat(c, ahead)) : Flat(c, threat);
-                float score = (hidden ? 30f : 0f) + sep + 0.5f * fromThreat - 0.35f * len;
-                if (walking && nearHim)
+                if (f.Hidden) hiddenN++;
+                if (f.SameWay) sameWay++;
+                float score = f.Cheap - 0.35f * len;
+                if (!f.Leg)
                 {
-                    Vector3 go = c - me; go.y = 0f;
-                    if (go.sqrMagnitude > 1f && Vector3.Angle(go, threatVel) < 35f) { score -= 25f; sameWay++; }
+                    if (score > best) { best = score; point = f.Point; }
                 }
-                if (sep >= radius)
+                else
                 {
-                    if (score > best) { best = score; point = c; }
-                }
-                else if (sep >= here + 8f)
-                {
-                    float ls = score + (hidden ? 40f : 0f);   // a leg is worth most when it hides him
-                    if (ls > bestLeg) { bestLeg = ls; legPoint = c; }
+                    float ls = score + (f.Hidden ? 40f : 0f);   // a leg is worth most when it hides him
+                    if (ls > bestLeg) { bestLeg = ls; legPoint = f.Point; }
                 }
             }
-            string stats = $"{tries} spots tried: {noMesh} off the NavMesh, {noPath} no complete path, {pastThreat} past the threat" +
+            string stats = $"{tries} spots tried: {noMesh} off the NavMesh, {pruned} could not beat the best, {noPath} no complete path, {pastThreat} past the threat" +
                            (walking ? $", {crossesHim} across his path, {sameWay} his way (penalised); he walks {threatVel.magnitude:0.0} m/s" : "") +
                            $", {hiddenN} hidden from him";
             if (best > float.MinValue) { why = stats; return true; }
@@ -310,6 +344,11 @@ namespace Mercy
             why = $"no way out of {radius:0} m ({stats})";
             return false;
         }
+
+        private struct FleeCand { internal Vector3 Point; internal float Cheap, Bound; internal bool Hidden, Leg, SameWay; }
+        private static FleeCand[] FleeBuf = new FleeCand[24];
+        private static int[] FleeOrder = new int[24];
+        private static bool Before(in FleeCand a, in FleeCand b) => a.Leg != b.Leg ? !a.Leg : a.Bound > b.Bound;
 
         // 0.24.0: for a fetch route (SurrenderLogic.Decide): the same stand-off test as an escape.
         internal static bool RoutePassesNear(Vector3[] corners, Vector3 p, float r) => corners != null && corners.Length > 1 && PassesNear(corners, p, r);

@@ -604,12 +604,15 @@ namespace Mercy
         }
 
         // Runs: arms down (fast if hurt), grace before he can be caught, orders cancelled.
+        internal int BoltFrame = -1;   // 0.31.5: frame the flight was decided (Retreating searches from the next one)
+
         internal void BeginRetreat(string reason, bool emergency)
         {
             // 0.25.0: a calm way out (let go, left behind) is handed to his own AI as soon as he is
             // on his way (SurrenderLogic.QuickClear), not after legs of our flight and a regroup.
             QuickHandBack = !emergency && Settings.QuickHandBack.Value;
             QuickEnded = false;
+            BoltFrame = Time.frameCount;   // 0.31.5: the route search waits for the next frame
             if (TEscape < 0f) { TEscape = Time.time; EscapeKind = emergency ? "flight" : CalmFlight ? "walk-off" : "let go"; }
             MarkFlight();
             // On his knees: a bolt needs the fastest rise he can manage; being let go, a calm one.

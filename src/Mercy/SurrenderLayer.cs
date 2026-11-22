@@ -1227,12 +1227,20 @@ namespace Mercy
             }
             float waited = Time.time - s.DropSince;
             float limit = Settings.DropRetrySeconds.Value;
+            // 0.31.5: meds or a stim in use and no request of ours open: let them finish (8 s at most).
+            if (!s.HandsPending && Arsenal.UsingMeds(Me) && waited < 8f) return false;
             if (waited < limit) return false;
 
             if (s.HandsPending)
             {
                 SurrenderRegistry.CutReload(s);
                 if (Time.time - s.HandsSince < limit * 2f) return false;
+                // 0.31.4: the game is mid-hide (its Remove operation runs our request): wait it out, up to
+                // 3x the limit, instead of asking again on top of it. A long rifle took 2.36 s to put away
+                // and its second request landed on the running hide (0.31.3 Customs raid: hgj's SV-98).
+                if (Time.time - s.HandsSince < limit * 3f &&
+                    Me.HandsController is Player.FirearmController hfc && hfc.CurrentOperation is Player.FirearmController.Remove)
+                    return false;
                 MercyPlugin.Log.LogInfo($"{s.Name}: no answer to the hands change in {limit * 2f:0.0} s ({Arsenal.DescribeHands(Me)}), abandoning it");
                 SurrenderRegistry.AbandonRequest(s);
             }
@@ -1387,7 +1395,7 @@ namespace Mercy
             else Add(options, log, $"scramble{reachWhy}", Settings.ScrambleWeight.Value * scramble * reach * (0.5f + nerve) * fight * (gun != null ? 0.5f : 1f) * legs * scrambleFoot);
 
             if (dist < Settings.EscapeMinDistance.Value) log.Append($"run: you're within {Settings.EscapeMinDistance.Value:0} m; ");
-            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.RetreatDistance.Value, false, out _, anyOnly: true)) log.Append("run: no way out; ");
+            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.RetreatDistance.Value, false, out _, anyOnly: true, maxSolves: 4)) log.Append("run: no way out; ");
             else Add(options, log, "run", Settings.EscapeWeight.Value * Mathf.Max(0.1f, 1.3f - nerve) * flee * legs * onFoot);
 
             Vector3 hidePoint = Vector3.zero;
@@ -1395,7 +1403,7 @@ namespace Mercy
             // 0.31.0: only "is there one" here (first hidden, reachable spot); the full cover search
             // (up to PathCandidates path solves) runs in Hiding on a frame with heavy budget. It cost
             // 4-8 ms in the frame of every opening in the 0.30.2 raid (Profile spike, Layer).
-            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.CoverRadius.Value, true, out hidePoint, anyOnly: true)) log.Append("hide: no hidden spot near; ");
+            else if (!Perception.RetreatPoint(Me, ThreatPos(s, captor), Settings.CoverRadius.Value, true, out hidePoint, anyOnly: true, maxSolves: 4)) log.Append("hide: no hidden spot near; ");
             else Add(options, log, "hide", Settings.HideWeight.Value * (1.3f - nerve) * flee * (s.LegsBad ? 1.5f : 1f) * (kneeling ? 0.8f : 1f));
 
             if (options.Count == 0)
@@ -1885,6 +1893,9 @@ namespace Mercy
             {
                 // A route search is heavy: when other bots already used this frame's budget
                 // he picks his route next frame (a frame's delay, no spike).
+                // 0.31.5: never in the frame the flight was decided (the decision has its own checks:
+                // the two together made 4 ms frames on the 0.31.5 Customs raid).
+                if (Time.frameCount == s.BoltFrame) return;
                 if (!Perception.TakeHeavy()) return;
                 if (!PickRetreat(s)) return;
             }
@@ -2221,6 +2232,8 @@ namespace Mercy
 
             if (Arrived(s.TargetPoint, Settings.PickupRange.Value))
             {
+                // 0.31.5: never on top of meds or a stim in use (the phase's own time limit still runs).
+                if (Arsenal.UsingMeds(Me)) { StopMoving(); return; }
                 StopMoving();
                 Item weapon = s.TargetWeapon;
                 bool scrambling = s.Scrambling;
@@ -2232,7 +2245,7 @@ namespace Mercy
             if (Stalled(s))
             {
                 if (s.Scrambling) FailScramble(s, "stuck on the way");
-                else GiveUpOn(s, "stuck on the way");
+                else GiveUpOn(s, $"stuck on the way ({GunWhere(s)})");
                 return;
             }
             // 0.21.0: a dash for his gun under fire has its own short budget (1.2 s + 1 s per 3.5 m).
@@ -2244,10 +2257,15 @@ namespace Mercy
             float limit = s.Scrambling ? Settings.ScrambleTimeout.Value : Settings.RecoveryTimeout.Value;
             if (Time.time - s.PhaseSince > limit)
             {
-                if (s.Scrambling) FailScramble(s, "took too long");
-                else GiveUpOn(s, "took too long");
+                if (s.Scrambling) FailScramble(s, $"took too long ({GunWhere(s)})");
+                else GiveUpOn(s, $"took too long ({GunWhere(s)})");
             }
         }
+
+        // 0.31.4: why a walk to a gun failed, for the log: how far he still is, and his hands (Карлуша, 0.31.3
+        // Customs raid: "took too long" 2 m from the gun with no word on why).
+        private string GunWhere(SurrenderState s) =>
+            $"{Perception.Flat(Me.Position, s.TargetPoint):0.0} m from it, {Mathf.Abs(Me.Position.y - s.TargetPoint.y):0.0} m height, hands {Arsenal.DescribeHands(Me)}";
 
         private void AfterPickUp(Item weapon, bool ok)
         {

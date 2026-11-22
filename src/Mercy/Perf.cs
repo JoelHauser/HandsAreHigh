@@ -33,7 +33,7 @@ namespace Mercy
         //   Decide      Captors.Decide (a bot captor's take/spare/ignore + custody; inside Start or Captors)
         //   Scavenge    Arsenal.FindWeapon (60 m sweep for loose guns and bodies; inside Layer), 0.30.1
         internal enum Sec { Pose, Tilt, Shot, Hit, Registry, Natural, Captors, Restraint, Voice, Menu, Layer, Gui,
-                            LayerCheck, SainFilter, HeadLook, FireGuard, Scenarios, Kit, Start, Decide, Scavenge, Count }
+                            LayerCheck, SainFilter, HeadLook, FireGuard, Scenarios, Kit, Start, Decide, Scavenge, Draw, Count }
 
         private static bool Detail(int i) => i >= (int)Sec.Kit;
 

@@ -388,7 +388,7 @@ namespace Mercy
         private Vector3 _progressFrom;
         // 0.30.2: a gun fetch's pick-up (one transaction at a time; its callback may be stale).
         private bool _pickAsked;
-        private float _pickAt, _nextWatchCheck;
+        private float _pickAt, _nextWatchCheck, _handsBusySince = -1f;
         private int _pickToken;
 
         public KeepAwayLogic(BotOwner botOwner) : base(botOwner) { }
@@ -400,7 +400,7 @@ namespace Mercy
             _have = false; _moving = false; _sprint = false;
             _since = Time.time;
             _nextSprintCheck = 0f;
-            _pickAsked = false; _nextWatchCheck = 0f; _pickToken++;
+            _pickAsked = false; _nextWatchCheck = 0f; _pickToken++; _handsBusySince = -1f;
             BotOwner.ShootData?.EndShoot();
         }
 
@@ -501,7 +501,21 @@ namespace Mercy
                 if (_moving) { BotOwner.StopMove(); _moving = false; }
                 if (!Arsenal.Locate(gun, at, 2f, out _)) { Escape.FetchSkip(me, gun); Escape.EndLeg(me, "the gun isn't there any more"); return; }
                 Item inHands = me.HandsController?.Item;
-                if (inHands != null && !Arsenal.IsMelee(inHands)) return;   // meds or a grenade in hands: wait
+                // 0.31.6: empty hands are free. The empty-hands controller still reports an Item (a
+                // placeholder), so "an item that isn't a knife" read empty hands as busy: every fetch
+                // stood at the gun until the leg's limit (0.31.3 Тимурка, Карлуша x2; 0.31.5 log:
+                // "his hands are busy (empty)"). Only meds, a grenade or similar in hands wait.
+                if (!Arsenal.HandsEmpty(me) && inHands != null && !Arsenal.IsMelee(inHands))
+                {
+                    // Meds or a grenade in hands: a short wait, then his own AI has him. 0.31.4: the wait had no
+                    // limit but the leg's 25 s and said nothing: three fetches in the 0.31.3 Customs raid stood
+                    // frozen at the gun (hurt men, ContinuousHealing installed: probably healing).
+                    if (_handsBusySince < 0f) _handsBusySince = now;
+                    if (now - _handsBusySince > 3f)
+                        Escape.EndLeg(me, $"at the gun, but his hands are busy ({Arsenal.DescribeHands(me)}): leaves it to his own AI");
+                    return;
+                }
+                _handsBusySince = -1f;
                 _pickAsked = true;
                 _pickAt = now;
                 int token = ++_pickToken;

@@ -144,6 +144,7 @@ namespace Mercy
             // First-use costs (assembly scan for SAIN, Unity layer lookups) paid now, at raid
             // start, not in the frame of the first surrender check.
             if (world != null) MercyPlugin.Try("prewarm", SainAdapter.Prewarm);
+            if (world != null) MercyPlugin.Try("menu prewarm", Runtime.Menu.Prewarm);   // 0.31.4
             if (world != null) MercyPlugin.Try("prewarm orbit", OrbitAdapter.Prewarm);
             if (world != null) MercyPlugin.Try("prewarm orbit objectives", OrbitObjectives.Prewarm);
             if (world != null) MercyPlugin.Try("prewarm looting bots", () => { bool _ = LootingBotsAdapter.Present; });
@@ -390,6 +391,7 @@ namespace Mercy
             s.HandsPending = false;
             s.DropPending = !Arsenal.HandsEmpty(s.Bot);
             if (!s.DropPending) { s.THandsEmpty = s.TStart; return; }
+            if (Arsenal.UsingMeds(s.Bot)) return;   // 0.31.5: CheckDrop asks once the meds are done
             RequestDrop(s);
         }
 
@@ -641,6 +643,18 @@ namespace Mercy
                     string layer = "?";
                     try { BotOwner fo = bot.AIData?.BotOwner; if (fo != null) layer = DrakiaXYZ.BigBrain.Brains.BrainManager.GetActiveLayerName(fo) ?? "?"; } catch { }
                     MercyPlugin.Log.LogWarning($"{s.Name}: a {fdc.Item.ShortName.Localized()} is in his hands with no draw of ours ({s.Phase}, arms {s.Weight:0.00}, active layer {layer}, hands request {(s.HandsPending ? "open" : "none")})");
+                    // 0.31.4: with his hands up, it goes down again. StartDrop reads the hands once; a man
+                    // who gave up mid weapon-switch read "empty", nothing was dropped, and the switch then
+                    // finished with the gun in his hands (0.31.3 Customs raid: Святополк's Vepr-KM, hands up,
+                    // "hands request none"). One request, the usual drop path (CheckDrop retries it).
+                    if (s.Phase == Phase.HandsUp)
+                    {
+                        MercyPlugin.Log.LogInfo($"{s.Name}: drops the {fdc.Item.ShortName.Localized()} that came into his hands after he gave up");
+                        s.DropPending = true;
+                        s.DropSince = Time.time;
+                        s.DropAttempts = 0;
+                        RequestDrop(s);
+                    }
                 }
                 if (s.ArmedPending != null && (s.Phase == Phase.HandsUp || s.Phase == Phase.Retreating || s.Phase == Phase.Hiding || s.Phase == Phase.Regrouping || s.Phase == Phase.Released)) s.ArmedPending = null;
                 if (!s.Dead && s.ArmedPending != null && (Reactions.Shows(s) != null || Time.time - s.ArmedPendingSince > 1.5f))

@@ -64,6 +64,12 @@ namespace Mercy
             return hc == null || hc is Player.EmptyHandsController;
         }
 
+        // 0.31.5: meds or a stim in use (the game's own BotMedecine / BotStimulators run under any layer,
+        // ours included). A hands change of ours on top of them makes the game put the meds away
+        // mid-use (MedsController.DropWithDelay), and the game's stim callback (BotStimulators TryApply)
+        // then throws: 0.31.5 Customs raid, Паша's scramble pick-up. We wait for them to finish instead.
+        internal static bool UsingMeds(Player p) => p?.HandsController is Player.MedsController;
+
         // For the logs: what his hands are doing right now.
         internal static string DescribeHands(Player p)
         {
@@ -354,9 +360,17 @@ namespace Mercy
                 bot.QuickdrawTime = GameHelper.PastTime;
             }
 
-            selector.UpdateWeaponsList();
-            if (selector.TryChangeToSlot(slot.Value, true, r => SurrenderRegistry.OnDrawn(s, token, Succeeded(r))))
-                return true;
+            // 0.31.4: detail section: the game's own weapon change (the 0.31.3 raid's 2.6-4.6 ms "Regroup"
+            // frames were this call: EFT building the firearm in his hands, as for any bot's draw).
+            long tDraw = Perf.Begin();
+            bool changing;
+            try
+            {
+                selector.UpdateWeaponsList();
+                changing = selector.TryChangeToSlot(slot.Value, true, r => SurrenderRegistry.OnDrawn(s, token, Succeeded(r)));
+            }
+            finally { Perf.End(Perf.Sec.Draw, tDraw); }
+            if (changing) return true;
 
             if (selector.IsChanging || !HandsEmpty(bot))
             {

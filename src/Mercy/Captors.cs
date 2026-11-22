@@ -1472,6 +1472,12 @@ namespace Mercy
         private float _nextRelease;
         private bool _stopped;
         private bool _moving;
+        // 0.31.4: the captor's aim (Joel): sights raised on the prisoner for a time set by how dangerous
+        // he judges him, then the ready, then raised again; at once when the threat jumps.
+        private bool _aiming;
+        private float _aimUntil, _restUntil, _nextThreat, _threat, _threatAtLower, _seenAt;
+        private Vector3 _seenPos;
+        private SurrenderState _aimFor;
 
         public CaptorLogic(BotOwner botOwner) : base(botOwner) { }
 
@@ -1485,6 +1491,8 @@ namespace Mercy
         public override void Stop()
         {
             _pose = -1f;
+            AimDown();
+            _aimFor = null;
             // 0.21.0: our last path cleared too (a brain without SAIN kept walking it: an outdated
             // destination once custody had ended).
             if (_moving) { BotOwner.StopMove(); BotOwner.Sprint(false); _moving = false; }
@@ -1517,7 +1525,7 @@ namespace Mercy
                 // 0.21.0: on a path of ours and at a door: the game's opener has him until it's open.
                 if (_moving && DoorBusy()) return;
                 // 0.16.0: walking to the prisoner's gear and picking it up.
-                if (CaptorLoot.TryJob(BotOwner.GetPlayer, out LootJob job)) { Fetch(job); return; }
+                if (CaptorLoot.TryJob(BotOwner.GetPlayer, out LootJob job)) { AimDown(); Fetch(job); return; }
                 if (s?.Bot == null) return;
                 // 0.20.0: covering a squadmate's prisoner.
                 if (Overwatch.TryDrive(BotOwner.GetPlayer, out CoverGuard guard)) { Cover(guard, s); return; }
@@ -1526,8 +1534,8 @@ namespace Mercy
 
                 if (_moving || !_stopped) { BotOwner.StopMove(); BotOwner.SetTargetMoveSpeed(0f); BotOwner.Sprint(false); _stopped = true; _moving = false; }
                 if (Mathf.Abs(_pose - 1f) > 0.01f) { _pose = 1f; BotOwner.SetPose(1f); }
-                if (cs != null && Time.time < cs.GlanceUntil) BotOwner.Steering.LookToPoint(cs.GlancePoint);
-                else BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot));
+                if (cs != null && Time.time < cs.GlanceUntil) { BotOwner.Steering.LookToPoint(cs.GlancePoint); AimDown(); }
+                else { BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot)); Aim(s, cs); }
             }
             catch (System.Exception e) { MercyPlugin.Report("captor logic", e); }
             Perf.End(Perf.Sec.Captors, t0);
@@ -1553,7 +1561,7 @@ namespace Mercy
                 BotOwner.MovementResume();
                 BotOwner.Mover.GoToByWay(cc, 0.4f);
             }
-            if (cs.Close) { BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot)); return; }
+            if (cs.Close) { BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot)); Aim(s, cs); return; }
             if (!cs.PathIssued && Time.time >= cs.NextPathAt)
             {
                 cs.NextPathAt = Time.time + 1.5f;
@@ -1577,6 +1585,7 @@ namespace Mercy
                 BotOwner.Mover.GoToByWay(way, 0.5f);
             }
             BotOwner.Steering.LookToPoint(Perception.Chest(s.Bot));
+            Aim(s, cs);
         }
 
         // 0.20.0: a covering squadmate. Moving: one complete path to his spot (re-made at most every
@@ -1610,8 +1619,8 @@ namespace Mercy
                 return;
             }
             if (_moving || !_stopped) { BotOwner.StopMove(); BotOwner.SetTargetMoveSpeed(0f); BotOwner.Sprint(false); _stopped = true; _moving = false; }
-            if (Time.time < g.ScanUntil) BotOwner.Steering.LookToPoint(g.ScanPoint);
-            else BotOwner.Steering.LookToPoint(chest);
+            if (Time.time < g.ScanUntil) { BotOwner.Steering.LookToPoint(g.ScanPoint); AimDown(); }
+            else { BotOwner.Steering.LookToPoint(chest); Aim(s, null); }
         }
 
         // 0.16.0: one path to a point just short of the item, at a walk; eyes on the prisoner until
@@ -1686,6 +1695,96 @@ namespace Mercy
             // lower his body to the floor (PickUpState.Enter); from the feet it was ~17 deg.
             if (j.Stage == LootStage.Settle) BotOwner.Steering.LookToDirection(CaptorLoot.PickupLook(me, j.At), LookDownSpeed);
             CaptorLoot.Settled(j, now);
+        }
+
+        // ---- aim (0.31.4) ------------------------------------------------------------------
+        // Verified in 0.16.9: vanilla BotPeaceHardAim.ManualUpdate calls
+        // WeaponManager.ShootController.SetAim(true) every frame it aims (with Steering.LookToPoint on
+        // the target) and SetAim(false) once at EndAim. The same here; the look is already on his chest.
+        private void Aim(SurrenderState s, CaptorState cs)
+        {
+            if (!Settings.CaptorAim.Value || s?.Bot == null) { AimDown(); return; }
+            IFirearmHandsController sc = BotOwner.WeaponManager?.ShootController;
+            if (sc == null || !(BotOwner.GetPlayer.HandsController is Player.FirearmController fc) || sc.Item != fc.Item || fc.IsInReloadOperation())
+            { AimDown(); return; }
+            float now = Time.time;
+            if (s != _aimFor)
+            {
+                _aimFor = s;
+                _nextThreat = 0f;
+                _restUntil = 0f;
+                _seenPos = s.Bot.Position;
+                _seenAt = now;
+            }
+            if (now >= _nextThreat)
+            {
+                _nextThreat = now + 0.5f;
+                _threat = Threat(s, cs, now, false, out _);
+            }
+            float always = Settings.CaptorAimAlways.Value;
+            if (_aiming)
+            {
+                if (_threat >= always && always < 1f) _aimUntil = Mathf.Max(_aimUntil, now + 1f);   // never down while this dangerous
+                if (now >= _aimUntil)
+                {
+                    AimDown();
+                    _threatAtLower = _threat;
+                    _restUntil = now + Mathf.Lerp(6f, 1f, _threat) * Dice.Range(0.8f, 1.2f);
+                    return;
+                }
+                sc.SetAim(true);
+                return;
+            }
+            // At the ready: up again when the rest is over, or at once when he got more dangerous.
+            if (now < _restUntil && _threat - _threatAtLower < 0.2f) return;
+            float hold = Mathf.Lerp(Settings.CaptorAimLow.Value, Settings.CaptorAimHigh.Value, _threat) * Dice.Range(0.85f, 1.15f);
+            _aimUntil = now + hold;
+            _aiming = true;
+            sc.SetAim(true);
+            if (Settings.LogDecisions.Value || Settings.VerboseLogs.Value)
+            {
+                Threat(s, cs, now, true, out string why);
+                MercyPlugin.Log.LogInfo($"{Restraint.Name(BotOwner.GetPlayer)}: raises his gun on {s.Name} for " +
+                    $"{(_threat >= always && always < 1f ? "as long as that lasts" : $"{hold:0} s")} (threat {_threat:0.00}: {why})");
+            }
+        }
+
+        private void AimDown()
+        {
+            if (!_aiming) return;
+            _aiming = false;
+            try { if (BotOwner.BotState == EBotState.Active) BotOwner.WeaponManager?.ShootController?.SetAim(false); } catch { }
+        }
+
+        // How dangerous he judges his prisoner, from what he can see (0..1). why only when asked (log).
+        private float Threat(SurrenderState s, CaptorState cs, float now, bool explain, out string why)
+        {
+            why = null;
+            Player me = BotOwner.GetPlayer, p = s.Bot;
+            if (p.HandsController is Player.FirearmController) { why = "a gun in his hands"; return 1f; }
+            if (s.Phase != Phase.HandsUp) { why = "he isn't holding still"; return 1f; }
+            System.Text.StringBuilder sb = explain ? new System.Text.StringBuilder(96) : null;
+            float t = 0.3f;
+            void Add(float v, string r) { t += v; if (sb != null) { if (sb.Length > 0) sb.Append(", "); sb.Append(r); } }
+            float d = Perception.Flat(me.Position, p.Position);
+            if (d < 3f) Add(0.25f, "within 3 m");
+            else if (d < 6f) Add(0.12f, "within 6 m");
+            else if (d > 15f) Add(-0.1f, $"{d:0} m off");
+            float dt = now - _seenAt;
+            if (dt >= 0.4f)
+            {
+                float speed = Perception.Flat(p.Position, _seenPos) / dt;
+                _seenPos = p.Position; _seenAt = now;
+                if (speed > 0.6f) Add(0.25f, "moving");
+            }
+            if (s.Weight < 0.6f) Add(0.2f, "hands not up");
+            if (Kneel.Active(s) && s.KneelT > 0.5f) Add(-0.15f, "on his knees");
+            if (cs != null && (cs.SawKept != null || cs.Incomplete)) Add(0.25f, "kept something back");
+            else if (Arsenal.GunOnBody(p) != null) Add(0.15f, "a gun still on him");
+            if (s.Gesture == GestureKind.Defiant) Add(0.15f, "defiant");
+            if (cs != null && now - cs.AlertSeenAt < 5f) Add(0.15f, "trouble nearby");
+            if (sb != null) why = sb.Length > 0 ? sb.ToString() : "calm";
+            return Mathf.Clamp01(t);
         }
 
         // As SurrenderLogic.Relink: the mover's last-good-link fields set to where he stands, so

@@ -114,3 +114,102 @@ opens the menu; 0.31.2 hid the prompt and the menu but kept both, so F near pris
 invisible menu. Fix: OrderMenu.Update treats HideUi like the menu being off (closes it, no hover
 claim). Built + packed; installed only once the game was closed (see CURRENT_STATUS).
 Workaround on 0.31.2: press Insert to show the UI again (F works as before then).
+
+## 0.31.4 (2026-11-22): fixes from the 0.31.3 Customs test raid (log watched live)
+
+Raid: 15 natural surrenders + 1 debug-key boss (Решала, orders, left, braced rise, rearm), 0 Mercy
+errors, 0 restraint leaks. Verified in raid: opening frame 1.1-2.3 ms (scramble, run, hide; was 4-8 ms),
+deferred hide search reaches cover (Гриша 23 m), empty-automatic drop (Danonek AKS-74UN from
+AutomaticFireOperation: first request, hands empty +599 ms), Hide all Mercy UI + F (Joel), released-man
+gun fetch started for the first time (Тимурка, Карлуша) and a scavenge pick-up 20 m away (hgj).
+
+Fixed:
+- A gun that comes into a prisoner's hands after he gave up is dropped (SurrenderRegistry.Tick, with the
+  "no draw of ours" warning). StartDrop reads the hands once; Святополк gave up mid weapon-switch, read
+  "empty", and the Vepr-KM finished arriving in his hands while held.
+- CheckDrop waits out a running hide (the game's FirearmController.Remove) up to 3x DropRetrySeconds
+  before asking again; hgj's SV-98 took 2.36 s, request 2 landed on the running hide.
+- Released-man gun fetch (Escape RunFetch): at the gun with meds/grenade in hands, waits 3 s, then ends
+  the leg and logs the hands. Before: silent wait to the 25 s leg limit (Тимурка 13 s, Карлуша 2x 25 s;
+  both hurt, ContinuousHealing installed: probably healing; hands state was never logged).
+- Recovery walk give-ups ("took too long" / "stuck on the way") log distance, height and hands (Карлуша
+  gave up 2 m from his gun with no reason given).
+
+Open (performance, single frames): FleePoint on a bolt / new leg 3.8-4.9 ms; Regroup Decide on arrival
+2.6-4.6 ms; first GUI draw of a note/menu/scenario panel 3-7 ms; each order ~2.4 ms. Check: opening kind
+"captor is running" during a bot captor's walk-up. Not yet seen in raid: healing busy-hands fix, a bot
+taking custody (every bot captor was out of guard range).
+
+Other mods' errors seen (for their authors): TransparentSights missing config.json; SAIN destroying itself
+on a player-scav bot assigned Killa's brain; Raid Review NullReferenceException in
+ClientGameWorld_ShotDelegatePatch.PatchPostFix and "WebSocket closed; raid recording incomplete".
+
+## 0.31.5 (2026-11-22): performance batch + captors keep their gun on the prisoner
+
+Performance (single frames from the 0.31.3 raid):
+- Perception.FleePoint (bolt / new escape leg, 3.8-4.9 ms): candidates drawn as before (same Dice order),
+  cheap tests first, an upper bound on each score with the route length at its floor (straight line,
+  +0.5 for the path start snapping nearer), routes solved best bound first, skipped once they can't win.
+  Same choice: simulation 20,000/20,000 identical picks, path solves 16.2 -> 1.7 on average
+  (scratchpad fleeequiv.py; a model, not a raid measurement). Log stats gain "could not beat the best".
+- Order menu first draw (3-7 ms in Gui): the font search (Resources.FindObjectsOfTypeAll<Font>) and the
+  glyphs (Latin + Cyrillic at the menu's pixel sizes, Font.RequestCharactersInTexture) moved to raid start
+  (OrderMenu.Prewarm from SurrenderRegistry.EnsureRaid, during loading).
+- The Regroup "what now" frames (2.6-4.6 ms) were the game's own weapon change (selector.TryChangeToSlot
+  builds the firearm in his hands): not ours to cut; now timed as detail section "Draw" to show it.
+- Not changed: each menu order ~2.4 ms (one keypress); "captor is running" is the game's IsSprintEnabled
+  (Денис's captor really sprinted; not a mislabel).
+
+New (Joel): captors keep their gun on the prisoner (CaptorLogic.Aim / Threat / AimDown in Captors.cs).
+Verified in 0.16.9: vanilla BotPeaceHardAim.ManualUpdate = ShootController.SetAim(true) each frame +
+Steering.LookToPoint; EndAim = SetAim(false). Threat 0..1 from what he can see (base 0.3; within 3 m +0.25 /
+6 m +0.12, past 15 m -0.1; moving +0.25; hands not up +0.2; kneeling -0.15; kept something back +0.25 or a
+gun still on him +0.15; defiant +0.15; trouble nearby +0.15; a gun in hands or not holding still = 1).
+Raised for Lerp(low 3 s, high 20 s, threat) (x0.85-1.15), always from 0.75; then the ready for
+Lerp(6 s, 1 s, threat) (x0.8-1.2); up at once when the threat rises 0.2 over the moment he lowered. Down
+(SetAim false) on a glance, a loot job, a guard's scan, reload, no firearm in hands, layer Stop.
+Applies to the custody guard, the walk-up and the squad guard (Overwatch cover). Log (Log decisions /
+Verbose): "raises his gun on X for N s (threat T: reasons)". Settings: section 3 "Captors keep their gun on
+the prisoner" (visible, on) + 3 advanced keys; cfg bind 441 -> 445, 4 added, nothing changed or dropped.
+
+Build passed (Debug + Release, 0 warnings). Installed 2026-11-22 (hash-verified; 0.31.4 DLL + cfg in that
+session scratchpad backup-0.31.4). Not run in game.
+In raid: a bot taking custody -> "raises his gun on ..." lines, sights up then the ready, up again when the
+prisoner moves; no aim while he picks gear up; no stuck ADS after custody ends. A bolt's Layer frame
+under ~1 ms; FleePoint stats with "could not beat the best". No 3-7 ms Gui frame on the first menu/note.
+
+## 0.31.6 (2026-11-22): fixes from the 0.31.5 Customs raid (log watched live)
+
+Raid: 15 natural surrenders, 15 clean hand-backs, 5 bot custodies, 0 Mercy warnings/errors, 0 leaks.
+Verified in raid on 0.31.5: captor aim ("raises his gun on X for as long as that lasts (threat 1.00: a gun
+in his hands)", then "for 10 s (threat 0.35: 18 m off, a gun still on him)"; Лева took an opening on
+"his captor's gun isn't up"), ignored surrender end to end (___5 ignored Васян: noticed +0.53 s, gun at
+his feet, fallback draw, 30 s truce ended with no hits), FleePoint pruning ("12 could not beat the
+best"), menu prewarm (font "Jovanny Lemonad - Bender" found at raid start; raid-start frame 31.6 ms,
+in loading), Draw detail section (1.8-2.7 ms of the regroup frames = the game's weapon change), second
+custody frame 1.4 ms (the first, 16 ms, was first-use).
+
+Fixed:
+- Released-man gun fetch: the root cause of the freezes. Escape RunFetch read "an item in hands that isn't
+  a knife" as busy, and the empty-hands controller reports a placeholder Item: every fetch waited at the
+  gun ("his hands are busy (empty)", 0.31.5 log). Now Arsenal.HandsEmpty is free. (0.31.4's guess,
+  healing, was wrong; its 3 s cap stays for real meds/grenades.)
+- Meds/stims in use: no drop request (StartDrop/CheckDrop wait up to 8 s) and no recovery pick-up on top of
+  them (Arsenal.UsingMeds). Паша's scramble pick-up made the game put a stim away mid-use and the game's
+  BotStimulators TryApply callback threw (NRE in TasksExtensions_HandleFinishedTask_Patch1); Васян's drop
+  asked twice over an AI-2 in use.
+- Retreating searches its route from the frame after the flight was decided (SurrenderState.BoltFrame):
+  decision + FleePoint together made 4 ms frames (Антич, 6 long route solves).
+- TakeOpening's run/hide availability checks stop after 4 failed path solves (RetreatPoint maxSolves):
+  1-4 ms opening frames when the first spots were unreachable.
+
+Not changed: first-use costs each game session (first surrender ~15 ms, first custody 16 ms, a 10 ms first
+shot near a prisoner): our methods are already pre-compiled (PrepareMethods); the rest is game/Unity code
+run for the first time.
+
+Other mods (for their authors): SAIN "Bot is a PlayerScav but does not have any of these BaseBrains ...
+Current Brain Assignment: [Killa] : Destroying SAIN for this bot" (2 this raid, 1 last); the game's
+BotStimulators callback NRE when meds are dropped mid-use (ContinuousHealing patches in the stack);
+Raid Review "WebSocket closed; this raid recording is incomplete"; TransparentSights missing config.json.
+
+Build passed (Release, 0 warnings); packed dist/Mercy-0.31.6.zip. No settings changed since 0.31.5.

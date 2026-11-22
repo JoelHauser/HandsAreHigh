@@ -33,6 +33,10 @@ namespace Mercy
         internal static ConfigEntry<bool> SquadRestraint;
         internal static ConfigEntry<bool> ObserverRestraint;
         internal static ConfigEntry<bool> SquadCover;
+        internal static ConfigEntry<bool> CaptorAim;
+        internal static ConfigEntry<float> CaptorAimLow;
+        internal static ConfigEntry<float> CaptorAimHigh;
+        internal static ConfigEntry<float> CaptorAimAlways;
         internal static ConfigEntry<float> AcceptRange;
         internal static ConfigEntry<float> CaptorApproachFrom;
         internal static ConfigEntry<float> CaptorGuardDistance;
@@ -134,6 +138,14 @@ namespace Mercy
                 Text("Bots outside the captor's squad who see a man with his hands up decide for themselves: hold fire, ignore him for another threat, let him leave, or fight.", true));
             SquadCover = c.Bind(S3, "Squadmate covers the captor", true,
                 Text("One free squadmate takes a spot to the side and covers the prisoner while the captor works. Never one of your allies.", false));
+            CaptorAim = c.Bind(S3, "Captors keep their gun on the prisoner", true,
+                Text("A bot captor raises his sights onto his prisoner and keeps them there longer the more dangerous he judges him (close, moving, armed, hands coming down), lowering to the ready in between. Off: he only watches him.", false));
+            CaptorAimLow = c.Bind(S3, "Captor aim: time raised at low threat (s)", 3f,
+                Range("How long a captor keeps his sights up on a prisoner he sees as little danger, before lowering to the ready.", 0.5f, 30f, true));
+            CaptorAimHigh = c.Bind(S3, "Captor aim: time raised at high threat (s)", 20f,
+                Range("How long he keeps them up on a prisoner he sees as dangerous.", 1f, 120f, true));
+            CaptorAimAlways = c.Bind(S3, "Captor aim: always raised from threat", 0.75f,
+                Range("From this threat (0 to 1) up, the sights never come down. 1: never always raised.", 0f, 1f, true));
             AcceptRange = c.Bind(S3, "Guard range (m)", 20f,
                 Range("Farther than this a bot won't take custody unless he can walk up to the man. The surrender itself can happen at any range.", 4f, 80f, true));
             CaptorApproachFrom = c.Bind(S3, "Walk up from (m)", 60f,

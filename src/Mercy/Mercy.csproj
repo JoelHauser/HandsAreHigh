@@ -9,7 +9,7 @@
     <Nullable>disable</Nullable>
 
     <!-- Must match MercyPlugin.PluginVersion. -->
-    <Version>0.31.3</Version>
+    <Version>0.31.6</Version>
 
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

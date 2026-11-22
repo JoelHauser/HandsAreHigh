@@ -451,6 +451,11 @@ namespace Mercy
 
         private readonly MenuView _view = new MenuView();
 
+        // 0.31.4: called at raid start (SurrenderRegistry.EnsureRaid, during loading): the font
+        // lookup and the glyphs the first menu/hint/note would otherwise build in a gameplay frame
+        // (0.31.3 raid: 6.9 ms in Gui on the first note).
+        internal void Prewarm() => _view.Prewarm();
+
         internal void OnGUI()
         {
             if (Event.current.type != EventType.Repaint) return;
@@ -523,29 +528,51 @@ namespace Mercy
 
             // ---- styles -----------------------------------------------------------------
 
+            // Latin, Cyrillic (bot names), digits and the punctuation the menu and notes use.
+            private const string Glyphs =
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,:;!?'\"()[]-+/%#&_*<>=" +
+                "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ" +
+                "абвгдеёжзийклмнопрстуфхцчшщъыьэюя";
+            private static readonly float[] SizeSteps = { 10.5f, 11f, 11.5f, 13.5f, 14f, 14.5f };
+
+            internal void Prewarm()
+            {
+                LookFonts();
+                float k = Mathf.Max(MinK, Mathf.Clamp(Screen.height / 1080f, 0.5f, 4f) * Settings.MenuScale.Value);
+                for (int i = 0; i < SizeSteps.Length; i++)
+                {
+                    int px = Mathf.Max(10, Mathf.RoundToInt(SizeSteps[i] * k));
+                    if (_font != null) _font.RequestCharactersInTexture(Glyphs, px, FontStyle.Normal);
+                    if (_fontBold != null && _fontBold != _font) _fontBold.RequestCharactersInTexture(Glyphs, px, FontStyle.Normal);
+                }
+            }
+
+            private void LookFonts()
+            {
+                if (_fontLooked) return;
+                _fontLooked = true;
+                // The game's UI typeface (Bender), when a legacy Font copy of it is loaded;
+                // looked up once. Unity's default font otherwise.
+                try
+                {
+                    foreach (Font f in Resources.FindObjectsOfTypeAll<Font>())
+                    {
+                        if (f == null || f.name == null || f.name.IndexOf("Bender", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        bool bold = f.name.IndexOf("Bold", System.StringComparison.OrdinalIgnoreCase) >= 0;
+                        if (bold) { if (_fontBold == null) _fontBold = f; }
+                        else if (_font == null) _font = f;
+                    }
+                }
+                catch (System.Exception e) { MercyPlugin.Report("menu font", e); }
+                if (_fontBold == null) _fontBold = _font;
+                if (Settings.VerboseLogs.Value)
+                    MercyPlugin.Log.LogInfo($"Order menu font: {(_font != null ? _font.name : "Unity default")}");
+            }
+
             private void EnsureStyles()
             {
                 if (_title != null) return;
-                if (!_fontLooked)
-                {
-                    _fontLooked = true;
-                    // The game's UI typeface (Bender), when a legacy Font copy of it is loaded;
-                    // looked up once. Unity's default font otherwise.
-                    try
-                    {
-                        foreach (Font f in Resources.FindObjectsOfTypeAll<Font>())
-                        {
-                            if (f == null || f.name == null || f.name.IndexOf("Bender", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
-                            bool bold = f.name.IndexOf("Bold", System.StringComparison.OrdinalIgnoreCase) >= 0;
-                            if (bold) { if (_fontBold == null) _fontBold = f; }
-                            else if (_font == null) _font = f;
-                        }
-                    }
-                    catch (System.Exception e) { MercyPlugin.Report("menu font", e); }
-                    if (_fontBold == null) _fontBold = _font;
-                    if (Settings.VerboseLogs.Value)
-                        MercyPlugin.Log.LogInfo($"Order menu font: {(_font != null ? _font.name : "Unity default")}");
-                }
+                LookFonts();
                 GUIStyle Make(Font f, FontStyle fs, TextAnchor a, bool clip = true)
                 {
                     var st = new GUIStyle(GUI.skin.label)
