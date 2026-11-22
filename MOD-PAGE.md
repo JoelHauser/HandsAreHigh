@@ -38,7 +38,7 @@
 
 > **What this mod does:** it lets bots surrender.
 >
-> - **A Scav or PMC who is losing badly can give up.** He drops the weapon in his hands, puts them up and calls it out.
+> - **When the fight turns against him, a Scav or PMC can give up.** He drops the weapon in his hands, puts them up and calls it out.
 > - **You decide what happens next.** Order him to his knees, strip his kit, march him, let him go, or don't.
 > - **Bots take prisoners too**, from you and from each other.
 >
