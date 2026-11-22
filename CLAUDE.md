@@ -6,7 +6,7 @@ leave, and come back armed later. Bots take prisoners too. Repo https://github.c
 
 Stack: C# (LangVersion latest, net472, `TreatWarningsAsErrors`), Harmony, BepInEx 5, BigBrain 1.5.0
 (only hard dependency), Unity IMGUI; EFT 0.16.9.40743 (SPT 4.1.x, de-obfuscated) at
-`H:\SPT4.1.X`. Optional at runtime (reflection): SAIN 4.5.1, ORBIT 3.1.1, Looting Bots, Pit Fireteam.
+`H:\SPT4.1.X`. Optional at runtime (reflection): SAIN 4.5.1, ORBIT 3.1.1, COMET 1.0.0, Looting Bots, Pit Fireteam.
 Offline tools: Python 3 (+UnityPy) and one .NET test (`tools/`). The developer is Joel; he tests in
 game and sends LogOutput.log and screenshots.
 
@@ -37,6 +37,16 @@ dotnet build src\Mercy\Mercy.csproj -c Debug -p:SPTPath=H:\SPT4.1.X   # compile 
 - Before `-Install`: the game must not be running (`Get-Process EscapeFromTarkov`); back up the
   installed DLL and Joel's cfg to the scratchpad; hash-compare after.
 - Config changes: run `tools/cfgbind/bind.ps1` on a COPY of Joel's cfg (details in build-and-checks.md).
+
+## Releases (only when Joel asks)
+
+- Latest: **1.0.0** (2026-11-22, tag `v1.0.0`, GitHub release marked Latest, asset `Mercy-1.0.0.zip`).
+  Not yet on the Forge.
+- Steps: bump both versions, `pack.ps1 -Install`, update CURRENT_STATUS + `docs/history/releases-<major.minor>.md`,
+  commit, `git tag -a vX.Y.Z`, push main and the tag, `gh release create vX.Y.Z dist\Mercy-X.Y.Z.zip --latest`.
+- Release notes and [MOD-PAGE.md](MOD-PAGE.md) (the Forge description; Joel pastes it himself) stay short and
+  player-facing: what it does, install, controls, compatibility, uninstall. No version history, test results,
+  internals or emojis. MOD-PAGE.md's header comment lists what to confirm before posting.
 
 ## Engineering rules (every task)
 
@@ -82,7 +92,7 @@ dotnet build src\Mercy\Mercy.csproj -c Debug -p:SPTPath=H:\SPT4.1.X   # compile 
 **Dependencies and compatibility**
 - BigBrain is the only hard dependency. Everything else optional, by reflection, failing soft with one
   log line. Never `BepInIncompatibility`; never tell Joel to remove a mod; step aside for installed mods.
-- Joel runs SAIN + ORBIT 3.1.1 (not Looting Bots/Questing Bots). No Fika support.
+- Joel runs SAIN + ORBIT 3.1.1 + COMET 1.0.0 (not Looting Bots/Questing Bots). No Fika support.
 
 **Performance**
 - Patches on all-player paths and every layer `IsActive` exit on one cheap count first
@@ -141,11 +151,14 @@ dotnet build src\Mercy\Mercy.csproj -c Debug -p:SPTPath=H:\SPT4.1.X   # compile 
 - Don't load generated output (`bin/`, `obj/`, `dist/`, `__pycache__`), binaries, whole decompiles or
   unrelated history.
 - Keep related fixes together; no unrelated cleanup or refactors; no behaviour change in a docs task.
-- Live raid watching (Joel asks "watch the logs"): `tail -n 0 -F` the log into `grep -a -E
-  --line-buffered` and `awk '{...; fflush()}'` (never `cut`/`head`: they buffer; `-a`: a new log file
-  can start with a binary byte). Filter to surrenders, phase arrows, decisions, warnings, spikes; skip
-  "no surrender check", "fire +" and repeated "held back at trigger" lines. Changes made mid-raid are
-  built only: install once the game has closed (wait for the process to exit).
+- Live raid watching (Joel asks "watch the logs"): `tail -F` delivered no events on this machine.
+  Poll instead: a Monitor running a bash loop that every 3 s reads the bytes added since a saved offset
+  (offset in a file so a re-armed monitor resumes; restart at 0 if the log shrinks = game relaunched)
+  and filters with `grep -aE` / `grep -avE` (`-a` is required: chunks of LogOutput.log read as binary).
+  Filter to surrenders, custody, walk-ups, releases, decisions, Mercy/COMET warnings, exceptions,
+  RESTRAINT LEAK; skip ORBIT, "no surrender check", "Profile 10 s", "fire +" and the repeated
+  acidphantasm-botplacementsystem spawn exception. Report each event in a line or two (Joel wants
+  little detail). Changes made mid-raid are built only: install once the game has closed.
 - Validate in proportion: Debug build while editing, the tool for the subsystem you changed, cfg bind
   when settings changed, pack when shipping. Don't rerun passing checks without new changes.
 - Status words are exact: implemented / build passed / simulation passed / verified in raid. Never
